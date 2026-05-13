@@ -7,16 +7,34 @@
 //! confirmed working we should replace this with a grammar-aware
 //! generator (e.g. an `arbitrary::Arbitrary` derived AST).
 
-/// Header emitted before the user-controlled body. `sm_70` is recent
-/// enough to be widely supported but old enough that `ptxas` will
-/// have lots of code paths for it.
+/// Header emitted before the user-controlled body.
+///
+/// The scaffold pre-declares a pool of registers/predicates so that
+/// simple instruction-level mutations (which reference `%r0`, `%p0`,
+/// etc.) actually make it past the symbol-resolution pass. Without
+/// these the assembler bails out at the lexer/parser on virtually
+/// every mutation and we never see deeper code paths.
+///
+/// `.target sm_70` works with the modern CUDA 13.x ptxas (which
+/// transparently retargets to its default sm_75) without requiring
+/// an explicit `-arch` flag, which keeps `scripts/run-fuzz.sh`
+/// simple.
 const PTX_PRELUDE: &str = "\
 .version 7.0
 .target sm_70
 .address_size 64
 
 .visible .entry kernel(
+    .param .u64 p0,
+    .param .u64 p1,
+    .param .u32 p2
 ) {
+    .reg .pred %p<8>;
+    .reg .b16 %rs<8>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<8>;
+    .reg .f32 %f<8>;
+    .reg .f64 %fd<8>;
 ";
 
 const PTX_EPILOGUE: &str = "

@@ -1,0 +1,7 @@
+ld.param.u64 %rd0, [p0];
+cvta.to.global.u64 %rd1, %rd0;
+mov.u32 %r0, 1;
+atom.global.add.u32 %r1, [%rd1], %r0;
+atom.global.cas.b32 %r2, [%rd1], %r0, %r1;
+atom.global.exch.b32 %r3, [%rd1], %r2;
+membar.gl;

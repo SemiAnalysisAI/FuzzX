@@ -1,7 +1,9 @@
-setp.lt.s32 p1, r0, r1;
-@p1 bra label_a;
-mov.u32 r2, 0;
+mov.u32 %r0, 0;
+mov.u32 %r1, 1;
+setp.lt.s32 %p1, %r0, %r1;
+@%p1 bra label_a;
+mov.u32 %r2, 0;
 bra label_b;
 label_a:
-mov.u32 r2, 1;
+mov.u32 %r2, 1;
 label_b:
