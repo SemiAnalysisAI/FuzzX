@@ -108,22 +108,51 @@ echo "ptx-fuzz: crashes:      ls $OUT_DIR/*/crashes/"
 # Watchdog. AFL++ workers occasionally segfault inside libc under
 # sustained runs (see DESIGN.md "Known issues"). Without this we'd
 # steadily lose throughput; with it we keep all $CORES slots filled.
+#
+# Crucially, the watchdog throttles per-worker restarts. At very high
+# worker counts the system can enter a death-spiral where dozens of
+# workers die at once, the watchdog restarts them all simultaneously,
+# they re-die during calibration, and the cycle continues. To avoid
+# that, each worker tracks its last-restart time and waits a
+# back-off interval (doubling, up to 5 min) before being restarted.
 end_time=0
 if [[ -n "$RUNTIME" ]]; then end_time=$(( $(date +%s) + RUNTIME )); fi
+
+declare -A worker_last_restart
+declare -A worker_backoff
+for name in "${!worker_pid[@]}"; do
+    worker_last_restart["$name"]=0
+    worker_backoff["$name"]=10
+done
 
 while true; do
     if [[ -n "$RUNTIME" ]] && (( $(date +%s) >= end_time )); then
         echo "ptx-fuzz: runtime budget elapsed (${RUNTIME}s)"
         break
     fi
+    now=$(date +%s)
     for name in "${!worker_pid[@]}"; do
         pid="${worker_pid[$name]}"
         if ! kill -0 "$pid" 2>/dev/null; then
+            since=$(( now - ${worker_last_restart[$name]:-0} ))
+            backoff=${worker_backoff[$name]:-10}
+            if (( since < backoff )); then continue; fi
             mode="-S"
             [[ "$name" == "main" ]] && mode="-M"
-            echo "ptx-fuzz: $name (pid $pid) died; restarting"
+            echo "ptx-fuzz: $name (pid $pid) died; restarting (backoff was ${backoff}s)"
             start_worker "$name" "$mode"
+            worker_last_restart["$name"]=$now
+            # If this worker has been thrashing (died within the last
+            # 3*backoff seconds), grow its next backoff; otherwise
+            # reset it.
+            if (( since < backoff * 3 )); then
+                next=$(( backoff * 2 ))
+                (( next > 300 )) && next=300
+                worker_backoff["$name"]=$next
+            else
+                worker_backoff["$name"]=10
+            fi
         fi
     done
-    sleep 10
+    sleep 5
 done
