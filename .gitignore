@@ -5,3 +5,9 @@ Cargo.lock
 /output-*
 # macOS AppleDouble metadata
 ._*
+
+# Claude Code per-project state
+/.claude/
+
+# In-progress fuzzer scratch (long-running differential runs)
+/divergences-b300/
