@@ -1,0 +1,5 @@
+seed: 1295
+seed_hex: 000000000000050f
+o0_ok: true
+o3_ok: true
+verdict: OUTPUT_MISMATCH
