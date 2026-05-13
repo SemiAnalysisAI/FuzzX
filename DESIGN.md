@@ -119,3 +119,19 @@ the pipeline is solid. v0 stays with raw-bytes-passthrough because:
   (specifically, two adjacent printable-ASCII bytes). A real ptxas
   crash will require AFL to discover deeper structural patterns, which
   is where the grammar work above starts to matter.
+- **`afl-fuzz` workers themselves segfault under sustained runs.**
+  In a 28-minute, 16-worker run against ptxas (CUDA 13.2, AFL++
+  4.40c, qemu_mode), 11 of 16 workers died with `segfault ... in
+  libc.so.6` at varying instruction-pointer offsets within libc.
+  This is a heap-corruption bug *inside AFL*, distinct from (and not
+  fixed by) the existing `AFL_FRAMESHIFT_DISABLE=1` workaround — the
+  FrameShift stage was introduced in 4.41a; we're on 4.40c. The
+  surviving workers kept fuzzing fine, but throughput degrades over
+  time. For long runs, wrap the multi-core driver with a watchdog
+  that restarts dead workers.
+- **Coverage plateaus around 73% with the byte-passthrough
+  generator.** Once AFL has exercised the obvious lexer/parser code
+  paths from the six seeds, random byte mutations stop opening new
+  edges. Breaking past that ceiling needs a structured (grammar-aware)
+  generator that can synthesize syntactically novel instructions,
+  declarations, and control flow.
