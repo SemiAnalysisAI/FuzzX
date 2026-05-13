@@ -221,9 +221,6 @@ impl Builder {
     fn int_ty(&self, u: &mut Unstructured) -> Result<IntTy> {
         Ok(*u.choose(&[IntTy::S32, IntTy::U32, IntTy::S64, IntTy::U64, IntTy::B32, IntTy::B64])?)
     }
-    fn int_ty_32(&self, u: &mut Unstructured) -> Result<IntTy> {
-        Ok(*u.choose(&[IntTy::S32, IntTy::U32, IntTy::B32])?)
-    }
     fn int_ty_arith(&self, u: &mut Unstructured) -> Result<IntTy> {
         // ops like add/sub/mul don't accept .bNN
         Ok(*u.choose(&[IntTy::S32, IntTy::U32, IntTy::S64, IntTy::U64])?)

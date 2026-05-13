@@ -70,38 +70,60 @@ echo "          seeds:   $SEEDS_DIR"
 echo "          output:  $OUT_DIR"
 [[ -n "$RUNTIME" ]] && echo "          runtime: ${RUNTIME}s (then kill)"
 
-pids=()
+declare -A worker_pid
+
+start_worker() {
+    local name="$1"
+    local mode="$2"  # "-M" for master, "-S" for secondary
+    # For an existing output dir we have to use afl-fuzz's "resume"
+    # flag (`-i -`) so AFL picks up where it left off instead of
+    # complaining that the dir is non-empty.
+    local in_flag="-i $SEEDS_DIR"
+    if [[ -d "$OUT_DIR/$name/queue" ]]; then in_flag="-i -"; fi
+    afl-fuzz -Q $mode "$name" \
+        $in_flag -o "$OUT_DIR" -t "$TIMEOUT_MS" \
+        -- "$PTXAS" "@@" > "$LOG_DIR/$name.log" 2>&1 &
+    worker_pid["$name"]=$!
+}
+
 cleanup() {
     echo "ptx-fuzz: stopping workers..."
-    for p in "${pids[@]}"; do
+    for p in "${worker_pid[@]}"; do
         kill "$p" 2>/dev/null || true
     done
     wait 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
 
-# First worker is the master.
-afl-fuzz -Q -M main \
-    -i "$SEEDS_DIR" -o "$OUT_DIR" -t "$TIMEOUT_MS" \
-    -- "$PTXAS" "@@" > "$LOG_DIR/main.log" 2>&1 &
-pids+=($!)
-
-# Secondaries.
+start_worker main "-M"
 for (( i = 1; i < CORES; i++ )); do
     name=$(printf 'sec%02d' "$i")
-    afl-fuzz -Q -S "$name" \
-        -i "$SEEDS_DIR" -o "$OUT_DIR" -t "$TIMEOUT_MS" \
-        -- "$PTXAS" "@@" > "$LOG_DIR/$name.log" 2>&1 &
-    pids+=($!)
+    start_worker "$name" "-S"
 done
 
-echo "ptx-fuzz: workers running (pids: ${pids[*]}); logs in $LOG_DIR"
+echo "ptx-fuzz: workers running; logs in $LOG_DIR"
 echo "ptx-fuzz: live status:  afl-whatsup -s $OUT_DIR"
 echo "ptx-fuzz: crashes:      ls $OUT_DIR/*/crashes/"
 
-if [[ -n "$RUNTIME" ]]; then
-    sleep "$RUNTIME"
-    echo "ptx-fuzz: runtime budget elapsed (${RUNTIME}s)"
-else
-    wait
-fi
+# Watchdog. AFL++ workers occasionally segfault inside libc under
+# sustained runs (see DESIGN.md "Known issues"). Without this we'd
+# steadily lose throughput; with it we keep all $CORES slots filled.
+end_time=0
+if [[ -n "$RUNTIME" ]]; then end_time=$(( $(date +%s) + RUNTIME )); fi
+
+while true; do
+    if [[ -n "$RUNTIME" ]] && (( $(date +%s) >= end_time )); then
+        echo "ptx-fuzz: runtime budget elapsed (${RUNTIME}s)"
+        break
+    fi
+    for name in "${!worker_pid[@]}"; do
+        pid="${worker_pid[$name]}"
+        if ! kill -0 "$pid" 2>/dev/null; then
+            mode="-S"
+            [[ "$name" == "main" ]] && mode="-M"
+            echo "ptx-fuzz: $name (pid $pid) died; restarting"
+            start_worker "$name" "$mode"
+        fi
+    done
+    sleep 10
+done
