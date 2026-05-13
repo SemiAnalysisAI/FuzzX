@@ -39,15 +39,20 @@ See [DESIGN.md](DESIGN.md) for the trade-offs.
 
 ## Running on Linux (real fuzzing)
 
-The Linux box `jlebar-dev` has CUDA but probably not AFL++ yet. Install:
+Build AFL++ from the dev branch (≥ 4.41a). 4.40c has a libc-heap
+corruption bug that causes worker segfaults at ~3 deaths/minute when
+combined with a custom post_process mutator. See DESIGN.md for the
+diagnostic; the watchdog in `run-fuzz-multi.sh` papers over it but the
+fix is to upgrade.
 
 ```bash
 # On the Linux host:
 git clone https://github.com/AFLplusplus/AFLplusplus
 cd AFLplusplus
-make distrib                 # builds afl-fuzz and the LLVM compilers
+git checkout origin/dev     # 4.41a or newer
+make source-only            # builds afl-fuzz without the unwanted nyx_mode
 cd qemu_mode && ./build_qemu_support.sh
-cd .. && sudo make install   # puts afl-fuzz, afl-qemu-trace on $PATH
+cd .. && sudo make install  # puts afl-fuzz, afl-qemu-trace on $PATH
 ```
 
 Then from this repo:

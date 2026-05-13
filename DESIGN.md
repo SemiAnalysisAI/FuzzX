@@ -119,16 +119,19 @@ the pipeline is solid. v0 stays with raw-bytes-passthrough because:
   (specifically, two adjacent printable-ASCII bytes). A real ptxas
   crash will require AFL to discover deeper structural patterns, which
   is where the grammar work above starts to matter.
-- **`afl-fuzz` workers themselves segfault under sustained runs.**
-  In a 28-minute, 16-worker run against ptxas (CUDA 13.2, AFL++
-  4.40c, qemu_mode), 11 of 16 workers died with `segfault ... in
-  libc.so.6` at varying instruction-pointer offsets within libc.
-  This is a heap-corruption bug *inside AFL*, distinct from (and not
-  fixed by) the existing `AFL_FRAMESHIFT_DISABLE=1` workaround — the
-  FrameShift stage was introduced in 4.41a; we're on 4.40c. The
-  surviving workers kept fuzzing fine, but throughput degrades over
-  time. For long runs, wrap the multi-core driver with a watchdog
-  that restarts dead workers.
+- **`afl-fuzz` workers segfaulted inside `libc.so.6` under sustained
+  runs on AFL++ 4.40c.** In a 28-minute, 16-worker run, ~70 worker
+  processes died with heap-corruption fallout — segfaults inside
+  `malloc/arena.c:153`, `malloc.c:3375`, and `memmove-vec-unaligned-erms.S`
+  at various offsets. Upgrading to AFL++ 4.41a (built from the dev
+  branch, May 2026) cut this to 2 crashes (both at startup) over a
+  comparable run. The 4.41a changelog mentions "minor speed, leak
+  and zombie enhancements" — no single commit explicitly named, but
+  the empirical effect on our workload is decisive. `scripts/run-fuzz-multi.sh`
+  still wraps workers in a watchdog so that any residual crashes
+  are picked up automatically. (For reference: FrameShift is present
+  in both 4.40c and 4.41a; the existing `AFL_FRAMESHIFT_DISABLE=1`
+  belt-and-suspenders is unrelated to the libc heap bug.)
 - **Coverage plateaus around 73% with the byte-passthrough
   generator.** Once AFL has exercised the obvious lexer/parser code
   paths from the six seeds, random byte mutations stop opening new
