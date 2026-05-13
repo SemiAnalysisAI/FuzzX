@@ -1,0 +1,6 @@
+// padding to give AFL a larger initial queue entry size to work with
+mov.u32 r0, 0; mov.u32 r1, 1; mov.u32 r2, 2; mov.u32 r3, 3;
+add.s32 r4, r0, r1; sub.s32 r5, r2, r3; mul.s32 r6, r4, r5;
+setp.lt.s32 p1, r0, r1; @p1 bra L1; mov.u32 r7, 0; bra L2;
+L1: mov.u32 r7, 1;
+L2: st.global.u32 [r8], r7;

@@ -1,0 +1,16 @@
+[package]
+name = "ptx-fuzz-mutator"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+# Built as a shared library that AFL++ dlopens. The `cdylib` crate-type
+# gives us the right ELF/Mach-O layout and exports our `#[no_mangle]`
+# functions as resolvable symbols. Linux: libptx_fuzz_mutator.so,
+# macOS: libptx_fuzz_mutator.dylib.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ptx-fuzz-gen = { path = "../ptx-fuzz-gen" }

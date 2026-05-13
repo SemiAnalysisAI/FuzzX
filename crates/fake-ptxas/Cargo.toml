@@ -1,0 +1,10 @@
+[package]
+name = "fake-ptxas"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "fake-ptxas"
+path = "src/main.rs"
