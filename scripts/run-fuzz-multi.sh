@@ -59,6 +59,11 @@ export AFL_SKIP_BIN_CHECK=1
 export AFL_FRAMESHIFT_DISABLE=1
 # Workers run headless; only the main fuzzer logs to a TTY.
 export AFL_NO_UI=1
+# The trim stage is the worst-affected by the residual AFL heap bug
+# in 4.41a — disabling it dramatically reduces worker mortality at
+# >=50 cores. Trim only matters for shrinking accepted corpus entries,
+# which is mostly cosmetic for our use case.
+export AFL_DISABLE_TRIM=1
 
 mkdir -p "$OUT_DIR"
 LOG_DIR="$OUT_DIR/logs"

@@ -120,18 +120,28 @@ the pipeline is solid. v0 stays with raw-bytes-passthrough because:
   crash will require AFL to discover deeper structural patterns, which
   is where the grammar work above starts to matter.
 - **`afl-fuzz` workers segfaulted inside `libc.so.6` under sustained
-  runs on AFL++ 4.40c.** In a 28-minute, 16-worker run, ~70 worker
-  processes died with heap-corruption fallout — segfaults inside
-  `malloc/arena.c:153`, `malloc.c:3375`, and `memmove-vec-unaligned-erms.S`
-  at various offsets. Upgrading to AFL++ 4.41a (built from the dev
-  branch, May 2026) cut this to 2 crashes (both at startup) over a
-  comparable run. The 4.41a changelog mentions "minor speed, leak
-  and zombie enhancements" — no single commit explicitly named, but
-  the empirical effect on our workload is decisive. `scripts/run-fuzz-multi.sh`
-  still wraps workers in a watchdog so that any residual crashes
-  are picked up automatically. (For reference: FrameShift is present
-  in both 4.40c and 4.41a; the existing `AFL_FRAMESHIFT_DISABLE=1`
-  belt-and-suspenders is unrelated to the libc heap bug.)
+  runs.** Two distinct manifestations, each with its own mitigation:
+
+  *AFL++ 4.40c, any worker count.* A 28-minute 16-worker run produced
+  ~70 worker segfaults inside `malloc/arena.c:153`, `malloc.c:3375`,
+  and `memmove-vec-unaligned-erms.S` at various offsets. Upgrading
+  to AFL++ 4.41a (built from the dev branch, May 2026) cut this to
+  2 crashes at startup, then stable.
+
+  *AFL++ 4.41a, ≥50 workers.* A residual variant of the bug surfaces
+  at high parallelism — every crash lands at libc `0xac52e` inside
+  `_int_malloc` (`malloc.c:4267`, walking the smallbin/largebin
+  freelist). At 100 workers the rate was high enough to trigger a
+  watchdog death-spiral. The trim stage was the trigger: setting
+  `AFL_DISABLE_TRIM=1` eliminated the deaths entirely (100/100
+  workers up indefinitely, 0 restarts after startup). Trim is a
+  cosmetic optimization for shrinking accepted corpus entries; we
+  don't depend on it. `scripts/run-fuzz-multi.sh` exports this by
+  default.
+
+  `scripts/run-fuzz-multi.sh` keeps a watchdog with exponential
+  per-worker backoff anyway, both for residual startup crashes and
+  as belt-and-suspenders for unknown future bugs.
 - **Coverage plateaus around 73% with the byte-passthrough
   generator.** Once AFL has exercised the obvious lexer/parser code
   paths from the six seeds, random byte mutations stop opening new
