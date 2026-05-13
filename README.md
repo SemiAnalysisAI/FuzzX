@@ -32,8 +32,9 @@ See [DESIGN.md](DESIGN.md) for the trade-offs.
 | `crates/ptx-fuzz-mutator`         | `cdylib` exporting AFL++'s custom-mutator C ABI; wraps `ptx-fuzz-gen`.       |
 | `crates/ptx-fuzz-repro`           | CLI to re-apply the mutator to a saved corpus/crash file (for triage).      |
 | `crates/fake-ptxas`               | Stand-in target binary with seeded crashes, for local testing.              |
-| `seeds/`                          | Initial corpus (a few short ASCII fragments).                                |
-| `scripts/run-fuzz.sh`             | `afl-fuzz -Q` invocation with all the right env vars wired up.               |
+| `seeds/`                          | Initial corpus — six PTX fragments that each assemble cleanly on their own. |
+| `scripts/run-fuzz.sh`             | Single-core `afl-fuzz -Q` invocation with all the right env vars wired up.   |
+| `scripts/run-fuzz-multi.sh`       | N-worker variant (one `-M` master + N-1 `-S` secondaries) for parallel runs. |
 
 ## Running on Linux (real fuzzing)
 
@@ -51,15 +52,26 @@ cd .. && sudo make install   # puts afl-fuzz, afl-qemu-trace on $PATH
 Then from this repo:
 
 ```bash
+# Single-core. ~30 execs/sec through QEMU.
 PTXAS=$(which ptxas) scripts/run-fuzz.sh
-# Ctrl-C to stop. Crashes land in output/default/crashes/.
+
+# Multi-core. Default: min(nproc, 16) workers. AFL++ syncs the
+# corpus across all of them, so this is close to linear speedup.
+PTXAS=$(which ptxas) CORES=16 scripts/run-fuzz-multi.sh
+
+# Optional: stop the multi-core run after a fixed budget.
+PTXAS=$(which ptxas) CORES=16 RUNTIME=600 scripts/run-fuzz-multi.sh
 ```
+
+For multi-core runs, crashes land in `output/<worker>/crashes/`
+(where `<worker>` is `main` or `secNN`). `afl-whatsup -s output` gives
+a cross-worker summary.
 
 To reproduce a saved crash:
 
 ```bash
 cargo build --release -p ptx-fuzz-repro
-target/release/ptx-fuzz-repro output/default/crashes/id:000000,... --run
+target/release/ptx-fuzz-repro output/main/crashes/id:000000,... --run
 ```
 
 ## Local sanity checks (macOS or Linux)
@@ -87,5 +99,8 @@ printf '@!' > /tmp/crash.ptx && target/debug/fake-ptxas /tmp/crash.ptx
 | `PTXAS`                        | Target binary path. Default: `ptxas` from `$PATH`.                   |
 | `SEEDS_DIR` / `OUT_DIR`        | Override AFL seed-corpus and output dirs in `scripts/run-fuzz.sh`.   |
 | `TIMEOUT_MS`                   | Per-iteration hang limit (default 5000 ms).                          |
-| `AFL_CUSTOM_MUTATOR_LIBRARY`   | Set automatically by the script; AFL++ dlopens this.                 |
+| `CORES`                        | Multi-core workers (`run-fuzz-multi.sh` only). Default: min(nproc, 16). |
+| `RUNTIME`                      | Multi-core only. Seconds to run before killing all workers.          |
+| `AFL_CUSTOM_MUTATOR_LIBRARY`   | Set automatically by the scripts; AFL++ dlopens this.                |
 | `AFL_SKIP_BIN_CHECK`           | Set automatically; tells AFL ptxas wasn't AFL-instrumented at compile time. |
+| `AFL_FRAMESHIFT_DISABLE`       | Set automatically. AFL++ 4.41a's FrameShift stage corrupts heap when combined with a post_process mutator. |
