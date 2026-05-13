@@ -1,0 +1,31 @@
+[package]
+name = "ptx-fuzz-diff"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "ptx-fuzz-diff"
+path = "src/main.rs"
+
+[[bin]]
+name = "ptx-fuzz-diff-show"
+path = "src/bin/show.rs"
+
+[[bin]]
+name = "ptx-fuzz-diff-verify"
+path = "src/bin/verify.rs"
+
+[[bin]]
+name = "verify_050f"
+path = "src/bin/verify_050f.rs"
+
+[[bin]]
+name = "ptx-fuzz-diff-reduce"
+path = "src/bin/reduce.rs"
+
+[dependencies]
+anyhow.workspace = true
+ptx-fuzz-exec = { path = "../ptx-fuzz-exec" }
+ptx-fuzz-execgen = { path = "../ptx-fuzz-execgen" }

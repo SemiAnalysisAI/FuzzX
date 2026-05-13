@@ -4,6 +4,9 @@ members = [
     "crates/ptx-fuzz-gen",
     "crates/ptx-fuzz-mutator",
     "crates/ptx-fuzz-repro",
+    "crates/ptx-fuzz-exec",
+    "crates/ptx-fuzz-execgen",
+    "crates/ptx-fuzz-diff",
     "crates/fake-ptxas",
 ]
 
@@ -14,6 +17,7 @@ publish = false
 version = "0.1.0"
 
 [workspace.dependencies]
+anyhow = "1"
 tempfile = "3"
 
 [profile.release]
