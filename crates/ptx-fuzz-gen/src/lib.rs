@@ -167,7 +167,7 @@ impl Builder {
         // real PTX (and so how often we want AFL to pick them). The
         // weights are loose — `int_in_range` over a bigger interval
         // for the common ones.
-        let pick: u8 = u.int_in_range(0..=31)?;
+        let pick: u8 = u.int_in_range(0..=47)?;
         match pick {
             0..=4   => self.emit_arith_int(u)?,
             5..=7   => self.emit_logic_int(u)?,
@@ -188,6 +188,17 @@ impl Builder {
             29      => self.out.push_str("    membar.gl;\n"),
             30      => self.emit_neg_abs(u)?,
             31      => self.emit_min_max(u)?,
+            32..=33 => self.emit_mad(u)?,
+            34      => self.emit_bfe(u)?,
+            35      => self.emit_bfi(u)?,
+            36..=37 => self.emit_bit_count(u)?,
+            38      => self.emit_prmt(u)?,
+            39..=41 => self.emit_special_reg(u)?,
+            42      => self.emit_sad(u)?,
+            43..=44 => self.emit_vector_ld_st(u)?,
+            45      => self.emit_dp4a(u)?,
+            46      => self.emit_brev(u)?,
+            47      => self.emit_rcp_sqrt(u)?,
             _       => unreachable!(),
         }
         Ok(())
@@ -542,6 +553,165 @@ impl Builder {
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
         self.out.push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_mad(&mut self, u: &mut Unstructured) -> Result<()> {
+        // mad.{lo,hi}.{u32,s32,u64,s64} d, a, b, c  ->  d = a*b + c
+        let part = u.choose(&["lo", "hi"])?;
+        let ty = self.int_ty_arith(u)?;
+        let d = self.int_reg(u, ty)?;
+        let a = self.int_reg(u, ty)?;
+        let b = self.int_reg(u, ty)?;
+        let c = self.int_reg(u, ty)?;
+        self.out.push_str(&format!("    mad.{part}.{} {d}, {a}, {b}, {c};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_bfe(&mut self, u: &mut Unstructured) -> Result<()> {
+        // bfe.<ty> d, src, pos, len   (pos and len are .u32)
+        let ty = *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64, IntTy::S64])?;
+        let d = self.int_reg(u, ty)?;
+        let s = self.int_reg(u, ty)?;
+        let pos: u32 = u.int_in_range(0..=63)?;
+        let len: u32 = u.int_in_range(1..=32)?;
+        self.out.push_str(&format!("    bfe.{} {d}, {s}, {pos}, {len};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_bfi(&mut self, u: &mut Unstructured) -> Result<()> {
+        // bfi.{b32,b64} d, a, b, pos, len
+        let ty = *u.choose(&[IntTy::B32, IntTy::B64])?;
+        let d = self.int_reg(u, ty)?;
+        let a = self.int_reg(u, ty)?;
+        let b = self.int_reg(u, ty)?;
+        let pos: u32 = u.int_in_range(0..=63)?;
+        let len: u32 = u.int_in_range(1..=32)?;
+        self.out.push_str(&format!("    bfi.{} {d}, {a}, {b}, {pos}, {len};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_bit_count(&mut self, u: &mut Unstructured) -> Result<()> {
+        // popc/clz operate on .bNN; bfind takes signed/unsigned int
+        // (which makes a semantic difference for the leading-zero
+        // count). Dst is always a 32-bit register.
+        let op = *u.choose(&["popc", "clz", "bfind"])?;
+        let src_ty = match op {
+            "popc" | "clz" => *u.choose(&[IntTy::B32, IntTy::B64])?,
+            "bfind"        => *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64, IntTy::S64])?,
+            _ => unreachable!(),
+        };
+        let d = self.reg32(u)?;
+        let s = self.int_reg(u, src_ty)?;
+        self.out.push_str(&format!("    {op}.{} {d}, {s};\n", src_ty.name()));
+        Ok(())
+    }
+
+    fn emit_prmt(&mut self, u: &mut Unstructured) -> Result<()> {
+        // prmt.b32 d, a, b, c     - select 4 bytes from {a,b} concat'd
+        // The selector c is an 8-nibble immediate or a register.
+        let d = self.reg32(u)?;
+        let a = self.reg32(u)?;
+        let b = self.reg32(u)?;
+        // Use an immediate selector — restricts to legal nibbles 0..7.
+        let sel: u32 = u.arbitrary()?;
+        self.out.push_str(&format!("    prmt.b32 {d}, {a}, {b}, {sel:#x};\n"));
+        Ok(())
+    }
+
+    fn emit_special_reg(&mut self, u: &mut Unstructured) -> Result<()> {
+        // mov.u32 %rN, %<special_reg>
+        // tid/ntid/ctaid/nctaid each have .x/.y/.z; smid/warpid/laneid
+        // are scalars.
+        let kind = u.int_in_range(0..=3u8)?;
+        let name: String = match kind {
+            0 => {
+                let base = u.choose(&["tid", "ntid", "ctaid", "nctaid"])?;
+                let axis = u.choose(&["x", "y", "z"])?;
+                format!("%{base}.{axis}")
+            }
+            1 => format!("%{}", u.choose(&["smid", "warpid", "laneid"])?),
+            2 => "%clock".to_string(),
+            3 => "%lanemask_eq".to_string(),
+            _ => unreachable!(),
+        };
+        let d = self.reg32(u)?;
+        self.out.push_str(&format!("    mov.u32 {d}, {name};\n"));
+        Ok(())
+    }
+
+    fn emit_sad(&mut self, u: &mut Unstructured) -> Result<()> {
+        // sad.{u32,s32} d, a, b, c    ->  d = abs(a-b) + c
+        let ty = *u.choose(&[IntTy::U32, IntTy::S32])?;
+        let d = self.int_reg(u, ty)?;
+        let a = self.int_reg(u, ty)?;
+        let b = self.int_reg(u, ty)?;
+        let c = self.int_reg(u, ty)?;
+        self.out.push_str(&format!("    sad.{} {d}, {a}, {b}, {c};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_vector_ld_st(&mut self, u: &mut Unstructured) -> Result<()> {
+        // ld.<space>.v{2,4}.<ty> {d0, d1[, d2, d3]}, [addr];
+        // st.<space>.v{2,4}.<ty> [addr], {s0, s1[, s2, s3]};
+        let is_load = u.arbitrary()?;
+        let space = *u.choose(&["global", "shared", "local"])?;
+        let width: u8 = if u.arbitrary()? { 2 } else { 4 };
+        // For simplicity restrict to .u32 (so 4-byte elements, max 16
+        // bytes for v4 -- well within natural alignment).
+        let addr = format!("%rd{}", u.int_in_range(0..=3)?);
+        let mut regs = String::new();
+        for i in 0..width {
+            if i > 0 { regs.push_str(", "); }
+            regs.push_str(&self.reg32(u)?);
+        }
+        if is_load {
+            self.out.push_str(&format!(
+                "    ld.{space}.v{width}.u32 {{{regs}}}, [{addr}];\n"
+            ));
+        } else {
+            self.out.push_str(&format!(
+                "    st.{space}.v{width}.u32 [{addr}], {{{regs}}};\n"
+            ));
+        }
+        Ok(())
+    }
+
+    fn emit_dp4a(&mut self, u: &mut Unstructured) -> Result<()> {
+        // dp4a.<dst_ty>.<src_ty> d, a, b, c
+        // Dot product of 4 packed 8-bit values + accum. All 32-bit
+        // registers; dst/src signed-ness can mix.
+        let dt = *u.choose(&[IntTy::U32, IntTy::S32])?;
+        let st = *u.choose(&[IntTy::U32, IntTy::S32])?;
+        let d = self.reg32(u)?;
+        let a = self.reg32(u)?;
+        let b = self.reg32(u)?;
+        let c = self.reg32(u)?;
+        self.out.push_str(&format!(
+            "    dp4a.{}.{} {d}, {a}, {b}, {c};\n", dt.name(), st.name()
+        ));
+        Ok(())
+    }
+
+    fn emit_brev(&mut self, u: &mut Unstructured) -> Result<()> {
+        // brev.{b32,b64} d, a   ->  bit-reverse
+        let ty = *u.choose(&[IntTy::B32, IntTy::B64])?;
+        let d = self.int_reg(u, ty)?;
+        let a = self.int_reg(u, ty)?;
+        self.out.push_str(&format!("    brev.{} {d}, {a};\n", ty.name()));
+        Ok(())
+    }
+
+    fn emit_rcp_sqrt(&mut self, u: &mut Unstructured) -> Result<()> {
+        // rcp/sqrt: float only. Approx variants exist for f32; f64
+        // requires .rnd. We use the always-legal "approx" for f32 and
+        // ".rn" for f64.
+        let op = u.choose(&["rcp", "sqrt"])?;
+        let ty = self.float_ty(u)?;
+        let mod_ = match ty { FloatTy::F32 => "approx", FloatTy::F64 => "rn" };
+        let d = self.float_reg(u, ty)?;
+        let a = self.float_reg(u, ty)?;
+        self.out.push_str(&format!("    {op}.{mod_}.{} {d}, {a};\n", ty.name()));
         Ok(())
     }
 }
