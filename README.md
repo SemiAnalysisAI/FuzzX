@@ -35,6 +35,7 @@ See [DESIGN.md](DESIGN.md) for the trade-offs.
 | `seeds/`                          | Initial corpus — six PTX fragments that each assemble cleanly on their own. |
 | `scripts/run-fuzz.sh`             | Single-core `afl-fuzz -Q` invocation with all the right env vars wired up.   |
 | `scripts/run-fuzz-multi.sh`       | N-worker variant (one `-M` master + N-1 `-S` secondaries) for parallel runs. |
+| `scripts/triage.sh`               | Group saved crashes across all workers by (exit code, stderr signature).     |
 
 ## Running on Linux (real fuzzing)
 
@@ -72,6 +73,14 @@ To reproduce a saved crash:
 ```bash
 cargo build --release -p ptx-fuzz-repro
 target/release/ptx-fuzz-repro output/main/crashes/id:000000,... --run
+```
+
+To triage everything saved across all workers in one pass:
+
+```bash
+PTXAS=$(which ptxas) scripts/triage.sh output
+cat output/triage/summary.txt
+# Per-group: output/triage/group-NN/{example.ptx,example.stderr,members.txt}
 ```
 
 ## Local sanity checks (macOS or Linux)
