@@ -60,8 +60,28 @@ runs a hand-translated Rust implementation of `program.ptx` and confirms it
 matches `-O0` on all 32 threads and disagrees with `-O3` on the same 20 tids
 the differential reported.
 
-Not yet reduced — still ~60 lines of body PTX, 7 reachable blocks (0, 2, 3,
-4, 5, 6; block_1 is statically unreachable), 2 loops with bounded counters.
+Reduced to `reduced.ptx`: 24 total lines, one loop-shaped backedge, one
+per-thread output store, one output pointer parameter, and no input buffer.
+The reduced form reproduces the same optimizer bug with a two-thread launch:
+`-O0` follows the scalar trace and `-O2` is wrong for tid 0.
+
+Standalone C++ bug-report repro: `m001-seed-050f/repro_ptxas_o2.cpp`. It embeds
+the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, runs both cubins
+through the CUDA Driver API, and prints the scalar expected value for each tid.
+The standalone repro has no input allocation at all; the minimized PTX no
+longer reads input.
+
+Scalar behavior of the reduced PTX: both launched threads must store `0` in
+`out[tid]`. Thread 0 branches directly to the loop test with `%r1 = 1`, but
+`%r0 = 1`, so it cannot exit on the first visit. It sets `%r0 = 0`, enters
+`block_2`, sets `%r1 = 0`, then exits on the next loop test. Thread 1 falls
+through `block_2` before reaching the loop test, so it also sets `%r1 = 0`.
+The `-O2` cubin incorrectly stores `1` for tid 0.
+
+On 2026-05-14, this still reproduced with CUDA Toolkit 13.2.1's ptxas
+(`release 13.2, V13.2.78`, build `cuda_13.2.r13.2/compiler.37668154_0`) from
+`cuda-nvcc-13-2_13.2.78-1_arm64.deb`: `-O0` matched the scalar trace and `-O2`
+had one mismatch on tid 0.
 
 **Reproduces on sm_103 too.** Originally found on the A100 box (ptxas 13.2,
 sm_80). On 2026-05-13, verified the same saved repro still misbehaves on the
@@ -71,3 +91,21 @@ deltas — both when ptxas cross-compiles the `.target sm_80` source for
 (with `.version 8.8`). So it isn't an sm_80-specific lowering bug; the
 optimizer pass that miscomputes the live-out values at the loop join is
 shared across both target backends.
+
+### m002-structured-lop3
+
+Found by rerunning the differential fuzzer with structured-control-flow
+generation enabled. This is a different optimizer bug from m001: the reduced
+testcase has no loop and no uniform branch/latch state. The minimized PTX is
+one basic computation split by a label before a `setp`/`selp`/`lop3`/`xor`
+sequence.
+
+Reduced to `reduced.ptx`: 27 total lines, one output pointer parameter, no
+input buffer, and one `out[tid]` store. The scalar PTX trace computes
+`0xfffffffe` for every thread. `-O0` stores `0xfffffffe`; `-O1`, `-O2`, and
+`-O3` store `0xffffffff`.
+
+Standalone C++ bug-report repro:
+`m002-structured-lop3/repro_ptxas_lop3_o2.cpp`. It embeds the reduced PTX,
+compiles it with `ptxas -O0` and `ptxas -O2`, runs both cubins through the CUDA
+Driver API, and prints the scalar expected value for every tid.
