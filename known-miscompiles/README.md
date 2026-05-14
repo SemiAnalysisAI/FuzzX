@@ -196,3 +196,28 @@ Standalone C++ bug-report repro:
 `m006-ifconvert-not-xor/repro_ptxas_not_xor_ifconvert_o2.cpp`. It embeds the
 reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches five
 threads with `n = 32`, and explains the scalar trace in the file header.
+
+### m007-signed-unsigned-ifconvert
+
+Found by continuing expanded structured-control-flow fuzzing with `lop3.b32`,
+`min/max`, `mul.hi`, `prmt.b32`, and `not.b32` generation disabled. The
+original saved divergence was seed `0x18af81f3becc9cf7`.
+
+Reduced to `reduced.ptx`: nested signed/unsigned branches over one loaded input
+word. The standalone launch uses `x = 0xe4ca6123` and `n = 32`. As signed
+`s32`, `x <= 32` is true; as unsigned `u32`, `32 >= x` is false. The correct
+path is therefore `inner_else`, producing output tuple
+`{0x00000179, 0, 0xe4ca6123, 0x00000020}`. `-O0` matches that trace; `-O2` and
+`-O3` store `r0 = 0x00000020` and `r3 = 0x26530918`, as if the inner unsigned
+comparison were true.
+
+Root cause from SASS: ptxas if-converts the nested branches and drops the
+inner `setp.ge.u32`, using only the outer signed `x > 32` predicate. The
+optimization assumes `signed x <= 32` implies `unsigned x <= 32`, which is
+false for negative signed values.
+
+Standalone C++ bug-report repro:
+`m007-signed-unsigned-ifconvert/repro_ptxas_signed_unsigned_ifconvert_o2.cpp`.
+It embeds the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`,
+launches one thread with `x = 0xe4ca6123` and `n = 32`, and explains the scalar
+trace in the file header.
