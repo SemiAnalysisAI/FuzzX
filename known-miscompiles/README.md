@@ -262,3 +262,25 @@ this is a loop simplification interaction for sequential counted loops.
 
 Standalone C++ bug-report repro:
 `m009-neg-loop-after-counted-loop/repro_ptxas_neg_loop_o2.cpp`.
+
+### m010-shr-s32-range-fold
+
+Found by continuing expanded structured-control-flow fuzzing with `lop3.b32`,
+`min/max`, `mul.hi`, `prmt.b32`, `not.b32`, `neg.s32`, signed-compare, and
+funnel-shift generation disabled. The original saved divergence was seed
+`0x18af89b7e737954e`.
+
+Reduced to `reduced.ptx`: straight-line PTX, no input buffer, one launched
+thread, one `shr.s32`, and one unsigned compare/select. For tid 0,
+`shr.s32(0xbb7dffd2, 3)` is `0xf76fbffa`; unsigned
+`0xc0000000 >= 0xf76fbffa` is false, so the correct store is `0x0000007b`.
+`-O0` stores `0x0000007b`; `-O1`, `-O2`, and `-O3` store `0x000003da`, the
+value that would be correct if the shift had been `shr.u32`.
+
+Root cause from SASS: `-O0` emits `SHF.R.S32.HI` followed by
+`ISETP.GE.U32` and `SEL`. `-O2` folds the whole expression to a constant
+`0x000003da` store, consistent with treating the signed right shift as a
+logical right shift during range folding.
+
+Standalone C++ bug-report repro:
+`m010-shr-s32-range-fold/repro_ptxas_shr_s32_range_o2.cpp`.
