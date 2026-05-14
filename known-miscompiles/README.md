@@ -152,3 +152,26 @@ Standalone C++ bug-report repro:
 `m004-mulhi-loop-tripcount/repro_ptxas_mulhi_loop_o2.cpp`. It embeds the
 reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread
 with `n = 32`, and explains the scalar trace in the file header.
+
+### m005-prmt-ifconvert-mask
+
+Found by expanding structured-control-flow fuzzing with `lop3.b32`, `min/max`,
+and `mul.hi` generation disabled. The original saved divergence was seed
+`0x18af806c82363626`.
+
+Reduced to `reduced.ptx`: one branch, one `prmt.b32`, one `and.b32`, no input
+buffer, and one launched thread. The standalone launch uses
+`x = 0xdeaa8397` and `n = 32`; because `n != 0`, the branch takes the `prmt`
+path. Selector `0x9` reads byte 1 of the first PRMT source and emits its sign
+byte. Byte 1 of `x` is `0x83`, so the correct masked output is `0x000000ff`.
+`-O0` stores `0x000000ff`; `-O2` and `-O3` store `0x00000000`.
+
+Root cause from SASS: after branch if-conversion and PRMT-mask folding, the
+optimized cubin emits `@P0 PRMT R5, RZ, 0x9, R0`, dropping the first PTX source
+operand `x`. Selector `0x9` depends on that source, so replacing it with zero
+is not legal.
+
+Standalone C++ bug-report repro:
+`m005-prmt-ifconvert-mask/repro_ptxas_prmt_ifconvert_o2.cpp`. It embeds the
+reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread,
+and explains the scalar trace in the file header.
