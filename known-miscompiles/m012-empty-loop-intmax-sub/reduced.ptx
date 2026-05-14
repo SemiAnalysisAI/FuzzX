@@ -1,0 +1,37 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 unused_ptr,
+    .param .u64 out_ptr
+)
+{
+    .reg .pred  %p<2>;
+    .reg .b32   %r<4>;
+    .reg .b64   %rd<2>;
+
+    ld.param.u64    %rd0, [out_ptr];
+    mov.u32         %r0, 0;
+    mov.u32         %r1, 1;
+    mov.u32         %r2, 4;
+
+pre_loop:
+    setp.eq.u32   %p0, %r1, 0;
+    @%p0 bra      value_loop;
+    sub.u32       %r1, %r1, 1;
+    bra           pre_loop;
+
+value_loop:
+    setp.eq.u32   %p1, %r2, 0;
+    @%p1 bra      done;
+    sub.u32       %r2, %r2, 1;
+    mov.u32       %r0, 0x7fffffff;
+    bra           value_loop;
+
+done:
+    sub.u32       %r3, 430, %r0;
+    cvta.to.global.u64 %rd1, %rd0;
+    st.global.u32 [%rd1], %r3;
+    ret;
+}
