@@ -175,3 +175,24 @@ Standalone C++ bug-report repro:
 `m005-prmt-ifconvert-mask/repro_ptxas_prmt_ifconvert_o2.cpp`. It embeds the
 reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread,
 and explains the scalar trace in the file header.
+
+### m006-ifconvert-not-xor
+
+Found by continuing expanded structured-control-flow fuzzing with `lop3.b32`,
+`min/max`, `mul.hi`, and `prmt.b32` generation disabled. The original saved
+divergence was seed `0x18af810ebb3cdf94`.
+
+Reduced to `reduced.ptx`: one branch, a `not.b32` + `xor.b32` false path, no
+input buffer, and five launched threads. For tids other than 4, the correct
+output is `594 * 32 + 32 = 0x00004a60`. For tid 4, the false path computes
+`32 ^ ~4 = 0xffffffdb`, so the correct output is `0x00004a1b`. `-O0` matches
+that trace; `-O2` and `-O3` store `0x00004a64` for tid 4.
+
+Root cause from SASS: ptxas if-converts the branch, substitutes the known
+false-path value `tid == 4`, and folds `not` + `xor` into a `LOP3.LUT`, but
+the emitted truth table computes `n ^ 4` instead of `n ^ ~4`.
+
+Standalone C++ bug-report repro:
+`m006-ifconvert-not-xor/repro_ptxas_not_xor_ifconvert_o2.cpp`. It embeds the
+reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches five
+threads with `n = 32`, and explains the scalar trace in the file header.
