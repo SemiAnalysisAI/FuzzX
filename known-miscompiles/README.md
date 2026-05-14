@@ -131,3 +131,24 @@ Standalone C++ bug-report repro:
 `m003-no-lop3-max-chain/repro_ptxas_max_chain_o2.cpp`. It embeds the reduced
 PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread with
 `n = 32`, and explains the scalar trace in the file header.
+
+### m004-mulhi-loop-tripcount
+
+Found by continuing structured-control-flow fuzzing with `lop3.b32`, `min`,
+and `max` generation disabled. The original saved divergence was seed
+`0x18af7d6ff86f2390`.
+
+Reduced to `reduced.ptx`: one counted loop, no input buffer, one launched
+thread, and one `mul.hi.s32` loop-carried accumulator update. For `n = 32`,
+`mul.hi.s32(0xc4787a77, n)` is `0xfffffff8` (`-8`). The loop executes four
+times, so the correct output is `0xffffffe0` (`-32`). `-O0` stores
+`0xffffffe0`; `-O2` and `-O3` store `0xfffffff0` (`-16`).
+
+Root cause from SASS: the optimized cubin removes the loop but emits only two
+`IMAD.HI` high-multiply contributions for a four-iteration source loop,
+dropping two loop-carried accumulator updates.
+
+Standalone C++ bug-report repro:
+`m004-mulhi-loop-tripcount/repro_ptxas_mulhi_loop_o2.cpp`. It embeds the
+reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread
+with `n = 32`, and explains the scalar trace in the file header.
