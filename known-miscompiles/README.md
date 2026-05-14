@@ -126,3 +126,8 @@ Root cause from SASS: the optimized cubin combines the max chain into
 `VIADDMNMX` / `VIMNMX3`, but the `VIMNMX3` includes the pre-subtract value
 `+n` as a max candidate. The source only maxes post-subtract values, so `+n`
 is not a legal candidate.
+
+Standalone C++ bug-report repro:
+`m003-no-lop3-max-chain/repro_ptxas_max_chain_o2.cpp`. It embeds the reduced
+PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread with
+`n = 32`, and explains the scalar trace in the file header.
