@@ -109,3 +109,20 @@ Standalone C++ bug-report repro:
 `m002-structured-lop3/repro_ptxas_lop3_o2.cpp`. It embeds the reduced PTX,
 compiles it with `ptxas -O0` and `ptxas -O2`, runs both cubins through the CUDA
 Driver API, and prints the scalar expected value for every tid.
+
+### m003-no-lop3-max-chain
+
+Found by continuing structured-control-flow fuzzing with explicit `lop3.b32`
+generation disabled. The original saved divergence was seed
+`0x18af79fcbae68d75`.
+
+Reduced to `reduced.ptx`: straight-line PTX, no input buffer, no branch/loop,
+no `lop3.b32`. The testcase is four repeated `sub.u32` / `max.s32` steps over
+a runtime parameter `n`. For `n = 32`, the scalar candidates are
+`0, -32, -64, -96`, so the correct signed maximum is `0`. `-O0` stores `0`;
+`-O1`, `-O2`, and `-O3` store `32`.
+
+Root cause from SASS: the optimized cubin combines the max chain into
+`VIADDMNMX` / `VIMNMX3`, but the `VIMNMX3` includes the pre-subtract value
+`+n` as a max candidate. The source only maxes post-subtract values, so `+n`
+is not a legal candidate.
