@@ -218,6 +218,25 @@ false for negative signed values.
 
 Standalone C++ bug-report repro:
 `m007-signed-unsigned-ifconvert/repro_ptxas_signed_unsigned_ifconvert_o2.cpp`.
+
+### m008-funnel-shift-loop-unroll
+
+Found by continuing expanded structured-control-flow fuzzing with `lop3.b32`,
+`min/max`, `mul.hi`, `prmt.b32`, `not.b32`, and signed-compare generation
+disabled. The original saved divergence was seed `0x18af838295a7233b`.
+
+Reduced to `reduced.ptx`: one output pointer parameter, no input buffer, one
+six-trip loop, and one `shf.r.wrap.b32` recurrence. For tid 0, the scalar
+trace computes final `r0 = 0x00931c20`; `-O0` stores that value, but `-O2` and
+`-O3` store `0x14131c20`.
+
+Root cause from SASS: ptxas fully unrolls the loop and rewrites the
+loop-carried `shf.r.wrap` values into `LEA.HI` expressions. The final collapsed
+`LOP3.LUT` computes `(R7 & R0) ^ 0x1000`, but the value feeding that expression
+is not the PTX funnel-shift recurrence value. Replacing `shf.r.wrap.b32` with
+equivalent `shr.u32` plus `or.b32 0xea800000` makes `-O2` match `-O0`.
+
+Standalone C++ bug-report repro:
+`m008-funnel-shift-loop-unroll/repro_ptxas_funnel_loop_o2.cpp`.
 It embeds the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`,
-launches one thread with `x = 0xe4ca6123` and `n = 32`, and explains the scalar
-trace in the file header.
+launches one thread, and explains the scalar trace in the file header.
