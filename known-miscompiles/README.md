@@ -240,3 +240,25 @@ Standalone C++ bug-report repro:
 `m008-funnel-shift-loop-unroll/repro_ptxas_funnel_loop_o2.cpp`.
 It embeds the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`,
 launches one thread, and explains the scalar trace in the file header.
+
+### m009-neg-loop-after-counted-loop
+
+Found by continuing expanded structured-control-flow fuzzing with `lop3.b32`,
+`min/max`, `mul.hi`, `prmt.b32`, `not.b32`, signed-compare, and funnel-shift
+generation disabled. The original saved divergence was seed
+`0x18af8903f471fc70`.
+
+Reduced to `reduced.ptx`: one empty one-trip counted loop followed by a second
+one-trip counted loop containing `neg.s32`. The scalar trace sets
+`r3 = 0x7fffffff`, executes `neg.s32` once, and must store `0x80000001`.
+`-O0` stores `0x80000001`; `-O2` and `-O3` store `0x7fffffff`, as if the
+second loop's negation did not execute.
+
+Root cause from SASS: `-O0` keeps the second loop and emits
+`IADD3 ..., RZ, -R4, RZ` for the negation. `-O2` deletes both one-trip loops
+but stores the pre-negation constant directly. Removing the preceding counted
+loop from the source makes the one-trip `neg.s32` loop compile correctly, so
+this is a loop simplification interaction for sequential counted loops.
+
+Standalone C++ bug-report repro:
+`m009-neg-loop-after-counted-loop/repro_ptxas_neg_loop_o2.cpp`.
