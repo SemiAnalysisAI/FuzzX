@@ -284,3 +284,24 @@ logical right shift during range folding.
 
 Standalone C++ bug-report repro:
 `m010-shr-s32-range-fold/repro_ptxas_shr_s32_range_o2.cpp`.
+
+### m011-bfind-after-empty-loop
+
+Found by continuing expanded structured-control-flow fuzzing with all previous
+known triggers disabled, including `DIV_DISABLE_SIGNED_SHR=1`. The original
+saved divergence was seed `0x18af8cdd53d39c23`.
+
+Reduced to `reduced.ptx`: one empty one-trip counted loop followed by a
+four-trip counted loop containing `bfind.u32 0` and `mov 0x7fffffff`. The
+scalar trace leaves `r4 = 0xffffffff` and `r0 = 0x7fffffff`, then computes
+`r4 - r0 = 0x80000000`. `-O0` and `-O1` store `0x80000000`; `-O2` and `-O3`
+store `0x7ffffffe`, the value of `0xffffffff + 0x7fffffff`.
+
+Root cause from SASS: `-O0` emits `FLO.U32 ..., RZ` for `bfind.u32 0` and
+then preserves the subtract as an `IADD3` with a negated operand. `-O2`
+deletes the loops and stores constant `0x7ffffffe`. Replacing `bfind.u32 0`
+with equivalent `mov.u32 0xffffffff`, removing the preceding empty loop, or
+reducing the bfind loop to three trips makes `-O2` match `-O0`.
+
+Standalone C++ bug-report repro:
+`m011-bfind-after-empty-loop/repro_ptxas_bfind_loop_o2.cpp`.
