@@ -49,10 +49,9 @@ positive signed 32-bit integer. The correct selected operand is therefore
 `ptxas -O0` matches that trace. `ptxas -O1`, `ptxas -O2`, and `ptxas -O3`
 store `0x0000000c`.
 
-Standalone C++ bug-report repro: `repro_ptxas_slct_s32_immediate_o1.cpp`. It
-embeds the reduced PTX, compiles it with `ptxas -O0`, `ptxas -O1`, `ptxas
--O2`, and `ptxas -O3`, launches one CUDA thread through the CUDA Driver API,
-and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

@@ -30,10 +30,9 @@ but replacing the generated 64-bit operations with equivalent 32-bit operations
 did not remove the divergence. This is a control-flow bug, not a 64-bit ALU
 bug.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_structured_loop_uniform_counter_o1.cpp`. It embeds the reduced PTX,
-assembles it with `ptxas -O0`, `-O1`, `-O2`, and `-O3`, launches one 32-thread
-block through the CUDA Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 ## Correct Scalar Trace
 

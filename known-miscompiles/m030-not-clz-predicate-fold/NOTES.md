@@ -59,10 +59,9 @@ applies.
 `0x00000020`, as if the false path computed `clz(0)` instead of
 `clz(~0)`.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_not_clz_predicate_o2.cpp`. It embeds the reduced PTX, compiles it
-with `ptxas -O0` and `ptxas -O2`, launches one thread through the CUDA Driver
-API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

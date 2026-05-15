@@ -35,10 +35,9 @@ store %r1 = 0
 So the correct output is `0x00000000`. `ptxas -O0` stores `0x00000000`.
 `ptxas -O1`, `-O2`, and `-O3` store `0x00000020`.
 
-Standalone C++ bug-report repro: `repro_ptxas_max_chain_o2.cpp`. It embeds the
-reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread
-with `n = 32` through the CUDA Driver API, and returns 1 when the bug is
-reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-14 with both:
 

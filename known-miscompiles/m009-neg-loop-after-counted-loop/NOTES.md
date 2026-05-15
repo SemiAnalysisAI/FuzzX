@@ -54,9 +54,9 @@ The correct stored value is `0x80000001`. `ptxas -O0` matches that trace.
 `ptxas -O2` and `-O3` store `0x7fffffff`, as if the second loop's negation did
 not execute.
 
-Standalone C++ bug-report repro: `repro_ptxas_neg_loop_o2.cpp`. It embeds the
-reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one thread
-through the CUDA Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-14 with both:
 

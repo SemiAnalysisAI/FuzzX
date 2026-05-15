@@ -68,10 +68,9 @@ So the correct output is:
 `ptxas -O0` and `ptxas -O1` match that trace. `ptxas -O2` and `ptxas -O3`
 store `0x00003fdf`.
 
-Standalone C++ bug-report repro: `repro_ptxas_abs_loop_bmsk_o2.cpp`. It embeds
-the reduced PTX, compiles it with `ptxas -O0`, `ptxas -O1`, `ptxas -O2`, and
-`ptxas -O3`, launches one CUDA thread through the CUDA Driver API, and returns
-1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

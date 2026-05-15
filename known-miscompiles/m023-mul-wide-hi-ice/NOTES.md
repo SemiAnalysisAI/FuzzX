@@ -60,10 +60,9 @@ So the correct output for a one-thread launch is `0xffffffa5`, and `ptxas -O0`
 compiles and runs that value. `ptxas -O1`, `-O2`, and `-O3` do not compile the
 kernel.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_mul_wide_hi_ice_o2.cpp`. It embeds the reduced PTX, compiles it
-with `ptxas -O0`, launches the `-O0` cubin to check the scalar output, then
-compiles with `ptxas -O2` and returns 1 when the optimized compiler crashes.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build with
+`nvcc -Xptxas -O0` to run the scalar-output check; building the same source
+with `nvcc -Xptxas -O2` reproduces the optimized `ptxas` compile failure.
 
 This reproduced on 2026-05-15 with both:
 

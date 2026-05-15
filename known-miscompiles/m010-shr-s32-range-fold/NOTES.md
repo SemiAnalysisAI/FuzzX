@@ -41,9 +41,9 @@ If the source used `shr.u32` instead of `shr.s32`, the shifted value would be
 `0x176fbffa`, the unsigned compare would be true, and `986` would be correct.
 That is exactly the wrong result produced for the signed-shift source.
 
-Standalone C++ bug-report repro: `repro_ptxas_shr_s32_range_o2.cpp`. It embeds
-the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one
-thread through the CUDA Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-14 with both:
 

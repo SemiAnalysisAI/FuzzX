@@ -70,10 +70,9 @@ the output buffer before launch, so the only nonzero word should be
 That is, optimized ptxas behaves as if the `not.b32` was dropped from the
 value used by the `xor.b32` in the `%tid.x == 20` branch.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_not_xor_branch_o2.cpp`. It embeds the reduced PTX, compiles it
-with `ptxas -O0` and `ptxas -O2`, launches one 32-thread block through the CUDA
-Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

@@ -52,10 +52,9 @@ The final output remains the initial in-kernel store, `0x00000000`. `ptxas
 as if the optimized loop treated the true result of `set.eq.u32.u32` as `1`
 instead of `0xffffffff`.
 
-Standalone C++ bug-report repro: `repro_ptxas_set_true_cmp_one_o1.cpp`. It
-embeds the reduced PTX, compiles it with `ptxas -O0`, `ptxas -O1`,
-`ptxas -O2`, and `ptxas -O3`, launches one thread through the CUDA Driver API,
-and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-14 with both:
 

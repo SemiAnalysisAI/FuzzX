@@ -51,10 +51,9 @@ store %r3
 `ptxas -O0` stores `0x00003ff7`. `ptxas -O1`, `-O2`, and `-O3` store
 `0x00003ff8`, as if `addc.u32` consumed an incorrect carry-in of 1.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_addc_mul_carry_o2.cpp`. It embeds the reduced PTX, compiles it
-with `ptxas -O0` and `ptxas -O2`, launches one thread with `n = 32` through the
-CUDA Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

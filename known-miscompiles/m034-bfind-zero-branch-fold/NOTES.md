@@ -62,10 +62,9 @@ those lanes store `4 - 32 = 0xffffffe4`.
 `ptxas -O1`, `-O2`, and `-O3` store `0xffffffe0`, as if `bfind.u32 0` had
 folded to `0` instead of `0xffffffff` on the `%tid.x == 0` path.
 
-Standalone C++ bug-report repro:
-`repro_ptxas_bfind_zero_branch_o2.cpp`. It embeds the reduced PTX, compiles it
-with `ptxas -O0` and `ptxas -O2`, launches through the CUDA Driver API, and
-returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-15 with both:
 

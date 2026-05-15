@@ -55,9 +55,9 @@ Removing the empty pre-loop makes `-O2` correct. Reducing the value loop from
 four trips to three also makes `-O2` correct. The original `or.b32 893,
 0x7fffffff` can be replaced with `mov.u32 0x7fffffff` and the bug remains.
 
-Standalone C++ bug-report repro: `repro_ptxas_intmax_loop_o2.cpp`. It embeds
-the reduced PTX, compiles it with `ptxas -O0` and `ptxas -O2`, launches one
-thread through the CUDA Driver API, and returns 1 when the bug is reproduced.
+CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source
+with `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and
+compare the printed output.
 
 This reproduced on 2026-05-14 with both:
 

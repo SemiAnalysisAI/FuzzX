@@ -58,7 +58,8 @@ Everything below this line is AI-written slop.  Good luck!
 | --- | --- |
 | Rust | Uses the toolchain in `rust-toolchain.toml`. |
 | CUDA driver + `libcuda` | Required for fuzzing, verification, and reduction. |
-| `ptxas` | Set `PTXAS=/path/to/ptxas` for reproducible runs. |
+| CUDA Toolkit `ptxas` | Set `PTXAS=/path/to/ptxas` for reproducible runs. |
+| CUDA Toolkit `nvcc` | Required for the standalone CUDA inline-PTX reproducers. |
 | NVIDIA GPU matching `TARGET_ARCH` | `fuzzx-execgen` currently defaults to `sm_103`. |
 
 ## Layout
