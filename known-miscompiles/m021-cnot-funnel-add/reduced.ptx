@@ -1,0 +1,19 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.entry fuzz_kernel(.param .u64 out_ptr, .param .u32 n)
+{
+    .reg .b32 %r<1>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    ld.param.u32 %r0, [n];
+
+    cnot.b32       %r0, %r0;
+    shf.r.wrap.b32 %r0, %r0, 16, 19;
+    add.u32        %r0, %r0, 0xaad528;
+
+    st.global.u32 [%rd0], %r0;
+    ret;
+}
