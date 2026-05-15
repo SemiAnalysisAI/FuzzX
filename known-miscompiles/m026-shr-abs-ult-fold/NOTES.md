@@ -29,7 +29,7 @@ seed 0x18afb332fba2f9d6
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-straightline-not-enabled-bitwise-shl-disabled-100k/div-1778837419-18afb332fba2f9d6
+/tmp/fuzzx-straightline-not-enabled-bitwise-shl-disabled-100k/div-1778837419-18afb332fba2f9d6
 ```
 
 The minimized PTX in `reduced.ptx` is straight-line and has no input-buffer

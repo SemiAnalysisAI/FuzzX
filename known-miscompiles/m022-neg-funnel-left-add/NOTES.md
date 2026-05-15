@@ -22,7 +22,7 @@ seed 0x18afad3eb41c4c9c
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-arbitrary-acyclic-funnel-nocnot-noslct-noset-knownflags-100k/div-1778830870-18afad3eb41c4c9c
+/tmp/fuzzx-arbitrary-acyclic-funnel-nocnot-noslct-noset-knownflags-100k/div-1778830870-18afad3eb41c4c9c
 ```
 
 The minimized PTX in `reduced.ptx` is straight-line and has no input buffer.

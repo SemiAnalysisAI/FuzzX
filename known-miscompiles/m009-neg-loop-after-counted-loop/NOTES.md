@@ -14,7 +14,7 @@ seed 0x18af8903f471fc70
 ```
 
 The original saved fuzzer program is in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-nosignedcmp-nofunnel-cvt-bfind-divrem-sad-slct-dp4a/div-1778791215-18af8903f471fc70`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-nosignedcmp-nofunnel-cvt-bfind-divrem-sad-slct-dp4a/div-1778791215-18af8903f471fc70`
 on the machine where this was reduced. Although the run had just enabled
 `dp4a.u32.u32`, the saved program did not contain `dp4a`, `sad`, `slct`,
 `div/rem`, or any disabled instruction family. The triggering source operation

@@ -5,7 +5,7 @@ triggers disabled:
 
 ```text
 PTXAS=/tmp/cuda-13.2.1-ptxas/extract/usr/local/cuda-13.2/bin/ptxas
-DIV_OUT_DIR=/tmp/ptx-fuzz-structured-large-knownflags-expanded-noabs
+DIV_OUT_DIR=/tmp/fuzzx-structured-large-knownflags-expanded-noabs
 DIV_STRUCTURED_CONTROL_FLOW=1
 DIV_DISABLE_LOP3=1 DIV_DISABLE_MINMAX=1 DIV_DISABLE_MULHI=1
 DIV_DISABLE_PRMT=1 DIV_DISABLE_NOT=1 DIV_DISABLE_NEG=1
@@ -20,7 +20,7 @@ seed 0x18af9dcb214d0d58
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-large-knownflags-expanded-noabs/div-1778814334-18af9dcb214d0d58`
+`/tmp/fuzzx-structured-large-knownflags-expanded-noabs/div-1778814334-18af9dcb214d0d58`
 on the machine where this was reduced.
 
 Manual reduction collapsed the test to one `slct.s32.s32` with an immediate

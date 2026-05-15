@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure how often the generator produces PTX that assembles end-to-end.
+# Measure how often the differential generator produces PTX that assembles.
 #
 # Usage:
 #   PTXAS=$(which ptxas) scripts/check-gen.sh [N]   # default N=200
@@ -17,18 +17,20 @@ N="${1:-200}"
 PTXAS="${PTXAS:-$(command -v ptxas)}"
 if [[ -z "$PTXAS" ]]; then echo "ptxas not on PATH; set \$PTXAS" >&2; exit 1; fi
 
-REPRO="$ROOT/target/release/ptx-fuzz-repro"
-if [[ ! -x "$REPRO" ]]; then cargo build --release -p ptx-fuzz-repro >/dev/null; fi
+GEN="$ROOT/target/release/fuzzx-diff-dump-gen"
+if [[ ! -x "$GEN" ]]; then
+    cargo build --release -p fuzzx-diff --bin fuzzx-diff-dump-gen >/dev/null
+fi
+START_SEED="${DIV_STARTING_SEED:-0}"
 
 declare -A errs
 pass=0
-tmp_in=$(mktemp)
 tmp_ptx=$(mktemp --suffix=.ptx)
-trap 'rm -f "$tmp_in" "$tmp_ptx"' EXIT
+trap 'rm -f "$tmp_ptx"' EXIT
 
-for i in $(seq 1 "$N"); do
-    head -c $(( RANDOM % 1024 + 8 )) /dev/urandom > "$tmp_in"
-    "$REPRO" "$tmp_in" > "$tmp_ptx"
+for ((i = 0; i < N; i++)); do
+    seed=$((START_SEED + i))
+    "$GEN" "$seed" > "$tmp_ptx"
     err=$("$PTXAS" "$tmp_ptx" 2>&1 >/dev/null \
         | head -1 \
         | sed 's#/tmp/[^ ,:]*##g; s/, line [0-9]*//' \

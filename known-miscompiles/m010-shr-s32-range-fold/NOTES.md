@@ -13,7 +13,7 @@ seed 0x18af89b7e737954e
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-cvt-bfind-divrem-sad-slct-dp4a/div-1778792042-18af89b7e737954e`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-cvt-bfind-divrem-sad-slct-dp4a/div-1778792042-18af89b7e737954e`
 on the machine where this was reduced. It was manually reduced after the
 automatic reducer reached undefined PTX by deleting live definitions of the
 final select's operands.

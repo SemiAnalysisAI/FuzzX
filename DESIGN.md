@@ -1,150 +1,83 @@
-# ptx-fuzz design
+# FuzzX Design
 
 ## Goal
 
-Find inputs that crash NVIDIA's `ptxas`. `ptxas` is closed-source with
-no compile-time instrumentation, so we need binary-only coverage.
+Find `ptxas` bugs in generated PTX programs, with the current emphasis on
+miscompiles: cases where two optimization levels compile and launch
+successfully but produce different outputs for the same input.
 
 ## Architecture
 
-```
-       ┌──────────────────────────┐
-       │   afl-fuzz               │
-       │  (manages corpus, picks  │
-       │   inputs, schedules      │
-       │   mutations)             │
-       └─────────┬────────────────┘
-                 │
-                 │ dlopen()s
-                 ▼
-       ┌──────────────────────────┐
-       │ libptx_fuzz_mutator.so   │
-       │  afl_custom_post_process:│
-       │    raw bytes → PTX text  │
-       └─────────┬────────────────┘
-                 │
-                 │ writes PTX text to @@ input file
-                 │ then fork()s qemu forkserver
-                 ▼
-       ┌──────────────────────────┐
-       │  afl-qemu-trace ptxas @@ │
-       │  (user-mode QEMU patches │
-       │   TCG blocks to bump     │
-       │   AFL coverage shmem)    │
-       └─────────┬────────────────┘
-                 │
-                 │ ptxas crash → signal exit
-                 ▼
-       ┌──────────────────────────┐
-       │  afl-fuzz saves input    │
-       │  to output/.../crashes/  │
-       └──────────────────────────┘
+```text
+seed
+  |
+  v
+deterministic bytes
+  |
+  v
+fuzzx-execgen -> PTX kernel + input buffer
+  |
+  +--> ptxas -O0 -> cubin -> CUDA launch -> output_o0
+  |
+  +--> ptxas -O3 -> cubin -> CUDA launch -> output_o3
+                                      |
+                                      v
+                              compare outputs
+                                      |
+                                      v
+                          divergences/div-.../
 ```
 
-## Why AFL++ qemu_mode instead of libFuzzer + Valgrind?
+`fuzzx-diff` is intentionally undirected. It does not use coverage feedback;
+it walks a deterministic seed stream and relies on throughput plus generator
+diversity.
 
-We initially scaffolded a libFuzzer + Valgrind/callgrind pipeline.
-Switched to AFL++ for these reasons:
+Each saved divergence bundle contains enough state to inspect, verify, and
+reduce the candidate: generated seed bytes, PTX, runtime input, both outputs or
+errors, and a short summary.
 
-| Factor                          | libFuzzer + Valgrind             | AFL++ qemu_mode                        |
-| ------------------------------- | -------------------------------- | -------------------------------------- |
-| Slowdown vs native ptxas        | 50–100×                          | 3–10×                                  |
-| Coverage extraction complexity  | parse callgrind text per iter    | shmem, written directly by QEMU TCG    |
-| Forkserver support              | no (fresh process each iter)     | yes (one ptxas init pays for many runs)|
-| Standard for binary-only fuzz   | unusual                          | common                                 |
-| Implementation complexity       | custom Valgrind tool needed eventually | drop in afl-qemu-trace             |
+## Generator Invariants
 
-The forkserver speedup alone is significant for ptxas, which spends a
-non-trivial chunk of its startup loading libraries and parsing CLI
-flags.
+`fuzzx-execgen` emits kernels with a fixed ABI:
 
-## Why a custom mutator and not just `afl-fuzz -- ptxas @@`?
+```text
+.visible .entry fuzz_kernel(.param .u64 in, .param .u64 out, .param .u32 n)
+```
 
-We want AFL to mutate compact representations (raw bytes), not PTX text
-directly. If AFL bit-flipped PTX text, it'd hit syntax errors on
-nearly every mutation — most random edits to `.reg .u32 r0;` produce
-unparseable garbage that ptxas rejects at the lexer. The byte-level
-input gives the mutator a smooth space to explore, and `generate_ptx`
-turns each byte string into something that at least makes it past the
-lexer.
+The generator keeps mismatches meaningful by enforcing these invariants:
 
-The natural AFL++ hook for this is **`afl_custom_post_process`**:
+- Working registers are initialized before use.
+- Loop backedges are bounded by countdown registers.
+- Each thread writes to its own output slice.
+- There is no shared memory, atomics, warp communication, or barriers.
+- Integer operations are preferred so differences are not explained by floating
+  point behavior.
 
-  - AFL's corpus and mutators see raw bytes.
-  - Just before AFL writes the input file for the target, our hook
-    transforms those bytes into PTX text.
-  - Crashes are saved as the raw bytes; `ptx-fuzz-repro` re-applies the
-    transform to recover what ptxas actually saw.
+## Verification And Reduction
 
-The alternative (`afl_custom_fuzz`) replaces AFL's mutators — we'd
-have to reimplement bit flips, splices, etc. ourselves. Not worth it.
+`fuzzx-diff-verify` reruns a saved divergence and checks that the mismatch is
+still present.
 
-## Why not `afl_custom_fuzz` + a structured grammar?
+`fuzzx-diff-reduce` greedily removes PTX lines while preserving these
+conditions:
 
-A grammar-aware generator would produce more *syntactically* valid PTX
-and exercise deeper code paths faster. That's the right next step once
-the pipeline is solid. v0 stays with raw-bytes-passthrough because:
+- both `-O0` and `-O3` compile;
+- both cubins launch successfully;
+- each optimization level is deterministic across repeated launches;
+- the two optimization levels still disagree.
 
-1. It validates the AFL++ plumbing without confounding from a
-   complicated generator.
-2. Even the byte passthrough finds the seeded `@!` crash in our local
-   `fake-ptxas` quickly, so the coverage feedback loop is clearly
-   working.
-3. A grammar is a meaningful chunk of work that benefits from being
-   built once we know what shapes of PTX are interesting to `ptxas`.
+The reducer keeps the prologue and address arithmetic intact so reductions do
+not introduce output races or out-of-bounds memory access.
 
-## What's out of scope (for now)
+`fuzzx-diff-test`, `fuzzx-diff-sweep`, `fuzzx-diff-dump-gen`, and
+`fuzzx-diff-inspect-outputs` are interactive helpers for manual reduction and
+inspection.
 
-- **Differential testing against the GPU.** Mentioned as a follow-on
-  in the original request; only crash hunting in v0.
-- **Persistent mode.** AFL++ supports `AFL_QEMU_PERSISTENT_ADDR` to
-  loop inside ptxas without re-forking. Big win, but needs to know
-  ptxas's `main` address (or a stable function early in startup), so
-  skipped until we measure baseline throughput first.
-- **Multi-core fuzzing.** AFL++ does this trivially with
-  `afl-fuzz -M main` / `-S secondary-N`. Wait until single-core is
-  working.
-- **Grammar-aware generator.** See above.
-- **Sandboxing.** ptxas is mostly-trusted, but running attacker-shaped
-  inputs through it in a loop deserves a thought-out story
-  eventually.
+## Constraints
 
-## Known issues
-
-- AFL++ qemu_mode only really works on Linux, so this entire pipeline
-  is Linux-only end-to-end. macOS can do `cargo build` / `cargo test`
-  and exercise `fake-ptxas` manually, but the actual fuzz loop has to
-  run on the Linux box.
-- The seeded-crash patterns in `fake-ptxas` are deliberately easy
-  (specifically, two adjacent printable-ASCII bytes). A real ptxas
-  crash will require AFL to discover deeper structural patterns, which
-  is where the grammar work above starts to matter.
-- **`afl-fuzz` workers segfaulted inside `libc.so.6` under sustained
-  runs.** Two distinct manifestations, each with its own mitigation:
-
-  *AFL++ 4.40c, any worker count.* A 28-minute 16-worker run produced
-  ~70 worker segfaults inside `malloc/arena.c:153`, `malloc.c:3375`,
-  and `memmove-vec-unaligned-erms.S` at various offsets. Upgrading
-  to AFL++ 4.41a (built from the dev branch, May 2026) cut this to
-  2 crashes at startup, then stable.
-
-  *AFL++ 4.41a, ≥50 workers.* A residual variant of the bug surfaces
-  at high parallelism — every crash lands at libc `0xac52e` inside
-  `_int_malloc` (`malloc.c:4267`, walking the smallbin/largebin
-  freelist). At 100 workers the rate was high enough to trigger a
-  watchdog death-spiral. The trim stage was the trigger: setting
-  `AFL_DISABLE_TRIM=1` eliminated the deaths entirely (100/100
-  workers up indefinitely, 0 restarts after startup). Trim is a
-  cosmetic optimization for shrinking accepted corpus entries; we
-  don't depend on it. `scripts/run-fuzz-multi.sh` exports this by
-  default.
-
-  `scripts/run-fuzz-multi.sh` keeps a watchdog with exponential
-  per-worker backoff anyway, both for residual startup crashes and
-  as belt-and-suspenders for unknown future bugs.
-- **Coverage plateaus around 73% with the byte-passthrough
-  generator.** Once AFL has exercised the obvious lexer/parser code
-  paths from the six seeds, random byte mutations stop opening new
-  edges. Breaking past that ceiling needs a structured (grammar-aware)
-  generator that can synthesize syntactically novel instructions,
-  declarations, and control flow.
+- The differential fuzzer currently targets the architecture named by
+  `fuzzx-execgen::TARGET_ARCH` (`sm_103` by default).
+- CUDA contexts are thread-local; workers own their CUDA context and reusable
+  buffers.
+- `ptxas` temp files are routed through `TMPDIR`; the differential tools prefer
+  `/dev/shm` when the caller has not set `TMPDIR`.

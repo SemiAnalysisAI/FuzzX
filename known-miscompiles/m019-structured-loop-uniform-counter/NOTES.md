@@ -5,7 +5,7 @@ triggers disabled and with `mul.wide` / 64-bit ALU coverage enabled:
 
 ```text
 PTXAS=/tmp/cuda-13.2.1-ptxas/extract/usr/local/cuda-13.2/bin/ptxas
-DIV_OUT_DIR=/tmp/ptx-fuzz-structured-deep-wideint-knownflags-noaddc-nosubc-nos32slct-20k
+DIV_OUT_DIR=/tmp/fuzzx-structured-deep-wideint-knownflags-noaddc-nosubc-nos32slct-20k
 DIV_STRUCTURED_CONTROL_FLOW=1
 DIV_MAX_STRUCTURED_DEPTH=5
 DIV_DISABLE_LOP3=1 DIV_DISABLE_MINMAX=1 DIV_DISABLE_MULHI=1
@@ -22,7 +22,7 @@ seed 0x18afa3a34ce4e40a
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-deep-wideint-knownflags-noaddc-nosubc-nos32slct-20k/div-1778820399-18afa3a34ce4e40a`
+`/tmp/fuzzx-structured-deep-wideint-knownflags-noaddc-nosubc-nos32slct-20k/div-1778820399-18afa3a34ce4e40a`
 on the machine where this was reduced.
 
 The initial hit happened in a run that enabled 64-bit scratch ALU generation,

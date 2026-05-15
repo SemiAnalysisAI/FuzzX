@@ -1,13 +1,10 @@
 /target
 **/*.rs.bk
-Cargo.lock
-/output
-/output-*
+/.claude/
+
 # macOS AppleDouble metadata
 ._*
 
-# Claude Code per-project state
-/.claude/
-
 # In-progress fuzzer scratch (long-running differential runs)
+/divergences/
 /divergences-b300/

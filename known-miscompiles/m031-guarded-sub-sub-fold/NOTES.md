@@ -32,7 +32,7 @@ seed 0x18afb9c24d6031b6
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-acyclic-multiblock-large-imm2048-knownflags-nonot-100k/div-1778844643-18afb9c24d6031b6
+/tmp/fuzzx-acyclic-multiblock-large-imm2048-knownflags-nonot-100k/div-1778844643-18afb9c24d6031b6
 ```
 
 The minimized PTX in `reduced.ptx` does not read the input buffer. The dummy

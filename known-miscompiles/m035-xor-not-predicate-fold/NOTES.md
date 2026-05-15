@@ -36,7 +36,7 @@ seed 0x18afc142d1aab235
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-structured-if-xlarge-imm65536-knownflags-nonot-nobfind-clz-cnot-noneg-sub-noboundary-200k/div-1778852924-18afc142d1aab235
+/tmp/fuzzx-structured-if-xlarge-imm65536-knownflags-nonot-nobfind-clz-cnot-noneg-sub-noboundary-200k/div-1778852924-18afc142d1aab235
 ```
 
 The minimized PTX in `reduced.ptx` does not read the input buffer or `in_n`.

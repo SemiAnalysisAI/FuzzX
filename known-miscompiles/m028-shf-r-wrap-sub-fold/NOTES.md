@@ -28,7 +28,7 @@ seed 0x18afb671dac42d30
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-straightline-funnel-enabled-nocnot-noneg-nosubc-knownflags-100k/div-1778841038-18afb671dac42d30
+/tmp/fuzzx-straightline-funnel-enabled-nocnot-noneg-nosubc-knownflags-100k/div-1778841038-18afb671dac42d30
 ```
 
 The minimized PTX in `reduced.ptx` has no input-buffer dependency. The dummy

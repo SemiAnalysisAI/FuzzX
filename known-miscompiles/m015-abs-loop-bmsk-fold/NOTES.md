@@ -15,7 +15,7 @@ seed 0x18af974bc0f86648
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-expanded-knownflags-video-minmax-novsub4/div-1778806743-18af974bc0f86648`
+`/tmp/fuzzx-structured-expanded-knownflags-video-minmax-novsub4/div-1778806743-18af974bc0f86648`
 on the machine where this was reduced.
 
 The original fuzzer program had no video instructions, so this was not caused

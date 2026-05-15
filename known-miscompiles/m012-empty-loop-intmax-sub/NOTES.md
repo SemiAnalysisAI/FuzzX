@@ -14,7 +14,7 @@ seed 0x18af8ecf76249973
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-nosignedshr-nobfind-mad24-cvt-divrem-sad-slct-dp4a/div-1778797532-18af8ecf76249973`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-nosignedshr-nobfind-mad24-cvt-divrem-sad-slct-dp4a/div-1778797532-18af8ecf76249973`
 on the machine where this was reduced.
 
 The original program contained `cvt.u32.u8` in a dead `else` block and no

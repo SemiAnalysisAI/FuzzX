@@ -15,7 +15,7 @@ seed 0x18af950590716284
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-expanded-knownflags-video-avrg/div-1778804426-18af950590716284`
+`/tmp/fuzzx-structured-expanded-knownflags-video-avrg/div-1778804426-18af950590716284`
 on the machine where this was reduced.
 
 Manual reduction showed this is a `vsub4.u32.u32.u32` constant-folding bug in

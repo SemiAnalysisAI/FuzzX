@@ -26,7 +26,7 @@ seed 0x18afb614adabf64d
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-straightline-addc-subc-enabled-noset-nosignedcmp-noabs-shl-disabled-100k/div-1778840588-18afb614adabf64d
+/tmp/fuzzx-straightline-addc-subc-enabled-noset-nosignedcmp-noabs-shl-disabled-100k/div-1778840588-18afb614adabf64d
 ```
 
 The minimized PTX in `reduced.ptx` has no input-buffer dependency. The dummy

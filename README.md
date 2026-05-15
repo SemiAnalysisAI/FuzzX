@@ -1,155 +1,157 @@
-# ptx-fuzz
+# FuzzX
 
-Coverage-guided fuzzer for NVIDIA's `ptxas` PTX assembler. Driven by
-[AFL++](https://github.com/AFLplusplus/AFLplusplus) in qemu_mode, with
-a tiny custom-mutator shared library that turns AFL's mutated byte
-inputs into PTX source text just before they reach the target.
+FuzzX finds NVIDIA `ptxas` miscompiles by generating PTX programs, compiling
+each one at multiple optimization levels, running the resulting cubins on CUDA,
+and saving cases where the outputs disagree.
 
-## Architecture
+The fuzzer is intentionally undirected. It walks a deterministic seed stream
+instead of using coverage feedback.
 
-```
-afl-fuzz ─ loads ─► libptx_fuzz_mutator.so       (just bytes → PTX text)
-   │                          ▲
-   │ writes mutated bytes ────┘ afl_custom_post_process
-   │ to @@ input file
-   ▼
-afl-qemu-trace ──► ptxas @@   (TCG blocks instrumented; edge counts
-                               written to AFL's shmem coverage map)
-```
+## Requirements
 
-AFL's corpus stores **raw bytes**; AFL's built-in mutators happily
-splice and flip those. The mutator hook only runs at the last
-moment — it never lets PTX text get fed back into AFL's byte-level
-mutators (which would destroy syntactic structure).
-
-See [DESIGN.md](DESIGN.md) for the trade-offs.
+| Component | Notes |
+| --- | --- |
+| Rust | Uses the toolchain in `rust-toolchain.toml`. |
+| CUDA driver + `libcuda` | Required for fuzzing, verification, and reduction. |
+| `ptxas` | Set `PTXAS=/path/to/ptxas` for reproducible runs. |
+| NVIDIA GPU matching `TARGET_ARCH` | `fuzzx-execgen` currently defaults to `sm_103`. |
 
 ## Layout
 
-| Path                              | Purpose                                                                      |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| `crates/ptx-fuzz-gen`             | Pure function `&[u8] -> String` that emits PTX source from arbitrary bytes.  |
-| `crates/ptx-fuzz-mutator`         | `cdylib` exporting AFL++'s custom-mutator C ABI; wraps `ptx-fuzz-gen`.       |
-| `crates/ptx-fuzz-repro`           | CLI to re-apply the mutator to a saved corpus/crash file (for triage).      |
-| `crates/fake-ptxas`               | Stand-in target binary with seeded crashes, for local testing.              |
-| `seeds/`                          | Initial corpus — six PTX fragments that each assemble cleanly on their own. |
-| `scripts/run-fuzz.sh`             | Single-core `afl-fuzz -Q` invocation with all the right env vars wired up.   |
-| `scripts/run-fuzz-multi.sh`       | N-worker variant (one `-M` master + N-1 `-S` secondaries) for parallel runs. |
-| `scripts/triage.sh`               | Group saved crashes across all workers by (exit code, stderr signature).     |
+| Path | Purpose |
+| --- | --- |
+| `crates/fuzzx-execgen` | PTX kernel generator for differential testing. |
+| `crates/fuzzx-exec` | `ptxas` compiler wrapper plus CUDA launch/diff helpers. |
+| `crates/fuzzx-diff` | Differential fuzzer plus show/verify/reduce helpers. |
+| `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |
+| `scripts/check-gen.sh` | Generator acceptance-rate smoke test against `ptxas`. |
 
-## Running on Linux (real fuzzing)
+## Running
 
-### Known-good AFL++ build
-
-| Component           | Known good                                                               |
-| ------------------- | ------------------------------------------------------------------------ |
-| `afl-fuzz`          | AFL++ **4.41a** (built from the `dev` branch, May 2026).                 |
-| `afl-qemu-trace`    | Built from the same checkout via `qemu_mode/build_qemu_support.sh`.      |
-
-Two AFL bugs to know about — both worked around, neither root-caused.
-DESIGN.md has the full story; the relevant facts for running:
-
-  - **AFL++ 4.40c does not work.** Workers segfault inside `libc.so.6`
-    (`malloc/arena.c`, `malloc.c`, `memmove-vec-unaligned-erms.S`) at
-    ~3 deaths/minute even with one worker. *Fix: upgrade.* Some
-    commit between 4.40c and 4.41a fixes it as a side effect; we
-    didn't bisect.
-  - **AFL++ 4.41a workers crash at ≥50 cores unless the trim stage
-    is disabled.** Every crash lands at libc `0xac52e`
-    (`malloc.c:4267`, `_int_malloc` walking a freelist) — looks like
-    a UAF or off-by-one in AFL's trim code. *Workaround:
-    `AFL_DISABLE_TRIM=1`.* Trim is a cosmetic optimization for
-    shrinking accepted corpus entries; not load-bearing for our use
-    case.
-
-### Known-good environment
-
-`scripts/run-fuzz.sh` and `scripts/run-fuzz-multi.sh` set the
-following automatically — listed here so it's clear what we depend
-on and why, in case you're driving AFL by hand:
-
-| Env var                       | Value | Reason                                                            |
-| ----------------------------- | ----- | ----------------------------------------------------------------- |
-| `AFL_CUSTOM_MUTATOR_LIBRARY`  | path  | Load our byte→PTX mutator.                                        |
-| `AFL_SKIP_BIN_CHECK`          | `1`   | ptxas wasn't compiled with AFL instrumentation.                   |
-| `AFL_FRAMESHIFT_DISABLE`      | `1`   | FrameShift corrupts the heap when combined with a post_process mutator (4.40c+). |
-| `AFL_DISABLE_TRIM`            | `1`   | Avoids the 4.41a `_int_malloc` crash at high worker counts.       |
-| `AFL_NO_UI`                   | `1`   | Multi-core workers log to files, not a curses TTY.                |
-
-### Building AFL++
+Build the tools:
 
 ```bash
-# On the Linux host:
-git clone https://github.com/AFLplusplus/AFLplusplus
-cd AFLplusplus
-git checkout origin/dev     # 4.41a or newer
-make source-only            # afl-fuzz; skips nyx_mode's nightly-Rust build
-cd qemu_mode && ./build_qemu_support.sh
-cd .. && sudo make install  # afl-fuzz, afl-qemu-trace on $PATH
-afl-fuzz --version          # should say 'afl-fuzz++4.41a' (or newer)
+cargo build --release -p fuzzx-diff
 ```
 
-Then from this repo:
+Run a differential sweep:
 
 ```bash
-# Single-core. ~30 execs/sec through QEMU.
-PTXAS=$(which ptxas) scripts/run-fuzz.sh
-
-# Multi-core. Default: min(nproc, 16) workers. AFL++ syncs the
-# corpus across all of them, so this is close to linear speedup.
-PTXAS=$(which ptxas) CORES=16 scripts/run-fuzz-multi.sh
-
-# Optional: stop the multi-core run after a fixed budget.
-PTXAS=$(which ptxas) CORES=16 RUNTIME=600 scripts/run-fuzz-multi.sh
+target/release/fuzzx-diff \
+  --ptxas /usr/local/cuda/bin/ptxas \
+  --max-iters 100000
 ```
 
-For multi-core runs, crashes land in `output/<worker>/crashes/`
-(where `<worker>` is `main` or `secNN`). `afl-whatsup -s output` gives
-a cross-worker summary.
+Divergences are saved under `DIV_OUT_DIR` (default: `divergences/`) as
+directories containing `seed.bin`, `program.ptx`, `input.bin`, `output_o0.*`,
+`output_o3.*`, and `summary.txt`.
 
-To reproduce a saved crash:
+Useful follow-up commands:
 
 ```bash
-cargo build --release -p ptx-fuzz-repro
-target/release/ptx-fuzz-repro output/main/crashes/id:000000,... --run
+target/release/fuzzx-diff-show divergences/div-...
+target/release/fuzzx-diff-verify divergences/div-...
+target/release/fuzzx-diff-reduce divergences/div-...
+target/release/fuzzx-diff-test divergences/div-.../program.ptx divergences/div-.../input.bin
+target/release/fuzzx-diff-inspect-outputs divergences/div-.../program.ptx divergences/div-.../input.bin
 ```
 
-To triage everything saved across all workers in one pass:
+Check how often generated PTX assembles:
 
 ```bash
-PTXAS=$(which ptxas) scripts/triage.sh output
-cat output/triage/summary.txt
-# Per-group: output/triage/group-NN/{example.ptx,example.stderr,members.txt}
+PTXAS=/usr/local/cuda/bin/ptxas scripts/check-gen.sh 200
 ```
 
-## Local sanity checks (macOS or Linux)
+## Configuration
 
-You can't run qemu_mode on macOS, but you can build everything and
-exercise the mutator + the seeded-crash target:
+`fuzzx-diff` accepts kebab-case CLI flags for the run-control and generator
+settings below; `target/release/fuzzx-diff --help` lists the full set. The
+same settings can still be supplied as environment variables, which is useful
+for long-running scripted sweeps. Boolean environment variables accept `1`,
+`true`, `yes`, or `on` for true, and `0`, `false`, `no`, or `off` for false.
 
-```bash
-cargo build --workspace
-cargo test --workspace
+### Shared
 
-# Confirm the mutator produces valid-looking PTX from random bytes.
-head -c 50 /dev/urandom > /tmp/rand.bin
-cargo run -q -p ptx-fuzz-repro -- /tmp/rand.bin
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `PTXAS` | `/usr/local/cuda/bin/ptxas`, then `$HOME/bin/ptxas`, then `ptxas` | Target `ptxas` binary. Set this explicitly for reproducible runs. |
+| `TMPDIR` | Caller value; some tools use `/dev/shm` when unset and available. | Temporary directory for PTX/cubin files. |
 
-# Confirm fake-ptxas crashes on the seeded pattern.
-printf '@!' > /tmp/crash.ptx && target/debug/fake-ptxas /tmp/crash.ptx
-# expect: exit 139 (SIGSEGV)
-```
+### Run Control
 
-## Environment variables (user-facing)
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DIV_OUT_DIR` | `divergences` | Directory for saved divergence bundles. |
+| `DIV_STARTING_SEED` | nanoseconds since epoch | First seed in the deterministic seed stream. |
+| `DIV_MAX_ITERS` | unlimited | Stop after this many generated candidates. |
+| `DIV_PRINT_EVERY_SECS` | `5` | Progress-report interval. |
+| `DIV_PROGRAM_BYTES` | `4096` | Bytes derived from each seed and consumed by the generator. |
+| `DIV_GPUS` | all visible CUDA devices | Comma-separated CUDA device ordinals, for example `0,1,2`. |
+| `DIV_WORKERS_PER_GPU` | `16` | Worker threads per selected GPU. |
 
-These are the knobs you'd normally set when running. The internal
-`AFL_*` flags that the scripts export are documented in
-"Known-good environment" above.
+### Generator Shape
 
-| Variable                       | Meaning                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `PTXAS`                        | Target binary path. Default: `ptxas` from `$PATH`.                   |
-| `SEEDS_DIR` / `OUT_DIR`        | Override AFL seed-corpus and output dirs.                            |
-| `TIMEOUT_MS`                   | Per-iteration hang limit (default 5000 ms).                          |
-| `CORES`                        | Multi-core workers (`run-fuzz-multi.sh` only). Default: min(nproc, 16). 100 verified stable on a 224-core box. |
-| `RUNTIME`                      | Multi-core only. Seconds to run before killing all workers.          |
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DIV_STRUCTURED_CONTROL_FLOW` | `false` | Use structured single-entry if/loop generation instead of arbitrary CFG generation. |
+| `DIV_MIN_BLOCKS` / `DIV_MAX_BLOCKS` | `1` / `10` | Block-count bounds. |
+| `DIV_MIN_INSTS_PER_BLOCK` / `DIV_MAX_INSTS_PER_BLOCK` | `1` / `6` | Instruction-count bounds per block. |
+| `DIV_WORKING_REGS` | `8` | Number of working `u32` registers. |
+| `DIV_MAX_LOOP_ITERS` | `16` | Maximum generated loop-trip count. |
+| `DIV_MAX_IMMEDIATE` | `32` | Maximum ordinary immediate value. |
+| `DIV_MAX_STRUCTURED_DEPTH` | `3` | Maximum nesting depth for structured control flow. |
+
+### Generator Feature Toggles
+
+All variables in this table default to `false`; setting one to true suppresses
+that feature.
+
+| Variable | Suppresses |
+| --- | --- |
+| `DIV_DISABLE_STRUCTURED_LOOPS` | Counted-loop shapes in structured mode. |
+| `DIV_DISABLE_ARBITRARY_LOOPS` | Backedge loop terminators in arbitrary CFG mode. |
+| `DIV_DISABLE_LOP3` | `lop3.b32`. |
+| `DIV_DISABLE_MINMAX` | `min.u32`, `max.u32`, `min.s32`, `max.s32`. |
+| `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
+| `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
+| `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
+| `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
+| `DIV_DISABLE_PRMT` | `prmt.b32`. |
+| `DIV_DISABLE_NOT` | `not.b32` and xor-by-`0xffffffff` forms. |
+| `DIV_DISABLE_CLZ` | `clz.b32`. |
+| `DIV_DISABLE_CNOT` | `cnot.b32`. |
+| `DIV_DISABLE_ABS` | `abs.s32`. |
+| `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
+| `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
+| `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
+| `DIV_DISABLE_NEG` | `neg.s32`. |
+| `DIV_DISABLE_SHL` | `shl.b32`. |
+| `DIV_DISABLE_SIGNED_SHR` | `shr.s32`. |
+| `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
+| `DIV_DISABLE_BFI` | `bfi.b32`. |
+| `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
+| `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
+| `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
+| `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
+| `DIV_DISABLE_WIDE_INT` | 64-bit scratch-register ALU generation. |
+| `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
+| `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
+| `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
+| `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
+| `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
+| `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
+| `DIV_DISABLE_VIDEO` | PTX video instructions. |
+| `DIV_DISABLE_VSUB4` | `vsub4.u32.u32.u32`. |
+
+### Reduction And Sweeping
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REDUCE_GPUS` | `DIV_GPUS`, then all visible devices | CUDA devices used by `fuzzx-diff-reduce`. |
+| `REDUCE_WORKERS_PER_GPU` | `DIV_WORKERS_PER_GPU`, then host-core based default capped at `16` | Reducer worker count per GPU. |
+| `REDUCE_NO_PROGRESS_SECS` | `120` | Reducer timeout when no candidate completes. |
+| `DIV_HANG_SECS` | `4` | `fuzzx-diff-sweep` no-progress threshold before reporting hangs. |
+
+## License
+
+FuzzX is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

@@ -33,7 +33,7 @@ seed 0x18afae60699908be
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-straightline-mulhi-known-disabled-100k/div-1778832149-18afae60699908be
+/tmp/fuzzx-straightline-mulhi-known-disabled-100k/div-1778832149-18afae60699908be
 ```
 
 The minimized PTX in `reduced.ptx` is straight-line and has no input buffer.

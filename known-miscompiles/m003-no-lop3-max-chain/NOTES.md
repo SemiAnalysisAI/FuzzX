@@ -9,7 +9,7 @@ seed 0x18af79fcbae68d75
 ```
 
 The original saved fuzzer program is in
-`/tmp/ptx-fuzz-structured-nolop3/div-1778774636-18af79fcbae68d75` on the
+`/tmp/fuzzx-structured-nolop3/div-1778774636-18af79fcbae68d75` on the
 machine where this was reduced. The minimized PTX in `reduced.ptx` no longer
 has control flow or input memory; it is a straight-line `sub`/`max.s32` chain.
 

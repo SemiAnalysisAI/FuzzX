@@ -5,7 +5,7 @@ structured program shape with earlier known triggers disabled:
 
 ```text
 PTXAS=/tmp/cuda-13.2.1-ptxas/extract/usr/local/cuda-13.2/bin/ptxas
-DIV_OUT_DIR=/tmp/ptx-fuzz-structured-xl-knownflags-noaddc-nos32slct-20k
+DIV_OUT_DIR=/tmp/fuzzx-structured-xl-knownflags-noaddc-nos32slct-20k
 DIV_STRUCTURED_CONTROL_FLOW=1
 DIV_DISABLE_LOP3=1 DIV_DISABLE_MINMAX=1 DIV_DISABLE_MULHI=1
 DIV_DISABLE_PRMT=1 DIV_DISABLE_NOT=1 DIV_DISABLE_NEG=1
@@ -20,7 +20,7 @@ seed 0x18afa156cb8648fd
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-xl-knownflags-noaddc-nos32slct-20k/div-1778817859-18afa156cb8648fd`
+`/tmp/fuzzx-structured-xl-knownflags-noaddc-nos32slct-20k/div-1778817859-18afa156cb8648fd`
 on the machine where this was reduced.
 
 Manual reduction collapsed the test to a `cnot`-derived zero, a shift, one

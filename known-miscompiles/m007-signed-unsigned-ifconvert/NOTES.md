@@ -13,7 +13,7 @@ seed 0x18af81f3becc9cf7
 ```
 
 The original saved fuzzer program is in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot/div-1778783480-18af81f3becc9cf7`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot/div-1778783480-18af81f3becc9cf7`
 on the machine where this was reduced. The minimized PTX in `reduced.ptx`
 still reads one input word. The standalone repro launches one thread with
 `x = 0xe4ca6123` and `n = 32`.

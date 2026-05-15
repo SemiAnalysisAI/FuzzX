@@ -1,0 +1,48 @@
+[package]
+name = "fuzzx-diff"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "fuzzx-diff"
+path = "src/main.rs"
+
+[[bin]]
+name = "fuzzx-diff-show"
+path = "src/bin/show.rs"
+
+[[bin]]
+name = "fuzzx-diff-verify"
+path = "src/bin/verify.rs"
+
+[[bin]]
+name = "fuzzx-diff-oracle-050f"
+path = "src/bin/oracle_050f.rs"
+
+[[bin]]
+name = "fuzzx-diff-reduce"
+path = "src/bin/reduce.rs"
+
+[[bin]]
+name = "fuzzx-diff-dump-gen"
+path = "src/bin/dump.rs"
+
+[[bin]]
+name = "fuzzx-diff-test"
+path = "src/bin/test.rs"
+
+[[bin]]
+name = "fuzzx-diff-sweep"
+path = "src/bin/sweep.rs"
+
+[[bin]]
+name = "fuzzx-diff-inspect-outputs"
+path = "src/bin/inspect.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fuzzx-exec = { path = "../fuzzx-exec" }
+fuzzx-execgen = { path = "../fuzzx-execgen" }

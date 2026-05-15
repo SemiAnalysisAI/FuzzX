@@ -14,7 +14,7 @@ seed 0x18af838295a7233b
 ```
 
 The original saved fuzzer program is in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-nosignedcmp/div-1778785180-18af838295a7233b`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-nosignedcmp/div-1778785180-18af838295a7233b`
 on the machine where this was reduced.
 
 The minimized PTX in `reduced.ptx` has one output pointer parameter, no input

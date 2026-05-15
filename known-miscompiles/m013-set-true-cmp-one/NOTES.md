@@ -15,7 +15,7 @@ seed 0x18af90f94cdf4617
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-nosignedshr-nobfind-noi32boundary-dp2a-set-mad24-cvt-divrem-sad-slct-dp4a/div-1778799820-18af90f94cdf4617`
+`/tmp/fuzzx-structured-expanded-nolop3-nominmax-nomulhi-noprmt-nonot-noneg-nosignedcmp-nofunnel-nosignedshr-nobfind-noi32boundary-dp2a-set-mad24-cvt-divrem-sad-slct-dp4a/div-1778799820-18af90f94cdf4617`
 on the machine where this was reduced.
 
 The original program contained several `set.*` instructions and no `dp2a`.

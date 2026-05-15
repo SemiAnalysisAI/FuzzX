@@ -28,7 +28,7 @@ seed 0x18afb0923a7b7bb0
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-straightline-reenabled-clean-group-200k/div-1778834537-18afb0923a7b7bb0
+/tmp/fuzzx-straightline-reenabled-clean-group-200k/div-1778834537-18afb0923a7b7bb0
 ```
 
 The minimized PTX in `reduced.ptx` is straight-line and has no input buffer.

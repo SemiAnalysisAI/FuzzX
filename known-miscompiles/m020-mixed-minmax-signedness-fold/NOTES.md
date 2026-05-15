@@ -13,7 +13,7 @@ seed 0x18afa8fc39965016
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-structured-ifonly-minmax-knownflags-20k/div-1778826285-18afa8fc39965016
+/tmp/fuzzx-structured-ifonly-minmax-knownflags-20k/div-1778826285-18afa8fc39965016
 ```
 
 The minimized PTX in `reduced.ptx` no longer has input memory or control flow.

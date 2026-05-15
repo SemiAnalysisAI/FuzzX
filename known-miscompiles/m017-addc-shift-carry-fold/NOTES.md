@@ -5,7 +5,7 @@ fuzzing structured control flow with earlier known triggers disabled:
 
 ```text
 PTXAS=/tmp/cuda-13.2.1-ptxas/extract/usr/local/cuda-13.2/bin/ptxas
-DIV_OUT_DIR=/tmp/ptx-fuzz-structured-large-knownflags-expanded-noabs-nos32slct-addc-30k
+DIV_OUT_DIR=/tmp/fuzzx-structured-large-knownflags-expanded-noabs-nos32slct-addc-30k
 DIV_STRUCTURED_CONTROL_FLOW=1
 DIV_DISABLE_LOP3=1 DIV_DISABLE_MINMAX=1 DIV_DISABLE_MULHI=1
 DIV_DISABLE_PRMT=1 DIV_DISABLE_NOT=1 DIV_DISABLE_NEG=1
@@ -20,7 +20,7 @@ seed 0x18af9fde50baeb5a
 ```
 
 The original saved fuzzer program was in
-`/tmp/ptx-fuzz-structured-large-knownflags-expanded-noabs-nos32slct-addc-30k/div-1778816173-18af9fde50baeb5a`
+`/tmp/fuzzx-structured-large-knownflags-expanded-noabs-nos32slct-addc-30k/div-1778816173-18af9fde50baeb5a`
 on the machine where this was reduced.
 
 Manual reduction collapsed the test to two shifts, one carry-producing add,

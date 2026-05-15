@@ -37,7 +37,7 @@ seed 0x18afc4db5521f9ec
 The original saved fuzzer program was:
 
 ```text
-/tmp/ptx-fuzz-structured-if-xlarge-imm65536-knownflags-nonotxornot-nobfind-nomul24-clz-cnot-noneg-sub-noboundary-1m-20260515T145237Z/div-1778857246-18afc4db5521f9ec
+/tmp/fuzzx-structured-if-xlarge-imm65536-knownflags-nonotxornot-nobfind-nomul24-clz-cnot-noneg-sub-noboundary-1m-20260515T145237Z/div-1778857246-18afc4db5521f9ec
 ```
 
 The reduced PTX in `reduced.ptx` reads only `input[0]`. The reproducing input
