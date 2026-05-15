@@ -73,6 +73,8 @@ Everything below this line is AI-written slop.  Good luck!
 
 ## `ptxas` Bugs Found
 
+Except where otherwise noted, these have been tested on `sm_103` (i.e. B300).
+
 Version | Description |
 | --- | --- |
 | 13.2.78 | [m001-seed-050f](known-miscompiles/m001-seed-050f/NOTES.md): Uniform loop-latch optimization mishandles divergent loop-header entry. |
