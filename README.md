@@ -1,11 +1,56 @@
 # FuzzX
 
-FuzzX finds NVIDIA `ptxas` miscompiles by generating PTX programs, compiling
-each one at multiple optimization levels, running the resulting cubins on CUDA,
-and saving cases where the outputs disagree.
+**This section is human-written.**
 
-The fuzzer is intentionally undirected. It walks a deterministic seed stream
-instead of using coverage feedback.
+FuzzX is a fuzzer that looks for correctness bugs in ML compilers.
+
+Currently it fuzzes `ptxas`.  In the future it may fuzz other compilers.
+
+The process of looking for a bug is:
+
+ - Generate a random PTX program.  
+ - Compile it with `-O0` and `-O2`.
+ - Run both programs.
+ - Compare their outputs.
+
+So long as the random program is "legal" (meaning, mostly, it doesn't have
+undefined behavior) the output from the two programs should be identical.  If
+they are not the same, that indicates a likely miscompile.
+
+Most of the complexity in the fuzzer is around generating random programs.
+Obviously we can't generate truly arbitrary programs; they might have UB or
+infinite loops.  Perhaps less obvious is that, after we've found one bug, we
+need to generate programs that avoid that bug, otherwise we'll just keep
+finding it over and over.  So we have many flags that let you disable
+particular known-buggy idioms.
+
+Fuzzers like libFuzzer and AFL++ allow you to do "directed" fuzzing, where you
+observe the branches taken by the binary under test and steer fuzzing towards
+"interesting" inputs.  It is possible to do directed fuzzing on black-box
+binaries like `ptxas` using e.g. AFL++'s QEMU mode.  But we don't currently do
+this, because we've found that undirected fuzzing is sufficient (for now).
+
+All of the code here is AI-written, using ChatGPT 5.5 and Opus 4.7.  I haven't
+read it at all.  Fuzzing is inherently messy, and anyway the goal here is to
+find bugs, not to build a beautiful fuzzer.
+
+After finding a miscompile, you'll want to:
+
+ - come up with a minimal testcase,
+ - root-cause the bug,
+ - write a reproducer to share with the vendor, and
+ - add a flag to the fuzzer so it avoids finding the same bug again.
+
+I also use AI for this.  Eventually it writes a reproducer into the
+`known-miscompiles` directory.
+
+I've had good luck using `/goal` to get the AI to run the fuzzer, wait for a
+bug to appear, process it as above, and then restart the fuzzer.  The biggest
+issue seems to be that it's slow at minimizing testcases.
+
+Everything below this line is AI-written slop.  Good luck!
+
+----------
 
 ## Requirements
 
