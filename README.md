@@ -75,42 +75,42 @@ Everything below this line is AI-written slop.  Good luck!
 
 Version | Description |
 | --- | --- |
-| 13.2.78 | [m001-seed-050f](known-miscompiles/m001-seed-050f/): Uniform loop-latch optimization mishandles divergent loop-header entry. |
-| 13.2.78 | [m002-structured-lop3](known-miscompiles/m002-structured-lop3/): `selp` / `lop3` / `xor` fold computes the wrong truth-table result. |
-| 13.2.78 | [m003-no-lop3-max-chain](known-miscompiles/m003-no-lop3-max-chain/): `sub.u32` plus `max.s32` chain fold incorrectly includes the pre-subtract value. |
-| 13.2.78 | [m004-mulhi-loop-tripcount](known-miscompiles/m004-mulhi-loop-tripcount/): Loop removal drops two `mul.hi.s32` accumulator updates. |
-| 13.2.78 | [m005-prmt-ifconvert-mask](known-miscompiles/m005-prmt-ifconvert-mask/): If-converted `prmt.b32` mask fold drops a source operand. |
-| 13.2.78 | [m006-ifconvert-not-xor](known-miscompiles/m006-ifconvert-not-xor/): If-converted `not.b32` plus `xor.b32` fold uses the wrong truth table. |
-| 13.2.78 | [m007-signed-unsigned-ifconvert](known-miscompiles/m007-signed-unsigned-ifconvert/): Nested if-conversion conflates signed and unsigned predicates. |
-| 13.2.78 | [m008-funnel-shift-loop-unroll](known-miscompiles/m008-funnel-shift-loop-unroll/): Loop unroll rewrites a loop-carried `shf.r.wrap.b32` recurrence incorrectly. |
-| 13.2.78 | [m009-neg-loop-after-counted-loop](known-miscompiles/m009-neg-loop-after-counted-loop/): Loop deletion stores a pre-`neg.s32` value after counted-loop simplification. |
-| 13.2.78 | [m010-shr-s32-range-fold](known-miscompiles/m010-shr-s32-range-fold/): Range fold treats `shr.s32` as if it were unsigned before an unsigned compare. |
-| 13.2.78 | [m011-bfind-after-empty-loop](known-miscompiles/m011-bfind-after-empty-loop/): Empty-loop simplification folds a `bfind.u32`-derived value incorrectly. |
-| 13.2.78 | [m012-empty-loop-intmax-sub](known-miscompiles/m012-empty-loop-intmax-sub/): Counted empty-loop fold miscomputes an `INT_MAX` subtraction sequence. |
-| 13.2.78 | [m013-set-true-cmp-one](known-miscompiles/m013-set-true-cmp-one/): `set.eq` materialization is folded as a predicate instead of `0xffffffff`. |
-| 13.2.78 | [m014-vsub4-divergent-branch](known-miscompiles/m014-vsub4-divergent-branch/): `vsub4.u32.u32.u32` constant fold uses the wrong byte-lane intermediate. |
-| 13.2.78 | [m015-abs-loop-bmsk-fold](known-miscompiles/m015-abs-loop-bmsk-fold/): Loop deletion uses the pre-`abs.s32` live-out value in a `bmsk` expression. |
-| 13.2.78 | [m016-slct-s32-immediate-fold](known-miscompiles/m016-slct-s32-immediate-fold/): `slct.s32.s32` immediate fold selects the wrong arm for a positive value. |
-| 13.2.78 | [m017-addc-shift-carry-fold](known-miscompiles/m017-addc-shift-carry-fold/): `add.cc.u32` / `addc.u32` fold injects an incorrect carry-in. |
-| 13.2.78 | [m029-addc-mul-carry-fold](known-miscompiles/m029-addc-mul-carry-fold/): Likely same root cause as m017; `addc.u32` fold injects an incorrect carry-in after multiply-derived operands. |
-| 13.2.78 | [m018-subc-cnot-shift-borrow-fold](known-miscompiles/m018-subc-cnot-shift-borrow-fold/): `sub.cc.u32` / `subc.u32` fold injects an incorrect borrow-in after `cnot`. |
-| 13.2.78 | [m027-subc-shr-mul-borrow-fold](known-miscompiles/m027-subc-shr-mul-borrow-fold/): Likely same root cause as m018; `subc.u32` fold uses the wrong borrow source after shift and multiply. |
-| 13.2.78 | [m019-structured-loop-uniform-counter](known-miscompiles/m019-structured-loop-uniform-counter/): Structured loop counters are promoted to uniform state and lose per-lane values. |
-| 13.2.78 | [m020-mixed-minmax-signedness-fold](known-miscompiles/m020-mixed-minmax-signedness-fold/): Mixed signed/unsigned `min` / `max` fold drops the runtime input. |
-| 13.2.78 | [m021-cnot-funnel-add](known-miscompiles/m021-cnot-funnel-add/): `shf.r.wrap.b32` plus add fold loses part of the shifted value. |
-| 13.2.78 | [m022-neg-funnel-left-add](known-miscompiles/m022-neg-funnel-left-add/): `neg.s32` plus `shf.l.wrap.b32` fold produces a sign-extension-shaped error. |
-| 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
-| 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
-| 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/): Fold loses the fact that a value is shifted left before testing low bits. |
-| 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
-| 13.2.78 | [m028-shf-r-wrap-sub-fold](known-miscompiles/m028-shf-r-wrap-sub-fold/): `shf.r.wrap.b32` output is folded to zero before a final subtract. |
-| 13.2.78 | [m030-not-clz-predicate-fold](known-miscompiles/m030-not-clz-predicate-fold/): Guarded path fold drops or misapplies `not.b32` before `clz.b32`. |
-| 13.2.78 | [m031-guarded-sub-sub-fold](known-miscompiles/m031-guarded-sub-sub-fold/): Guarded `x - (0x80000000 - x)` fold drops the `2*x` contribution. |
-| 13.2.78 | [m032-cnot-neg-ugt-fold](known-miscompiles/m032-cnot-neg-ugt-fold/): `cnot` / `neg` chain feeding an unsigned-greater-than predicate folds to the wrong arm. |
-| 13.2.78 | [m033-not-xor-branch-fold](known-miscompiles/m033-not-xor-branch-fold/): Branch-specialized `not` / `xor` path folds the wrong value into the store. |
-| 13.2.78 | [m035-xor-not-predicate-fold](known-miscompiles/m035-xor-not-predicate-fold/): Likely same root cause as m033; `xor.b32` by `0xffffffff` feeding a predicate selects the wrong arm. |
-| 13.2.78 | [m034-bfind-zero-branch-fold](known-miscompiles/m034-bfind-zero-branch-fold/): Branch fold treats `bfind.u32 0` as `0` instead of `0xffffffff`. |
-| 13.2.78 | [m036-mulhi-control-fold](known-miscompiles/m036-mulhi-control-fold/): Control-flow fold around `mul.hi.s32` uses an incorrect folded constant. |
+| 13.2.78 | [m001-seed-050f](known-miscompiles/m001-seed-050f/NOTES.md): Uniform loop-latch optimization mishandles divergent loop-header entry. |
+| 13.2.78 | [m002-structured-lop3](known-miscompiles/m002-structured-lop3/NOTES.md): `selp` / `lop3` / `xor` fold computes the wrong truth-table result. |
+| 13.2.78 | [m003-no-lop3-max-chain](known-miscompiles/m003-no-lop3-max-chain/NOTES.md): `sub.u32` plus `max.s32` chain fold incorrectly includes the pre-subtract value. |
+| 13.2.78 | [m004-mulhi-loop-tripcount](known-miscompiles/m004-mulhi-loop-tripcount/NOTES.md): Loop removal drops two `mul.hi.s32` accumulator updates. |
+| 13.2.78 | [m005-prmt-ifconvert-mask](known-miscompiles/m005-prmt-ifconvert-mask/NOTES.md): If-converted `prmt.b32` mask fold drops a source operand. |
+| 13.2.78 | [m006-ifconvert-not-xor](known-miscompiles/m006-ifconvert-not-xor/NOTES.md): If-converted `not.b32` plus `xor.b32` fold uses the wrong truth table. |
+| 13.2.78 | [m007-signed-unsigned-ifconvert](known-miscompiles/m007-signed-unsigned-ifconvert/NOTES.md): Nested if-conversion conflates signed and unsigned predicates. |
+| 13.2.78 | [m008-funnel-shift-loop-unroll](known-miscompiles/m008-funnel-shift-loop-unroll/NOTES.md): Loop unroll rewrites a loop-carried `shf.r.wrap.b32` recurrence incorrectly. |
+| 13.2.78 | [m009-neg-loop-after-counted-loop](known-miscompiles/m009-neg-loop-after-counted-loop/NOTES.md): Loop deletion stores a pre-`neg.s32` value after counted-loop simplification. |
+| 13.2.78 | [m010-shr-s32-range-fold](known-miscompiles/m010-shr-s32-range-fold/NOTES.md): Range fold treats `shr.s32` as if it were unsigned before an unsigned compare. |
+| 13.2.78 | [m011-bfind-after-empty-loop](known-miscompiles/m011-bfind-after-empty-loop/NOTES.md): Empty-loop simplification folds a `bfind.u32`-derived value incorrectly. |
+| 13.2.78 | [m012-empty-loop-intmax-sub](known-miscompiles/m012-empty-loop-intmax-sub/NOTES.md): Counted empty-loop fold miscomputes an `INT_MAX` subtraction sequence. |
+| 13.2.78 | [m013-set-true-cmp-one](known-miscompiles/m013-set-true-cmp-one/NOTES.md): `set.eq` materialization is folded as a predicate instead of `0xffffffff`. |
+| 13.2.78 | [m014-vsub4-divergent-branch](known-miscompiles/m014-vsub4-divergent-branch/NOTES.md): `vsub4.u32.u32.u32` constant fold uses the wrong byte-lane intermediate. |
+| 13.2.78 | [m015-abs-loop-bmsk-fold](known-miscompiles/m015-abs-loop-bmsk-fold/NOTES.md): Loop deletion uses the pre-`abs.s32` live-out value in a `bmsk` expression. |
+| 13.2.78 | [m016-slct-s32-immediate-fold](known-miscompiles/m016-slct-s32-immediate-fold/NOTES.md): `slct.s32.s32` immediate fold selects the wrong arm for a positive value. |
+| 13.2.78 | [m017-addc-shift-carry-fold](known-miscompiles/m017-addc-shift-carry-fold/NOTES.md): `add.cc.u32` / `addc.u32` fold injects an incorrect carry-in. |
+| 13.2.78 | [m029-addc-mul-carry-fold](known-miscompiles/m029-addc-mul-carry-fold/NOTES.md): Likely same root cause as m017; `addc.u32` fold injects an incorrect carry-in after multiply-derived operands. |
+| 13.2.78 | [m018-subc-cnot-shift-borrow-fold](known-miscompiles/m018-subc-cnot-shift-borrow-fold/NOTES.md): `sub.cc.u32` / `subc.u32` fold injects an incorrect borrow-in after `cnot`. |
+| 13.2.78 | [m027-subc-shr-mul-borrow-fold](known-miscompiles/m027-subc-shr-mul-borrow-fold/NOTES.md): Likely same root cause as m018; `subc.u32` fold uses the wrong borrow source after shift and multiply. |
+| 13.2.78 | [m019-structured-loop-uniform-counter](known-miscompiles/m019-structured-loop-uniform-counter/NOTES.md): Structured loop counters are promoted to uniform state and lose per-lane values. |
+| 13.2.78 | [m020-mixed-minmax-signedness-fold](known-miscompiles/m020-mixed-minmax-signedness-fold/NOTES.md): Mixed signed/unsigned `min` / `max` fold drops the runtime input. |
+| 13.2.78 | [m021-cnot-funnel-add](known-miscompiles/m021-cnot-funnel-add/NOTES.md): `shf.r.wrap.b32` plus add fold loses part of the shifted value. |
+| 13.2.78 | [m022-neg-funnel-left-add](known-miscompiles/m022-neg-funnel-left-add/NOTES.md): `neg.s32` plus `shf.l.wrap.b32` fold produces a sign-extension-shaped error. |
+| 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/NOTES.md): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
+| 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/NOTES.md): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
+| 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
+| 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
+| 13.2.78 | [m028-shf-r-wrap-sub-fold](known-miscompiles/m028-shf-r-wrap-sub-fold/NOTES.md): `shf.r.wrap.b32` output is folded to zero before a final subtract. |
+| 13.2.78 | [m030-not-clz-predicate-fold](known-miscompiles/m030-not-clz-predicate-fold/NOTES.md): Guarded path fold drops or misapplies `not.b32` before `clz.b32`. |
+| 13.2.78 | [m031-guarded-sub-sub-fold](known-miscompiles/m031-guarded-sub-sub-fold/NOTES.md): Guarded `x - (0x80000000 - x)` fold drops the `2*x` contribution. |
+| 13.2.78 | [m032-cnot-neg-ugt-fold](known-miscompiles/m032-cnot-neg-ugt-fold/NOTES.md): `cnot` / `neg` chain feeding an unsigned-greater-than predicate folds to the wrong arm. |
+| 13.2.78 | [m033-not-xor-branch-fold](known-miscompiles/m033-not-xor-branch-fold/NOTES.md): Branch-specialized `not` / `xor` path folds the wrong value into the store. |
+| 13.2.78 | [m035-xor-not-predicate-fold](known-miscompiles/m035-xor-not-predicate-fold/NOTES.md): Likely same root cause as m033; `xor.b32` by `0xffffffff` feeding a predicate selects the wrong arm. |
+| 13.2.78 | [m034-bfind-zero-branch-fold](known-miscompiles/m034-bfind-zero-branch-fold/NOTES.md): Branch fold treats `bfind.u32 0` as `0` instead of `0xffffffff`. |
+| 13.2.78 | [m036-mulhi-control-fold](known-miscompiles/m036-mulhi-control-fold/NOTES.md): Control-flow fold around `mul.hi.s32` uses an incorrect folded constant. |
 
 ## Running
 
