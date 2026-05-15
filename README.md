@@ -118,6 +118,7 @@ Version | Description |
 | 13.2.78 | [m038-structured-empty-else-fold](known-miscompiles/m038-structured-empty-else-fold/NOTES.md): Always-false structured branch with an empty else arm folds as if the untaken then arm executed. |
 | 13.2.78 | [m039-else-redefinition-fold](known-miscompiles/m039-else-redefinition-fold/NOTES.md): Branch fold drops the executed else-path redefinition of a value initialized before the branch. |
 | 13.2.78 | [m040-mulwide-neg-shr-fold](known-miscompiles/m040-mulwide-neg-shr-fold/NOTES.md): `mul.wide` low word feeding wrapped negation and logical shift loses the shifted high-bit contribution. |
+| 13.2.78 | [m041-or-shifted-square-fold](known-miscompiles/m041-or-shifted-square-fold/NOTES.md): `or.b32` after a square known to have zero low 32 bits folds with a missing output bit. |
 
 ## Running
 
@@ -209,6 +210,7 @@ that feature.
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
+| `DIV_DISABLE_OR` | `or.b32` while retaining `and.b32` and `xor.b32`. |
 | `DIV_DISABLE_XOR` | `xor.b32` while retaining `and.b32` and `or.b32`. |
 | `DIV_DISABLE_PRMT` | `prmt.b32`. |
 | `DIV_DISABLE_NOT` | `not.b32` and xor-by-`0xffffffff` forms. |
