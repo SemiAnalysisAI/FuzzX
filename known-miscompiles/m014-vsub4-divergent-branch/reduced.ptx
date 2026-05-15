@@ -1,0 +1,36 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 out_ptr
+)
+{
+    .reg .pred  %p<1>;
+    .reg .b32   %r<4>;
+    .reg .b64   %rd<3>;
+
+    ld.param.u64    %rd0, [out_ptr];
+    mov.u32         %r3, %tid.x;
+    mov.u32         %r0, 0;
+    mov.u32         %r1, %r3;
+    mov.u32         %r2, 4;
+
+    setp.ne.u32     %p0, %r2, %r1;
+    @%p0 bra        then_path;
+    vsub4.u32.u32.u32 %r1, %r0, %r1, %r2;
+    bra             done;
+
+then_path:
+    mov.u32         %r1, 0;
+
+done:
+    cvta.to.global.u64 %rd1, %rd0;
+    mul.wide.u32    %rd2, %r3, 16;
+    add.s64         %rd1, %rd1, %rd2;
+    st.global.u32   [%rd1 + 0], %r1;
+    st.global.u32   [%rd1 + 4], 0;
+    st.global.u32   [%rd1 + 8], 0;
+    st.global.u32   [%rd1 + 12], 0;
+    ret;
+}
