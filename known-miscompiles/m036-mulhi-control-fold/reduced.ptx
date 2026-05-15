@@ -1,0 +1,106 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<26>;
+    .reg .b32   %r<22>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    cvta.to.global.u64 %rd2, %rd0;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r17, 0;
+    mov.u32         %r3, 0;
+    mov.u32         %r7, 0;
+    setp.eq.u32     %p24, 0, 1;
+
+    mul.hi.s32      %r14, %r0, 16;
+    mov.u32         %r11, 60;
+    mad.lo.u32      %r18, %r11, 49375, %r11;
+    shr.u32         %r13, 69160512, 25;
+    mad.lo.u32      %r5, 4, %r14, %r0;
+    setp.eq.u32     %p1, 0, 0;
+    @%p1 bra        structured_if_0_then;
+    bra             structured_if_0_else;
+structured_if_0_then:
+    setp.eq.u32     %p3, 0, 0;
+    selp.b32        %r19, 8, %r17, %p3;
+    sub.u32         %r5, %r19, %r18;
+    mad.lo.u32      %r6, %r0, %r5, %r5;
+    shr.u32         %r8, 16, 11;
+    bra             structured_if_0_done;
+structured_if_0_else:
+    bra             structured_if_0_done;
+structured_if_0_done:
+    setp.ge.u32     %p6, 19682, %r2;
+    @%p6 bra        structured_if_1_then;
+    bra             structured_if_1_else;
+structured_if_1_then:
+    mad.lo.u32      %r19, %r19, 4194304, 27678;
+    clz.b32         %r8, %r17;
+    setp.ge.u32     %p9, %r19, 53078;
+    selp.b32        %r17, 4294967295, %r7, %p9;
+    dp4a.s32.u32    %r10, %r3, %r7, 62161;
+    bra             structured_if_1_done;
+structured_if_1_else:
+    xor.b32         %r3, %r8, %r5;
+    mad.lo.u32      %r2, %r18, %r19, 49358;
+    mul.hi.s32      %r1, %r13, 33098;
+    clz.b32         %r19, %r8;
+    cvt.u32.u16     %r2, %r2;
+    and.b32         %r10, %r18, %r13;
+    mad.lo.u32      %r1, %r3, %r6, 31152;
+    mad.lo.u32      %r8, %r19, 19382, %r5;
+    shr.u32         %r15, %r19, 11;
+    shr.u32         %r15, %r1, 26;
+    mad.lo.u32      %r13, %r6, %r5, 1469367838;
+    sub.u32         %r6, 12, %r10;
+    setp.ge.u32     %p14, %r15, 8;
+    selp.b32        %r0, %r1, 1073741824, %p14;
+    shr.u32         %r7, 27123, 21;
+    brev.b32        %r8, 536870912;
+    xor.b32         %r16, %r0, 33145;
+    bfe.u32         %r17, %r11, 25, 1;
+    popc.b32        %r2, 24696;
+    and.b32         %r1, %r0, %r19;
+    mul.hi.s32      %r4, %r2, %r16;
+    mad.lo.u32      %r12, %r5, %r10, %r4;
+    setp.eq.u32     %p18, %r12, %r7;
+    @%p18 bra       structured_if_2_then;
+    bra             structured_if_2_else;
+structured_if_2_then:
+    bra             structured_if_2_done;
+structured_if_2_else:
+    mul.hi.s32      %r13, 489, %r3;
+    mad.lo.u32      %r14, %r8, 536870912, %r13;
+    sub.u32         %r19, %r4, %r14;
+    mad.lo.u32      %r1, %r6, %r6, %r19;
+    and.b32         %r4, 24045, %r0;
+    bra             structured_if_2_done;
+structured_if_2_done:
+    bra             structured_if_1_done;
+structured_if_1_done:
+    setp.le.u32     %p21, %r8, %r19;
+    @%p21 bra       structured_if_3_then;
+    bra             structured_if_3_else;
+structured_if_3_then:
+    bra             structured_if_3_done;
+structured_if_3_else:
+    selp.b32        %r1, 5032, %r17, %p24;
+    bra             structured_if_3_done;
+structured_if_3_done:
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    st.global.u32   [%rd4 + 4], %r1;
+    ret;
+}
