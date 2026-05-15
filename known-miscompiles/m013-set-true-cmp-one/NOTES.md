@@ -25,42 +25,37 @@ bug.
 ## Correct scalar trace
 
 PTX `set.eq.u32.u32` materializes false as `0` and true as `0xffffffff`. The
-reduced PTX in `reduced.ptx` starts a two-trip counted loop with:
+reduced PTX in `reduced.ptx` first stores `0` to the output pointer, then runs
+a one-trip counted loop with:
 
 ```text
-r0 = 24
-r1 = 32
-r2 = 0
-r3 = 2
+r0 = 1
 ```
 
 Iteration 1:
 
 ```text
-r3 = r3 - 1 = 1
-r4 = set.eq.u32.u32(r1, r2) = set.eq(32, 0) = 0
-p1 = (r4 != 1) = true
-then block: r1 = 0, r2 = 0
+r0 = r0 - 1 = 0
+r1 = set.eq.u32.u32(r0, 0) = 0xffffffff
+p0 = (r1 != 1) = true
+branch back to loop, skipping the conditional store of 1
 ```
 
-Iteration 2:
+Next loop header:
 
 ```text
-r3 = r3 - 1 = 0
-r4 = set.eq.u32.u32(r1, r2) = set.eq(0, 0) = 0xffffffff
-p1 = (r4 != 1) = true
-then block: r1 = 0, r2 = 0
+r0 == 0, so the loop exits
 ```
 
-The loop exits with `r2 = 0`, so the correct stored value is `0x00000000`.
-`ptxas -O0` matches that trace. `ptxas -O1`, `-O2`, and `-O3` store
-`0x00000018`, which is the else-path value, as if the optimized loop treated
-the true result of `set.eq.u32.u32` as `1` instead of `0xffffffff`.
+The final output remains the initial in-kernel store, `0x00000000`. `ptxas
+-O0` matches that trace. `ptxas -O1`, `-O2`, and `-O3` store `0x00000001`,
+as if the optimized loop treated the true result of `set.eq.u32.u32` as `1`
+instead of `0xffffffff`.
 
 Standalone C++ bug-report repro: `repro_ptxas_set_true_cmp_one_o1.cpp`. It
-embeds the reduced PTX, compiles it with `ptxas -O0`, `ptxas -O1`, and
-`ptxas -O2`, launches one thread through the CUDA Driver API, and returns 1
-when the bug is reproduced.
+embeds the reduced PTX, compiles it with `ptxas -O0`, `ptxas -O1`,
+`ptxas -O2`, and `ptxas -O3`, launches one thread through the CUDA Driver API,
+and returns 1 when the bug is reproduced.
 
 This reproduced on 2026-05-14 with both:
 
@@ -88,27 +83,27 @@ At `-O0`, ptxas keeps the loop and lowers `set.eq.u32.u32` to a predicate plus
 an integer select that writes `0xffffffff` for true:
 
 ```text
-ISETP.EQ.U32.AND P0, PT, R2, R5, PT ;
-SEL             R3, RZ, 0xffffffff, !P0 ;
-ISETP.NE.U32.AND P0, PT, R3, 0x1, PT ;
+ISETP.EQ.U32.AND P0, PT, R0, RZ, PT ;
+SEL             R2, RZ, 0xffffffff, !P0 ;
+ISETP.NE.U32.AND P0, PT, R2, 0x1, PT ;
+@P0 BRA         loop ;
 ```
 
 At `-O2`, ptxas optimizes the loop into predicated code. The key branch
-predicate is computed directly from `R0 != R5`, equivalent to using the
-boolean comparison predicate instead of the materialized `set` value and then
-testing that value against `1`:
+predicate is computed from the loop value directly, equivalent to replacing
+`setp.ne(set.eq(r0, 0), 1)` with `r0 != 0`:
 
 ```text
-ISETP.NE.U32.AND P0, PT, R0, R5, PT ;
-@!P0 IMAD.MOV.U32 R5, RZ, RZ, 0x18 ;
-@P0  MOV          R0, RZ ;
-@P0  IMAD.MOV.U32 R5, RZ, RZ, RZ ;
+UIADD3           UR4, UPT, UPT, UR4, -0x1, URZ ;
+ISETP.NE.U32.AND P0, PT, RZ, UR4, PT ;
+@!P0 MOV         R5, 0x1 ;
+@!P0 STG.E       desc[UR6][R2.64], R5 ;
 ```
 
-On the second loop iteration `R0 == R5`, so this optimized predicate takes the
-wrong else path and stores `0x18`. The source requires comparing the
-materialized `set.eq` value `0xffffffff` against `1`, which should take the
-then path and store `0`.
+After the decrement, `UR4 == 0`. The source requires materializing the true
+`set.eq` result as `0xffffffff`, then comparing that value against `1`, so the
+branch back to the loop should be taken and the store of `1` skipped. The
+optimized code instead makes `P0` false and executes the `@!P0` store.
 
 This is distinct from the earlier signed/unsigned if-conversion bugs because
 the reduced PTX uses only unsigned `set.eq.u32.u32` and unsigned `setp.ne.u32`.

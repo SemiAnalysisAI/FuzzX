@@ -1,8 +1,8 @@
-// Standalone ptxas -O1/-O2 miscompile reproducer.
+// Standalone ptxas -O1/-O2/-O3 miscompile reproducer.
 //
 // This file embeds a reduced PTX kernel, assembles it with ptxas (-O0, -O1,
-// and -O2), launches one thread through the CUDA Driver API, and compares its
-// output against a scalar PTX trace.
+// -O2, and -O3), launches one thread through the CUDA Driver API, and compares
+// its output against a scalar PTX trace.
 //
 // Build, typical x86 CUDA install:
 //   g++ -std=c++17 -O2 repro_ptxas_set_true_cmp_one_o1.cpp \
@@ -23,29 +23,29 @@
 //
 // Correct scalar behavior:
 //   PTX `set.eq.u32.u32` materializes false as 0 and true as 0xffffffff.
-//   The two-trip loop starts with r1=32, r2=0, r3=2:
+//   The kernel first stores 0 to out[0]. It then runs one counted-loop
+//   iteration. The loop starts with r0=1:
 //
 //   Iteration 1:
-//     r1 == r2 is false, so r4 = 0.
-//     r4 != 1 is true, so the then block runs and sets r1=0, r2=0.
+//     The loop decrements r0 to 0.
+//     set.eq.u32.u32(r0, 0) is true, so r1 = 0xffffffff.
+//     r1 != 1 is true, so the branch back to the loop is taken.
+//     The conditional store of 1 is skipped.
 //
-//   Iteration 2:
-//     r1 == r2 is true, so r4 = 0xffffffff.
-//     r4 != 1 is true, so the then block runs again and leaves r2=0.
-//
-//   The correct stored value is therefore 0.
+//   The loop exits on the next header check with out[0] still equal to 0.
 //
 // Observed bug with CUDA 13.0 ptxas V13.0.88 on sm_103 and with CUDA 13.2
 // Update 1 ptxas V13.2.78 on sm_103:
 //   -O0 stores 0x00000000.
-//   -O1 and -O2 store 0x00000018, as if the true result of `set.eq.u32.u32`
-//   were 1 rather than 0xffffffff when ptxas optimizes the loop.
+//   -O1, -O2, and -O3 store 0x00000001, as if the true result of
+//   `set.eq.u32.u32` were 1 rather than 0xffffffff when ptxas optimizes the
+//   loop.
 //
 // SASS root-cause summary:
 //   At -O0, ptxas lowers `set.eq` as an integer predicate plus `SEL` choosing
 //   0xffffffff for true. At -O2, the loop is optimized into predicated code
-//   that branches as if `set.eq` true were 1, causing the else value 0x18 to
-//   be stored.
+//   that branches as if `set.eq` true were 1, causing the conditional store of
+//   1 to execute.
 
 #include <cuda.h>
 
@@ -75,40 +75,26 @@ static const char* kPtx = R"PTX(
     .param .u64 out_ptr
 )
 {
-    .reg .pred  %p<2>;
-    .reg .b32   %r<6>;
-    .reg .b64   %rd<4>;
+    .reg .pred  %p<1>;
+    .reg .b32   %r<2>;
+    .reg .b64   %rd<1>;
 
     ld.param.u64    %rd0, [out_ptr];
-    mov.u32         %r0, 24;
-    mov.u32         %r1, 32;
-    mov.u32         %r2, 0;
-    mov.u32         %r3, 2;
+    st.global.u32   [%rd0], 0;
+    mov.u32         %r0, 1;
 
 loop:
-    setp.eq.u32     %p0, %r3, 0;
+    setp.eq.u32     %p0, %r0, 0;
     @%p0 bra        done;
-    sub.u32         %r3, %r3, 1;
-    set.eq.u32.u32  %r4, %r1, %r2;
-    setp.ne.u32     %p1, %r4, 1;
-    @%p1 bra        then_block;
-    bra             else_block;
+    sub.u32         %r0, %r0, 1;
 
-then_block:
-    mov.u32         %r1, 0;
-    mov.u32         %r2, 0;
-    bra             if_done;
-
-else_block:
-    mov.u32         %r2, %r0;
-    bra             if_done;
-
-if_done:
+    set.eq.u32.u32  %r1, %r0, 0;
+    setp.ne.u32     %p0, %r1, 1;
+    @%p0 bra        loop;
+    st.global.u32   [%rd0], 1;
     bra             loop;
 
 done:
-    cvta.to.global.u64 %rd1, %rd0;
-    st.global.u32 [%rd1], %r2;
     ret;
 }
 
@@ -244,6 +230,7 @@ int main(int argc, char** argv) {
         auto cubin_o0 = compile_ptx(ptxas, arch, "-O0");
         auto cubin_o1 = compile_ptx(ptxas, arch, "-O1");
         auto cubin_o2 = compile_ptx(ptxas, arch, "-O2");
+        auto cubin_o3 = compile_ptx(ptxas, arch, "-O3");
 
         check(cuInit(0), "cuInit");
         CUdevice dev = 0;
@@ -254,14 +241,16 @@ int main(int argc, char** argv) {
         uint32_t out_o0 = run_kernel(cubin_o0);
         uint32_t out_o1 = run_kernel(cubin_o1);
         uint32_t out_o2 = run_kernel(cubin_o2);
+        uint32_t out_o3 = run_kernel(cubin_o3);
 
         int bad_o0 = report("-O0", out_o0);
         int bad_o1 = report("-O1", out_o1);
         int bad_o2 = report("-O2", out_o2);
+        int bad_o3 = report("-O3", out_o3);
 
         cuCtxDestroy(ctx);
 
-        if (bad_o0 == 0 && (bad_o1 != 0 || bad_o2 != 0)) {
+        if (bad_o0 == 0 && (bad_o1 != 0 || bad_o2 != 0 || bad_o3 != 0)) {
             std::cout << "\nREPRODUCED: -O0 matches the scalar PTX trace, but optimized ptxas is wrong.\n";
             return 1;
         }
