@@ -1,0 +1,100 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr
+)
+{
+        .reg .pred  %p<66>;
+        .reg .b32   %r<46>;
+        .reg .b64   %rd<6>;
+
+    ld.param.u64    %rd1, [out_ptr];
+    mov.u32         %r24, %tid.x;
+    mov.u32         %r39, 1;
+    mov.u32         %r40, 0;
+    mov.u32         %r41, 0;
+    mov.u32         %r42, 0;
+    mov.u32         %r43, 1;
+    mov.u32         %r44, 1;
+    mov.u32         %r45, 1;
+
+
+structured_loop_19_header:
+    setp.eq.u32   %p41, %r39, 0;
+    @%p41 bra   structured_loop_19_done;
+    sub.u32         %r39, %r39, 1;
+    setp.eq.u32   %p42, %r24, 32;
+    @%p42 bra   structured_if_20_then;
+    bra             structured_if_20_else;
+structured_if_20_then:
+structured_loop_21_header:
+    setp.eq.u32   %p45, %r40, 0;
+    @%p45 bra   structured_loop_21_done;
+    sub.u32         %r40, %r40, 1;
+    bra             structured_loop_21_header;
+structured_loop_21_done:
+    bra             structured_if_20_done;
+structured_if_20_else:
+    bra             structured_if_20_done;
+structured_if_20_done:
+    setp.eq.u32   %p50, %r24, 31;
+    @%p50 bra   structured_if_22_then;
+    bra             structured_if_22_else;
+structured_if_22_then:
+structured_loop_23_header:
+    setp.eq.u32   %p51, %r41, 0;
+    @%p51 bra   structured_loop_23_done;
+    sub.u32         %r41, %r41, 1;
+    bra             structured_loop_23_header;
+structured_loop_23_done:
+    bra             structured_if_22_done;
+structured_if_22_else:
+structured_loop_25_header:
+    setp.eq.u32   %p58, %r42, 0;
+    @%p58 bra   structured_loop_25_done;
+    sub.u32         %r42, %r42, 1;
+    setp.eq.u32   %p59, %r24, 32;
+    @%p59 bra   structured_if_26_then;
+    bra             structured_if_26_else;
+structured_if_26_then:
+    bra             structured_if_26_done;
+structured_if_26_else:
+structured_loop_27_header:
+    setp.eq.u32   %p63, %r43, 0;
+    @%p63 bra   structured_loop_27_done;
+    sub.u32         %r43, %r43, 1;
+    bra             structured_loop_27_header;
+structured_loop_27_done:
+    bra             structured_if_26_done;
+structured_if_26_done:
+    bra             structured_loop_25_header;
+structured_loop_25_done:
+    bra             structured_if_22_done;
+structured_if_22_done:
+    bra             structured_loop_19_header;
+structured_loop_19_done:
+structured_loop_28_header:
+    setp.eq.u32   %p64, %r44, 0;
+    @%p64 bra   structured_loop_28_done;
+    sub.u32         %r44, %r44, 1;
+structured_loop_29_header:
+    setp.eq.u32   %p65, %r45, 0;
+    @%p65 bra   structured_loop_29_done;
+    sub.u32         %r45, %r45, 1;
+    or.b32        %r1, 1, %r24;
+    bra             structured_loop_29_header;
+structured_loop_29_done:
+    bra             structured_loop_28_header;
+structured_loop_28_done:
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r24, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r1;
+    ret;
+}
