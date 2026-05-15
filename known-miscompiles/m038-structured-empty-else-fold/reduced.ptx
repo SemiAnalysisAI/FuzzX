@@ -1,0 +1,86 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<35>;
+    .reg .b32   %r<22>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r20, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r20, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r20;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r20;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r8, 8;
+    mov.u32         %r9, %r20;
+    mov.u32         %r10, %r2;
+    mov.u32         %r11, %r0;
+    mov.u32         %r12, 12;
+    mov.u32         %r13, %r20;
+    mov.u32         %r14, %r2;
+    mov.u32         %r15, %r0;
+    mov.u32         %r16, 16;
+    mov.u32         %r17, %r20;
+    mov.u32         %r18, %r2;
+    mov.u32         %r19, %r0;
+    bra             block_0;
+block_0:
+
+    shr.u32       %r3, 51731, 29;
+    or.b32        %r7, 570701863, %r3;
+    bra             structured_if_0_else;
+structured_if_0_else:
+    bra             structured_if_1_else;
+structured_if_1_else:
+    bra             structured_if_1_done;
+structured_if_1_done:
+    bra             structured_if_0_done;
+structured_if_0_done:
+    bra             structured_if_2_else;
+structured_if_2_else:
+    shr.u32       %r7, %r7, 30;
+    shr.u32       %r8, 35274, 22;
+    setp.ne.u32   %p27, %r10, 128;
+    selp.b32      %r17, 4294967295, %r8, %p27;
+    setp.lt.u32   %p28, %r17, %r7;
+    @%p28 bra   structured_if_3_then;
+    bra             structured_if_3_else;
+structured_if_3_then:
+    xor.b32       %r3, %r0, 1;
+    bra             structured_if_3_done;
+structured_if_3_else:
+    bra             structured_if_3_done;
+structured_if_3_done:
+    bra             structured_if_4_then;
+structured_if_4_then:
+    bra             structured_if_4_done;
+structured_if_4_done:
+    bra             structured_if_2_done;
+structured_if_2_done:
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r20, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    st.global.u32   [%rd4 + 4], %r1;
+    st.global.u32   [%rd4 + 8], %r2;
+    st.global.u32   [%rd4 + 12], %r3;
+    ret;
+}

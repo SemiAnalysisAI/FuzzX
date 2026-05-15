@@ -260,17 +260,30 @@ fn find_greedy_removal(
 }
 
 /// Indices into `ptx.lines()` that the reducer is allowed to try removing.
-/// Sacrosanct: prologue (everything up to and including `bra block_0;`),
-/// epilogue address arithmetic, labels, structural lines, `ret;`, braces.
+/// Sacrosanct: prologue (everything through the generated ABI/register
+/// initialization), epilogue address arithmetic, labels, structural lines,
+/// `ret;`, braces.
 fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
     let lines: Vec<&str> = ptx.lines().collect();
-    let prologue_end = lines
+    let prologue_end = if let Some(i) = lines
         .iter()
         .position(|l| {
             let t = l.trim();
             t.starts_with("bra") && t.contains("block_0;")
-        })
-        .ok_or_else(|| anyhow!("could not locate `bra block_0;` to mark end of prologue"))?;
+        }) {
+        i
+    } else {
+        lines
+            .iter()
+            .enumerate()
+            .skip_while(|(_, l)| !l.trim().starts_with("ld.global.u32"))
+            .find_map(|(i, l)| (i > 0 && l.trim().is_empty()).then_some(i))
+            .ok_or_else(|| {
+                anyhow!(
+                    "could not locate `bra block_0;` or structured register-init end to mark end of prologue"
+                )
+            })?
+    };
     let exit_start = lines
         .iter()
         .position(|l| l.trim() == "exit:")
@@ -281,6 +294,11 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
     for i in (prologue_end + 1)..exit_start {
         let t = lines[i].trim();
         if t.is_empty() || t.ends_with(':') {
+            continue;
+        }
+        // Removing a predicate definition can leave an undefined branch or
+        // selp predicate while still producing deterministic-looking output.
+        if t.starts_with("setp.") {
             continue;
         }
         out.push(i);

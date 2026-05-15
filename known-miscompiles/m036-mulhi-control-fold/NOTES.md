@@ -51,45 +51,40 @@ in_n     = 32
 All lanes compute the same value and store to `out[0][1]`, so the repeated
 stores are benign. The standalone reproducer launches one thread.
 
+On 2026-05-15, this was further reduced from 106 to 49 lines by deleting
+semantically dead arithmetic, folding constants on the taken path, and removing
+untaken-path scaffolding while preserving the same `0x80000092` (`-O0`) versus
+`0x80000090` (`-O2`/`-O3`) result. Several apparently dead control-flow edges
+still need to remain; deleting them causes optimized ptxas to stop taking the
+buggy fold.
+
 ## Correct Scalar Trace
 
 The taken path is:
 
 ```text
-structured_if_0_then -> structured_if_1_else -> structured_if_2_else
--> structured_if_3_then
+structured_if_1_else -> structured_if_2_done -> structured_if_3_done
 ```
 
 For `input[0] = 0x55ff25dc` and `in_n = 32`:
 
 ```text
-%r11 = 60
-%r18 = mad.lo.u32 60, 49375, 60 = 0x002d3480
-%p1  = true
-
-%r19 = 8
-%r5  = 8 - 0x002d3480 = 0xffd2cb88
+%r5  = 0xffd2cb88
 %r6  = 32 * 0xffd2cb88 + 0xffd2cb88 = 0xfa2c3c88
-%r8  = 16 >> 11 = 0
 
 %p6  = setp.ge.u32 19682, 0x55ff25dc = false
-%r3  = 0 ^ 0xffd2cb88 = 0xffd2cb88
-%r19 = clz.b32 0 = 32
-%r10 = 0x002d3480 & 2 = 0
-%r15 = ((0xffd2cb88 * 0xfa2c3c88 + 31152) >> 26) = 6
+%r1  = mad.lo.u32 0xffd2cb88, 0xfa2c3c88, 31152 = 0x1b1079f0
+%r15 = 0x1b1079f0 >> 26 = 6
 %p14 = false
 %r0  = 0x40000000
-%r8  = brev.b32 0x20000000 = 4
+%r8  = 4
 %r16 = 0x40000000 ^ 33145 = 0x40008179
-%r2  = popc.b32 24696 = 6
 %r4  = mul.hi.s32 6, 0x40008179 = 1
-%r12 = 0xffd2cb88 * 0 + 1 = 1
 %p18 = setp.eq.u32 1, 0 = false
 
-%r13 = mul.hi.s32 489, 0xffd2cb88 = 0xffffffff
 %r14 = mad.lo.u32 4, 0x20000000, 0xffffffff = 0x7fffffff
 %r19 = 1 - 0x7fffffff = 0x80000002
-%r1  = mad.lo.u32 12, 12, 0x80000002 = 0x80000092
+%r1  = 0x80000002 + 144 = 0x80000092
 %p21 = setp.le.u32 4, 0x80000002 = true
 store %r1 to out[0][1]
 ```

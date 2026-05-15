@@ -1,4 +1,4 @@
-// CUDA inline-PTX variant of the m036-mulhi-control-fold ptxas reproducer.
+// CUDA inline-PTX variant of the m037-bmsk-clz-bfi-fold ptxas reproducer.
 //
 // Build this same CUDA source twice and compare the printed output from the -O0 and -O2 binaries:
 //
@@ -22,7 +22,7 @@ constexpr int kInputWords = 32;
 constexpr int kOutputWords = 128;
 constexpr uint32_t kN = 32u;
 constexpr uint32_t kX = 0x00000000u;
-constexpr uint32_t kInput0 = 0x55ff25dcu;
+constexpr uint32_t kInput0 = 0x00000000u;
 constexpr uint32_t kSentinel = 0xa5a5a5a5u;
 
 static void check(cudaError_t err, const char* what) {
@@ -36,43 +36,20 @@ __global__ void repro_kernel(const uint32_t* in, uint32_t* out, uint32_t n, uint
     asm volatile(
         "{\n\t"
         "\n\t"
-        ".reg .pred  p<22>;\n\t"
-        ".reg .b32   r<20>;\n\t"
-        ".reg .b64   rd<5>;\n\t"
+        ".reg .b32   r<19>;\n\t"
+        ".reg .b64   rd<2>;\n\t"
         "\n\t"
-        "mov.u64 rd0, %0;\n\t"
         "mov.u64 rd1, %1;\n\t"
-        "mov.u32 r0, %2;\n\t"
-        "cvta.to.global.u64 rd2, rd0;\n\t"
-        "ld.global.u32   r2, [rd2];\n\t"
         "\n\t"
-        "mov.u32         r5, 0xffd2cb88;\n\t"
-        "mad.lo.u32      r6, r0, r5, r5;\n\t"
-        "setp.ge.u32     p6, 19682, r2;\n\t"
-        "@!p6 bra       structured_if_1_else;\n\t"
-        "clz.b32         r8, 0;\n\t"
-        "bra             structured_if_1_done;\n\t"
-        "structured_if_1_else:\n\t"
-        "mad.lo.u32      r1, r5, r6, 31152;\n\t"
-        "shr.u32         r15, r1, 26;\n\t"
-        "setp.ge.u32     p14, r15, 8;\n\t"
-        "selp.b32        r0, r1, 1073741824, p14;\n\t"
-        "mov.u32         r8, 4;\n\t"
-        "xor.b32         r16, r0, 33145;\n\t"
-        "mul.hi.s32      r4, 6, r16;\n\t"
-        "setp.eq.u32     p18, r4, 0;\n\t"
-        "@p18 bra       structured_if_2_done;\n\t"
-        "mad.lo.u32      r14, r8, 536870912, 0xffffffff;\n\t"
-        "sub.u32         r19, r4, r14;\n\t"
-        "add.u32         r1, r19, 144;\n\t"
-        "structured_if_2_done:\n\t"
-        "structured_if_1_done:\n\t"
-        "setp.le.u32     p21, r8, r19;\n\t"
-        "@p21 bra       structured_if_3_done;\n\t"
-        "mov.u32         r1, 0;\n\t"
-        "structured_if_3_done:\n\t"
+        "bmsk.clamp.b32 r10, 17, 26;\n\t"
+        "clz.b32       r2, r10;\n\t"
+        "shr.u32       r4, r2, 24;\n\t"
+        "bfi.b32       r5, r4, 8388608, 28, 26;\n\t"
+        "mad.lo.u32    r18, r5, r5, 3370615734;\n\t"
+        "or.b32        r6, 524288, r18;\n\t"
+        "and.b32       r2, r6, 23383;\n\t"
         "\n\t"
-        "st.global.u32   [rd1 + 4], r1;\n\t"
+        "st.global.u32   [rd1 + 8], r2;\n\t"
         "}\n"
         :
         : "l"(in), "l"(out), "r"(n), "r"(x)

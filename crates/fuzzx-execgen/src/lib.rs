@@ -59,6 +59,7 @@ pub struct GenConfig {
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_bitwise_binops: bool,
+    pub emit_xor: bool,
     pub emit_prmt: bool,
     pub emit_not: bool,
     pub emit_clz: bool,
@@ -116,6 +117,7 @@ impl Default for GenConfig {
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_bitwise_binops: true,
+            emit_xor: true,
             emit_prmt: true,
             emit_not: true,
             emit_clz: true,
@@ -1027,6 +1029,7 @@ impl<'a> Generator<'a> {
                 self.cfg.emit_mulhi,
                 self.cfg.emit_signed_mulhi,
                 self.cfg.emit_bitwise_binops,
+                self.cfg.emit_xor,
             )?;
             Ok(Inst::Bin {
                 op,
@@ -1818,13 +1821,17 @@ fn pick_binop(
     emit_mulhi: bool,
     emit_signed_mulhi: bool,
     emit_bitwise_binops: bool,
+    emit_xor: bool,
 ) -> Result<BinOp> {
     let mut ops = vec![BinOp::Add, BinOp::Mul];
     if emit_sub {
         ops.push(BinOp::Sub);
     }
     if emit_bitwise_binops {
-        ops.extend([BinOp::And, BinOp::Or, BinOp::Xor]);
+        ops.extend([BinOp::And, BinOp::Or]);
+        if emit_xor {
+            ops.push(BinOp::Xor);
+        }
     }
     if emit_mulhi {
         ops.push(BinOp::MulHi);
@@ -2383,6 +2390,29 @@ mod tests {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
         }
+    }
+
+    #[test]
+    fn xor_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_xor: false,
+            ..GenConfig::default()
+        };
+
+        let mut saw_and = false;
+        let mut saw_or = false;
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "xor.b32"),
+                "seed {seed:x} emitted xor.b32"
+            );
+            saw_and |= has_mnemonic(&ptx, "and.b32");
+            saw_or |= has_mnemonic(&ptx, "or.b32");
+        }
+        assert!(saw_and, "sample did not retain and.b32 coverage");
+        assert!(saw_or, "sample did not retain or.b32 coverage");
     }
 
     #[test]

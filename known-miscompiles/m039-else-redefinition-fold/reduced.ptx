@@ -1,0 +1,25 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr)
+{
+    .reg .pred %p<1>;
+    .reg .b32 %r<21>;
+    .reg .b64 %rd<2>;
+    ld.param.u64 %rd1, [out_ptr];
+    mov.u32 %r20, %tid.x;
+    sub.u32 %r18, %r20, %r20;
+    setp.ne.u32 %p0, 0, %r18;
+    @!%p0 bra L_else;
+    mov.u32 %r18, 0;
+    bra L_done;
+L_else:
+    xor.b32 %r12, %r18, 4294967295;
+    mad.lo.u32 %r18, 65117, %r12, 0;
+L_done:
+    mad.wide.u32 %rd1, %r20, 16, %rd1;
+    st.global.u32 [%rd1], %r18;
+    ret;
+}
