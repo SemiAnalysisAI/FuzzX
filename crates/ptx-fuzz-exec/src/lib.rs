@@ -37,6 +37,7 @@ mod sys {
     #[link(name = "cuda")]
     extern "C" {
         pub fn cuInit(flags: c_uint) -> CUresult;
+        pub fn cuDeviceGetCount(count: *mut c_int) -> CUresult;
         pub fn cuDeviceGet(device: *mut CUdevice, ordinal: c_int) -> CUresult;
         pub fn cuCtxCreate_v2(pctx: *mut CUcontext, flags: c_uint, dev: CUdevice) -> CUresult;
         pub fn cuCtxDestroy_v2(ctx: CUcontext) -> CUresult;
@@ -55,8 +56,12 @@ mod sys {
         pub fn cuMemsetD8_v2(dst: CUdeviceptr, uc: u8, n: usize) -> CUresult;
         pub fn cuLaunchKernel(
             f: CUfunction,
-            grid_x: c_uint, grid_y: c_uint, grid_z: c_uint,
-            block_x: c_uint, block_y: c_uint, block_z: c_uint,
+            grid_x: c_uint,
+            grid_y: c_uint,
+            grid_z: c_uint,
+            block_x: c_uint,
+            block_y: c_uint,
+            block_z: c_uint,
             shared_mem_bytes: c_uint,
             stream: CUstream,
             kernel_params: *mut *mut c_void,
@@ -86,6 +91,12 @@ fn check(code: sys::CUresult, op: &'static str) -> Result<()> {
 fn ptxas_path() -> PathBuf {
     if let Ok(p) = std::env::var("PTXAS") {
         return PathBuf::from(p);
+    }
+    // Prefer the native CUDA ptxas over any shell wrapper in $HOME/bin: the
+    // wrapper adds a fork+exec per compile that's ~10% of the per-iter budget.
+    let cuda = PathBuf::from("/usr/local/cuda/bin/ptxas");
+    if cuda.exists() {
+        return cuda;
     }
     if let Ok(home) = std::env::var("HOME") {
         let p = PathBuf::from(home).join("bin").join("ptxas");
@@ -127,25 +138,33 @@ pub fn compile(ptx: &str, flags: &[&str]) -> Result<Vec<u8>> {
 
 // ===== CUDA wrapper =====
 
-/// Owned device allocation; freed on drop.
-struct DeviceBuf(sys::CUdeviceptr);
+/// Owned device allocation; freed on drop. Tied to the CUDA context active on
+/// the thread that allocated it — `!Send` keeps callers from dropping it on a
+/// different thread (where `cuMemFree` would target the wrong context).
+struct DeviceBuf {
+    ptr: sys::CUdeviceptr,
+    _not_send: PhantomData<*const ()>,
+}
 
 impl DeviceBuf {
     unsafe fn alloc(n: usize) -> Result<Self> {
         // cuMemAlloc rejects 0-byte requests; bump to 1 so callers don't have to.
         let mut p: sys::CUdeviceptr = 0;
         check(sys::cuMemAlloc_v2(&mut p, n.max(1)), "cuMemAlloc")?;
-        Ok(Self(p))
+        Ok(Self {
+            ptr: p,
+            _not_send: PhantomData,
+        })
     }
     fn ptr(&self) -> sys::CUdeviceptr {
-        self.0
+        self.ptr
     }
 }
 
 impl Drop for DeviceBuf {
     fn drop(&mut self) {
         unsafe {
-            let _ = sys::cuMemFree_v2(self.0);
+            let _ = sys::cuMemFree_v2(self.ptr);
         }
     }
 }
@@ -181,6 +200,25 @@ impl Drop for Module {
     }
 }
 
+/// Pre-allocated input + output device buffers, tied to the CUDA context
+/// active on the thread that created them. `!Send` because the underlying
+/// `DeviceBuf`s are.
+pub struct CudaBuffers {
+    in_buf: DeviceBuf,
+    in_cap: usize,
+    out_buf: DeviceBuf,
+    out_cap: usize,
+}
+
+impl CudaBuffers {
+    pub fn in_cap(&self) -> usize {
+        self.in_cap
+    }
+    pub fn out_cap(&self) -> usize {
+        self.out_cap
+    }
+}
+
 /// A CUDA primary-ish context bound to the creating thread.
 pub struct Cuda {
     ctx: sys::CUcontext,
@@ -196,7 +234,110 @@ impl Cuda {
             check(sys::cuDeviceGet(&mut dev, device_ordinal), "cuDeviceGet")?;
             let mut ctx: sys::CUcontext = ptr::null_mut();
             check(sys::cuCtxCreate_v2(&mut ctx, 0, dev), "cuCtxCreate")?;
-            Ok(Self { ctx, _not_send: PhantomData })
+            Ok(Self {
+                ctx,
+                _not_send: PhantomData,
+            })
+        }
+    }
+
+    /// Number of CUDA devices visible to this process. Calls `cuInit` first so
+    /// it works before any `Cuda::init`.
+    pub fn device_count() -> Result<i32> {
+        unsafe {
+            check(sys::cuInit(0), "cuInit")?;
+            let mut n: std::ffi::c_int = 0;
+            check(sys::cuDeviceGetCount(&mut n), "cuDeviceGetCount")?;
+            Ok(n as i32)
+        }
+    }
+
+    /// Allocate reusable input/output device buffers tied to this context.
+    /// Use with `launch_with` to avoid per-iter `cuMemAlloc`/`cuMemFree`.
+    pub fn alloc_buffers(&self, in_cap: usize, out_cap: usize) -> Result<CudaBuffers> {
+        unsafe {
+            Ok(CudaBuffers {
+                in_buf: DeviceBuf::alloc(in_cap)?,
+                in_cap,
+                out_buf: DeviceBuf::alloc(out_cap)?,
+                out_cap,
+            })
+        }
+    }
+
+    /// Like `launch`, but reuses pre-allocated buffers. `input.len()` must be
+    /// `<= bufs.in_cap`; `output_len` must be `<= bufs.out_cap`.
+    pub fn launch_with(
+        &self,
+        bufs: &CudaBuffers,
+        cubin: &[u8],
+        kernel_name: &str,
+        grid: (u32, u32, u32),
+        block: (u32, u32, u32),
+        input: &[u8],
+        output_len: usize,
+        n: u32,
+    ) -> Result<Vec<u8>> {
+        assert!(input.len() <= bufs.in_cap);
+        assert!(output_len <= bufs.out_cap);
+        unsafe {
+            let module = Module::load(cubin)?;
+            let func = module.function(kernel_name)?;
+
+            if !input.is_empty() {
+                check(
+                    sys::cuMemcpyHtoD_v2(
+                        bufs.in_buf.ptr(),
+                        input.as_ptr() as *const c_void,
+                        input.len(),
+                    ),
+                    "cuMemcpyHtoD",
+                )?;
+            }
+            check(
+                sys::cuMemsetD8_v2(bufs.out_buf.ptr(), 0, output_len.max(1)),
+                "cuMemsetD8",
+            )?;
+
+            let mut arg_in = bufs.in_buf.ptr();
+            let mut arg_out = bufs.out_buf.ptr();
+            let mut arg_n = n;
+            let mut params: [*mut c_void; 3] = [
+                &mut arg_in as *mut _ as *mut c_void,
+                &mut arg_out as *mut _ as *mut c_void,
+                &mut arg_n as *mut _ as *mut c_void,
+            ];
+
+            check(
+                sys::cuLaunchKernel(
+                    func,
+                    grid.0,
+                    grid.1,
+                    grid.2,
+                    block.0,
+                    block.1,
+                    block.2,
+                    0,
+                    ptr::null_mut(),
+                    params.as_mut_ptr(),
+                    ptr::null_mut(),
+                ),
+                "cuLaunchKernel",
+            )?;
+            check(sys::cuCtxSynchronize(), "cuCtxSynchronize")?;
+
+            let mut buf = vec![0u8; output_len];
+            if output_len > 0 {
+                check(
+                    sys::cuMemcpyDtoH_v2(
+                        buf.as_mut_ptr() as *mut c_void,
+                        bufs.out_buf.ptr(),
+                        output_len,
+                    ),
+                    "cuMemcpyDtoH",
+                )?;
+            }
+            Ok(buf)
         }
     }
 
@@ -246,8 +387,12 @@ impl Cuda {
             check(
                 sys::cuLaunchKernel(
                     func,
-                    grid.0, grid.1, grid.2,
-                    block.0, block.1, block.2,
+                    grid.0,
+                    grid.1,
+                    grid.2,
+                    block.0,
+                    block.1,
+                    block.2,
                     0,
                     ptr::null_mut(),
                     params.as_mut_ptr(),
@@ -334,16 +479,28 @@ mod tests {
 
     #[test]
     fn diff_outcome_classification() {
-        let same = DiffOutcome { o0: Ok(vec![1, 2, 3]), o3: Ok(vec![1, 2, 3]) };
+        let same = DiffOutcome {
+            o0: Ok(vec![1, 2, 3]),
+            o3: Ok(vec![1, 2, 3]),
+        };
         assert!(same.matches() && !same.diverged());
 
-        let diff = DiffOutcome { o0: Ok(vec![1, 2, 3]), o3: Ok(vec![1, 2, 4]) };
+        let diff = DiffOutcome {
+            o0: Ok(vec![1, 2, 3]),
+            o3: Ok(vec![1, 2, 4]),
+        };
         assert!(!diff.matches() && diff.diverged());
 
-        let asym = DiffOutcome { o0: Ok(vec![1]), o3: Err(anyhow!("boom")) };
+        let asym = DiffOutcome {
+            o0: Ok(vec![1]),
+            o3: Err(anyhow!("boom")),
+        };
         assert!(!asym.matches() && asym.diverged());
 
-        let both_failed = DiffOutcome { o0: Err(anyhow!("a")), o3: Err(anyhow!("b")) };
+        let both_failed = DiffOutcome {
+            o0: Err(anyhow!("a")),
+            o3: Err(anyhow!("b")),
+        };
         assert!(!both_failed.matches() && !both_failed.diverged());
     }
 
@@ -359,6 +516,10 @@ mod tests {
 }
 "#;
         let cubin = compile(ptx, &["-arch=sm_103", "-O3"]).expect("compile");
-        assert!(cubin.len() > 100, "cubin suspiciously small: {} bytes", cubin.len());
+        assert!(
+            cubin.len() > 100,
+            "cubin suspiciously small: {} bytes",
+            cubin.len()
+        );
     }
 }

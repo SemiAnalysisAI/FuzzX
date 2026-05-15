@@ -49,6 +49,51 @@ pub struct GenConfig {
     pub n_working_regs: u32,
     pub max_loop_iters: u32,
     pub max_immediate: u32,
+    pub max_structured_depth: usize,
+    pub emit_structured_loops: bool,
+    pub emit_arbitrary_loops: bool,
+    pub control_flow: ControlFlowMode,
+    pub emit_lop3: bool,
+    pub emit_minmax: bool,
+    pub emit_sub: bool,
+    pub emit_mulhi: bool,
+    pub emit_signed_mulhi: bool,
+    pub emit_bitwise_binops: bool,
+    pub emit_prmt: bool,
+    pub emit_not: bool,
+    pub emit_clz: bool,
+    pub emit_cnot: bool,
+    pub emit_abs: bool,
+    pub emit_signed_cmp: bool,
+    pub emit_signed_divrem: bool,
+    pub emit_funnel: bool,
+    pub emit_neg: bool,
+    pub emit_shl: bool,
+    pub emit_signed_shr: bool,
+    pub emit_bfind: bool,
+    pub emit_bfi: bool,
+    pub emit_bmsk: bool,
+    pub emit_mad24: bool,
+    pub emit_mul24: bool,
+    pub emit_mul_wide: bool,
+    pub emit_wide_int: bool,
+    pub emit_addc: bool,
+    pub emit_subc: bool,
+    pub emit_i32_boundary_immediates: bool,
+    pub emit_dp2a: bool,
+    pub emit_set: bool,
+    pub emit_s32_slct: bool,
+    pub emit_video: bool,
+    pub emit_vsub4: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlFlowMode {
+    /// Random forward branches plus bounded backedges. This is the historical
+    /// mode and can build irreducible or multi-entry-looking CFG shapes.
+    Arbitrary,
+    /// Directly emit single-entry structured if/else and counted-loop shapes.
+    Structured,
 }
 
 impl Default for GenConfig {
@@ -61,6 +106,42 @@ impl Default for GenConfig {
             n_working_regs: 8,
             max_loop_iters: 16,
             max_immediate: 32,
+            max_structured_depth: 3,
+            emit_structured_loops: true,
+            emit_arbitrary_loops: true,
+            control_flow: ControlFlowMode::Arbitrary,
+            emit_lop3: true,
+            emit_minmax: true,
+            emit_sub: true,
+            emit_mulhi: true,
+            emit_signed_mulhi: true,
+            emit_bitwise_binops: true,
+            emit_prmt: true,
+            emit_not: true,
+            emit_clz: true,
+            emit_cnot: true,
+            emit_abs: true,
+            emit_signed_cmp: true,
+            emit_signed_divrem: true,
+            emit_funnel: true,
+            emit_neg: true,
+            emit_shl: true,
+            emit_signed_shr: true,
+            emit_bfind: true,
+            emit_bfi: true,
+            emit_bmsk: true,
+            emit_mad24: true,
+            emit_mul24: true,
+            emit_mul_wide: true,
+            emit_wide_int: true,
+            emit_addc: true,
+            emit_subc: true,
+            emit_i32_boundary_immediates: true,
+            emit_dp2a: true,
+            emit_set: true,
+            emit_s32_slct: true,
+            emit_video: true,
+            emit_vsub4: true,
         }
     }
 }
@@ -72,8 +153,14 @@ pub fn generate(u: &mut Unstructured, cfg: &GenConfig) -> Result<String> {
 
 /// Convenience: build an `Unstructured` from raw bytes and generate.
 pub fn generate_from_bytes(bytes: &[u8]) -> Result<String> {
+    generate_from_bytes_with_config(bytes, &GenConfig::default())
+}
+
+/// Convenience: build an `Unstructured` from raw bytes and a caller-supplied
+/// config, then generate.
+pub fn generate_from_bytes_with_config(bytes: &[u8], cfg: &GenConfig) -> Result<String> {
     let mut u = Unstructured::new(bytes);
-    generate(&mut u, &GenConfig::default())
+    generate(&mut u, cfg)
 }
 
 /// Deterministic byte buffer derived from a 64-bit seed; suitable as the
@@ -105,8 +192,24 @@ pub fn input_for_seed(seed: u64) -> Vec<u8> {
 
 // ===== Internals =====
 
-#[derive(Clone, Copy)]
-enum BinOp { Add, Sub, Mul, MulHi, And, Or, Xor, Min, Max }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    MulHi,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+    // Signed-only variants. add.s32/sub.s32/mul.lo.s32 are bit-identical to
+    // the u32 forms (mod 2^32, no overflow checks), so only the ops with
+    // genuinely different semantics are duplicated here.
+    MulHiS,
+    MinS,
+    MaxS,
+}
 
 impl BinOp {
     fn mnemonic(self) -> &'static str {
@@ -116,42 +219,380 @@ impl BinOp {
             BinOp::Mul => "mul.lo.u32",
             BinOp::MulHi => "mul.hi.u32",
             BinOp::And => "and.b32",
-            BinOp::Or  => "or.b32",
+            BinOp::Or => "or.b32",
             BinOp::Xor => "xor.b32",
             BinOp::Min => "min.u32",
             BinOp::Max => "max.u32",
+            BinOp::MulHiS => "mul.hi.s32",
+            BinOp::MinS => "min.s32",
+            BinOp::MaxS => "max.s32",
         }
     }
 }
 
 #[derive(Clone, Copy)]
-enum ShiftOp { Shl, Shr }
+enum ShiftOp {
+    Shl,
+    Shr,
+    ShrS,
+}
 
 impl ShiftOp {
     fn mnemonic(self) -> &'static str {
         match self {
             ShiftOp::Shl => "shl.b32",
             ShiftOp::Shr => "shr.u32",
+            ShiftOp::ShrS => "shr.s32",
         }
     }
 }
 
 #[derive(Clone, Copy)]
-enum UnaryOp { Not, Popc, Clz, Brev }
+enum UnaryOp {
+    Not,
+    Cnot,
+    Popc,
+    Clz,
+    Brev,
+    AbsS,
+    NegS,
+}
 
 impl UnaryOp {
     fn mnemonic(self) -> &'static str {
         match self {
-            UnaryOp::Not  => "not.b32",
+            UnaryOp::Not => "not.b32",
+            UnaryOp::Cnot => "cnot.b32",
             UnaryOp::Popc => "popc.b32",
-            UnaryOp::Clz  => "clz.b32",
+            UnaryOp::Clz => "clz.b32",
             UnaryOp::Brev => "brev.b32",
+            // abs.s32(INT_MIN) and neg.s32(INT_MIN) are defined to return
+            // INT_MIN per PTX spec — no UB on arbitrary inputs.
+            UnaryOp::AbsS => "abs.s32",
+            UnaryOp::NegS => "neg.s32",
         }
     }
 }
 
 #[derive(Clone, Copy)]
-enum CmpOp { Eq, Ne, Lt, Le, Gt, Ge }
+enum CvtOp {
+    U8ToU32,
+    U16ToU32,
+    U8ToS32,
+    U16ToS32,
+    S8ToU32,
+    S16ToU32,
+    S8ToS32,
+    S16ToS32,
+}
+
+impl CvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            CvtOp::U8ToU32 => "cvt.u32.u8",
+            CvtOp::U16ToU32 => "cvt.u32.u16",
+            CvtOp::U8ToS32 => "cvt.s32.u8",
+            CvtOp::U16ToS32 => "cvt.s32.u16",
+            CvtOp::S8ToU32 => "cvt.u32.s8",
+            CvtOp::S16ToU32 => "cvt.u32.s16",
+            CvtOp::S8ToS32 => "cvt.s32.s8",
+            CvtOp::S16ToS32 => "cvt.s32.s16",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BfindOp {
+    Position,
+    ShiftAmount,
+}
+
+impl BfindOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            BfindOp::Position => "bfind.u32",
+            BfindOp::ShiftAmount => "bfind.shiftamt.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BfeOp {
+    U32,
+    S32,
+}
+
+impl BfeOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            BfeOp::U32 => "bfe.u32",
+            BfeOp::S32 => "bfe.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DivRemOp {
+    DivU,
+    RemU,
+    DivS,
+    RemS,
+}
+
+impl DivRemOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            DivRemOp::DivU => "div.u32",
+            DivRemOp::RemU => "rem.u32",
+            DivRemOp::DivS => "div.s32",
+            DivRemOp::RemS => "rem.s32",
+        }
+    }
+
+    fn is_signed(self) -> bool {
+        matches!(self, DivRemOp::DivS | DivRemOp::RemS)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Mad24Op {
+    LoU32,
+    HiU32,
+    LoS32,
+    HiS32,
+}
+
+impl Mad24Op {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Mad24Op::LoU32 => "mad24.lo.u32",
+            Mad24Op::HiU32 => "mad24.hi.u32",
+            Mad24Op::LoS32 => "mad24.lo.s32",
+            Mad24Op::HiS32 => "mad24.hi.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Mul24Op {
+    LoU32,
+    HiU32,
+    LoS32,
+    HiS32,
+}
+
+impl Mul24Op {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Mul24Op::LoU32 => "mul24.lo.u32",
+            Mul24Op::HiU32 => "mul24.hi.u32",
+            Mul24Op::LoS32 => "mul24.lo.s32",
+            Mul24Op::HiS32 => "mul24.hi.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MulWideOp {
+    U32,
+    S32,
+}
+
+impl MulWideOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            MulWideOp::U32 => "mul.wide.u32",
+            MulWideOp::S32 => "mul.wide.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WideIntOp {
+    AddU64,
+    SubU64,
+    MulLoU64,
+    AddS64,
+    SubS64,
+    MulLoS64,
+    AndB64,
+    OrB64,
+    XorB64,
+}
+
+impl WideIntOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideIntOp::AddU64 => "add.u64",
+            WideIntOp::SubU64 => "sub.u64",
+            WideIntOp::MulLoU64 => "mul.lo.u64",
+            WideIntOp::AddS64 => "add.s64",
+            WideIntOp::SubS64 => "sub.s64",
+            WideIntOp::MulLoS64 => "mul.lo.s64",
+            WideIntOp::AndB64 => "and.b64",
+            WideIntOp::OrB64 => "or.b64",
+            WideIntOp::XorB64 => "xor.b64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideIntOp::AddS64 | WideIntOp::SubS64 | WideIntOp::MulLoS64 => "cvt.s64.s32",
+            WideIntOp::AddU64
+            | WideIntOp::SubU64
+            | WideIntOp::MulLoU64
+            | WideIntOp::AndB64
+            | WideIntOp::OrB64
+            | WideIntOp::XorB64 => "cvt.u64.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AddCarryOp {
+    Add,
+    Sub,
+}
+
+#[derive(Clone, Copy)]
+enum Dp4aOp {
+    U32U32,
+    U32S32,
+    S32U32,
+    S32S32,
+}
+
+impl Dp4aOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Dp4aOp::U32U32 => "dp4a.u32.u32",
+            Dp4aOp::U32S32 => "dp4a.u32.s32",
+            Dp4aOp::S32U32 => "dp4a.s32.u32",
+            Dp4aOp::S32S32 => "dp4a.s32.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Dp2aOp {
+    LoU32U32,
+    HiU32U32,
+    LoU32S32,
+    HiU32S32,
+    LoS32U32,
+    HiS32U32,
+    LoS32S32,
+    HiS32S32,
+}
+
+impl Dp2aOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Dp2aOp::LoU32U32 => "dp2a.lo.u32.u32",
+            Dp2aOp::HiU32U32 => "dp2a.hi.u32.u32",
+            Dp2aOp::LoU32S32 => "dp2a.lo.u32.s32",
+            Dp2aOp::HiU32S32 => "dp2a.hi.u32.s32",
+            Dp2aOp::LoS32U32 => "dp2a.lo.s32.u32",
+            Dp2aOp::HiS32U32 => "dp2a.hi.s32.u32",
+            Dp2aOp::LoS32S32 => "dp2a.lo.s32.s32",
+            Dp2aOp::HiS32S32 => "dp2a.hi.s32.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SadOp {
+    U32,
+    S32,
+}
+
+impl SadOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            SadOp::U32 => "sad.u32",
+            SadOp::S32 => "sad.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SlctOp {
+    U32S32,
+    S32S32,
+    B32S32,
+}
+
+impl SlctOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            SlctOp::U32S32 => "slct.u32.s32",
+            SlctOp::S32S32 => "slct.s32.s32",
+            SlctOp::B32S32 => "slct.b32.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VideoOp {
+    Add2,
+    Sub2,
+    Avrg2,
+    Avrg2Add,
+    AbsDiff2Add,
+    Min2,
+    Min2Add,
+    Max2,
+    Max2Add,
+    Add4,
+    Sub4,
+    Avrg4,
+    Avrg4Add,
+    AbsDiff4Add,
+    Min4,
+    Min4Add,
+    Max4,
+    Max4Add,
+}
+
+impl VideoOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            VideoOp::Add2 => "vadd2.u32.u32.u32",
+            VideoOp::Sub2 => "vsub2.u32.u32.u32",
+            VideoOp::Avrg2 => "vavrg2.u32.u32.u32",
+            VideoOp::Avrg2Add => "vavrg2.u32.u32.u32.add",
+            VideoOp::AbsDiff2Add => "vabsdiff2.u32.u32.u32.add",
+            VideoOp::Min2 => "vmin2.u32.u32.u32",
+            VideoOp::Min2Add => "vmin2.u32.u32.u32.add",
+            VideoOp::Max2 => "vmax2.u32.u32.u32",
+            VideoOp::Max2Add => "vmax2.u32.u32.u32.add",
+            VideoOp::Add4 => "vadd4.u32.u32.u32",
+            VideoOp::Sub4 => "vsub4.u32.u32.u32",
+            VideoOp::Avrg4 => "vavrg4.u32.u32.u32",
+            VideoOp::Avrg4Add => "vavrg4.u32.u32.u32.add",
+            VideoOp::AbsDiff4Add => "vabsdiff4.u32.u32.u32.add",
+            VideoOp::Min4 => "vmin4.u32.u32.u32",
+            VideoOp::Min4Add => "vmin4.u32.u32.u32.add",
+            VideoOp::Max4 => "vmax4.u32.u32.u32",
+            VideoOp::Max4Add => "vmax4.u32.u32.u32.add",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CmpOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    // Signed compares; setp.{eq,ne} are bit-identical signed/unsigned.
+    LtS,
+    LeS,
+    GtS,
+    GeS,
+}
 
 impl CmpOp {
     fn mnemonic(self) -> &'static str {
@@ -162,11 +603,46 @@ impl CmpOp {
             CmpOp::Le => "setp.le.u32",
             CmpOp::Gt => "setp.gt.u32",
             CmpOp::Ge => "setp.ge.u32",
+            CmpOp::LtS => "setp.lt.s32",
+            CmpOp::LeS => "setp.le.s32",
+            CmpOp::GtS => "setp.gt.s32",
+            CmpOp::GeS => "setp.ge.s32",
+        }
+    }
+
+    fn set_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "set.eq.u32.u32",
+            CmpOp::Ne => "set.ne.u32.u32",
+            CmpOp::Lt => "set.lt.u32.u32",
+            CmpOp::Le => "set.le.u32.u32",
+            CmpOp::Gt => "set.gt.u32.u32",
+            CmpOp::Ge => "set.ge.u32.u32",
+            CmpOp::LtS => "set.lt.u32.s32",
+            CmpOp::LeS => "set.le.u32.s32",
+            CmpOp::GtS => "set.gt.u32.s32",
+            CmpOp::GeS => "set.ge.u32.s32",
         }
     }
 }
 
 #[derive(Clone, Copy)]
+enum FunnelDir {
+    Left,
+    Right,
+}
+
+impl FunnelDir {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            // .wrap mode masks the shift amount to 5 bits — safe for any input.
+            FunnelDir::Left => "shf.l.wrap.b32",
+            FunnelDir::Right => "shf.r.wrap.b32",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Operand {
     Reg(u32),
     Imm(u32),
@@ -181,25 +657,234 @@ impl Operand {
     }
 }
 
+fn sanitize_xor_not_operand(operand: Operand) -> Operand {
+    match operand {
+        Operand::Imm(0xFFFF_FFFF) => Operand::Imm(0xFFFF_FFFE),
+        _ => operand,
+    }
+}
+
 enum Inst {
-    Bin { op: BinOp, dst: u32, a: Operand, b: Operand },
-    Sel { dst: u32, a: Operand, b: Operand, cmp: CmpOp, ca: Operand, cb: Operand, pred: u32 },
+    Bin {
+        op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    Sel {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// `set.<cmp>.u32.{u32,s32} dst, a, b;` — materialize comparison result.
+    Set {
+        dst: u32,
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+    },
     /// `<op>.b32 dst, src, amount;` where amount is an immediate in 0..=31
     /// (avoids shift-amount-≥-32 UB).
-    Shift { op: ShiftOp, dst: u32, src: Operand, amount: u32 },
+    Shift {
+        op: ShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: u32,
+    },
     /// `<op>.b32 dst, src;`
     Unary { op: UnaryOp, dst: u32, src: Operand },
+    /// `cvt.{u32,s32}.{u8,u16,s8,s16} dst, src;` — subword integer extension.
+    Cvt { op: CvtOp, dst: u32, src: Operand },
+    /// `bfind[.shiftamt].u32 dst, src;` — bit position / shift amount.
+    Bfind { op: BfindOp, dst: u32, src: Operand },
+    /// `div/rem.u32 dst, src, divisor;` with a nonzero immediate divisor.
+    DivRem {
+        op: DivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: u32,
+    },
+    /// `mad24.{lo,hi}.{u32,s32} dst, a, b, c;` — 24-bit multiply plus addend.
+    Mad24 {
+        op: Mad24Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `mul24.{lo,hi}.{u32,s32} dst, a, b;` — 24-bit multiply.
+    Mul24 {
+        op: Mul24Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// `mul.wide.{u32,s32}` through a scratch b64 register, low 32 bits kept.
+    MulWide {
+        op: MulWideOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// 64-bit integer ALU through scratch b64 registers, low 32 bits kept.
+    WideInt {
+        op: WideIntOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// `add/sub.cc.u32` followed by `addc/subc.u32`, keeping carry dataflow explicit.
+    AddCarry {
+        op: AddCarryOp,
+        dst_lo: u32,
+        dst_hi: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+    },
+    /// `sad.u32 dst, a, b, c;` — unsigned sum of absolute difference.
+    Sad {
+        op: SadOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `slct.u32.s32 dst, a, b, c;` — select `a` or `b` from signed `c`.
+    Slct {
+        op: SlctOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `dp4a.{u32,s32}.{u32,s32} dst, a, b, c;` — 4-byte dot product.
+    Dp4a {
+        op: Dp4aOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `dp2a.{lo,hi}.{u32,s32}.{u32,s32} dst, a, b, c;` — 2-lane dot product.
+    Dp2a {
+        op: Dp2aOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Two-/four-lane unsigned video arithmetic with an accumulator.
+    Video {
+        op: VideoOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `mad.lo.u32 dst, a, b, c;` — (a*b + c) low 32 bits. Heavy optimizer
+    /// fold target (mul+add → mad).
+    Mad {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `lop3.b32 dst, a, b, c, imm;` — 3-input logical op via 8-bit truth
+    /// table. The optimizer canonicalizes many boolean lattices through lop3.
+    Lop3 {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        imm: u8,
+    },
+    /// `prmt.b32 dst, a, b, ctrl;` — byte permute. Each nibble of `ctrl`
+    /// (low 16 bits) selects one byte from the 8 source bytes (a|b<<32).
+    /// All u32 ctrl values are well-defined.
+    Prmt {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        ctrl: u32,
+    },
+    /// `shf.{l,r}.wrap.b32 dst, a, b, amount;` — funnel shift. `.wrap`
+    /// masks `amount` to 5 bits → safe for any input.
+    Funnel {
+        dir: FunnelDir,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        amount: u32,
+    },
+    /// `bfe.u32 dst, src, pos, len;` — extract `len` bits from `src` at
+    /// position `pos`. PTX masks pos/len mod 32 → safe.
+    Bfe {
+        op: BfeOp,
+        dst: u32,
+        src: Operand,
+        pos: u32,
+        len: u32,
+    },
+    /// `bfi.b32 dst, src, base, pos, len;` — insert low `len` bits of `src`
+    /// into `base` starting at `pos`. PTX masks pos/len mod 32 → safe.
+    Bfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        pos: u32,
+        len: u32,
+    },
+    /// `bmsk.clamp.b32 dst, pos, len;` — create a clamped bit mask.
+    Bmsk { dst: u32, pos: u32, len: u32 },
 }
 
 enum Term {
     Branch(usize),
-    CondBranch { cmp: CmpOp, a: Operand, b: Operand, pred: u32, t: usize, f: usize },
+    CondBranch {
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+        t: usize,
+        f: usize,
+    },
     /// `if ctr == 0: bra fwd; else: ctr -= 1; bra back;`
-    Loop { ctr: u32, pred: u32, back: usize, fwd: usize },
+    Loop {
+        ctr: u32,
+        pred: u32,
+        back: usize,
+        fwd: usize,
+    },
     Return,
 }
 
-struct Block { insts: Vec<Inst>, term: Term }
+struct Block {
+    insts: Vec<Inst>,
+    term: Term,
+}
+
+enum StructuredStmt {
+    Basic(Vec<Inst>),
+    IfElse {
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+        then_body: Vec<StructuredStmt>,
+        else_body: Vec<StructuredStmt>,
+    },
+    Loop {
+        ctr: u32,
+        pred: u32,
+        body: Vec<StructuredStmt>,
+    },
+}
 
 struct Generator<'a> {
     cfg: &'a GenConfig,
@@ -247,12 +932,24 @@ impl<'a> Generator<'a> {
         id
     }
 
+    fn wide_scratch_hi_reg(&self) -> u32 {
+        self.n_working + 1 + self.counters.len() as u32
+    }
+
     fn build(mut self, u: &mut Unstructured) -> Result<String> {
+        if self.cfg.control_flow == ControlFlowMode::Structured {
+            return self.build_structured(u);
+        }
+
         let min_blocks = self.cfg.min_blocks.max(1);
         let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
         for i in 0..n_blocks {
             let n_insts = u.int_in_range(
-                self.cfg.min_insts_per_block..=self.cfg.max_insts_per_block.max(self.cfg.min_insts_per_block),
+                self.cfg.min_insts_per_block
+                    ..=self
+                        .cfg
+                        .max_insts_per_block
+                        .max(self.cfg.min_insts_per_block),
             )?;
             let mut insts = Vec::with_capacity(n_insts);
             for _ in 0..n_insts {
@@ -268,6 +965,13 @@ impl<'a> Generator<'a> {
         Ok(self.emit())
     }
 
+    fn build_structured(mut self, u: &mut Unstructured) -> Result<String> {
+        let min_blocks = self.cfg.min_blocks.max(1);
+        let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
+        let body = self.gen_structured_seq(u, n_blocks, 0)?;
+        Ok(self.emit_structured(&body))
+    }
+
     fn pick_dst(&mut self, u: &mut Unstructured) -> Result<u32> {
         u.int_in_range(0..=self.n_working - 1)
     }
@@ -277,42 +981,312 @@ impl<'a> Generator<'a> {
         if pick < 192 {
             Ok(Operand::Reg(u.int_in_range(0..=self.n_working - 1)?))
         } else {
-            Ok(Operand::Imm(u.int_in_range(0..=self.cfg.max_immediate)?))
+            Ok(Operand::Imm(pick_imm32(
+                u,
+                self.cfg.max_immediate,
+                self.cfg.emit_i32_boundary_immediates,
+            )?))
         }
     }
 
+    fn pick_bin_operand(&mut self, u: &mut Unstructured, op: BinOp) -> Result<Operand> {
+        let operand = self.pick_operand(u)?;
+        Ok(if op == BinOp::Xor && !self.cfg.emit_not {
+            sanitize_xor_not_operand(operand)
+        } else {
+            operand
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        // ~55% bin, ~15% selp, ~15% shift (imm amount), ~15% unary
+        // Distribution (out of 256). Lop3 gets disproportionate weight because
+        // it's both novel coverage and the biggest constant-folding hotspot in
+        // the optimizer; mul/bfe/bfi/prmt/shf are smaller but each adds a
+        // distinct lowering path.
+        //   0..90    (35%) Bin
+        //   90..115  (10%) Sel/Set
+        //   115..140 (10%) Shift (immediate amount)
+        //   140..160 ( 8%) Unary
+        //   160..200 (16%) Lop3, or Mad when explicit Lop3 generation is off
+        //   200..215 ( 6%) Prmt
+        //   215..225 ( 4%) Funnel
+        //   225..235 ( 4%) Bfe/Bmsk
+        //   235..245 ( 4%) Bfi
+        //   245..248 ( 1%) Cvt
+        //   248..251 ( 1%) Bfind, or Mad24 when Bfind generation is off
+        //   251..253 ( 1%) DivRem/MulWide/WideInt
+        //   253..254 (<1%) Sad/Video
+        //   254..255 (<1%) Slct
+        //   255..256 (<1%) Dp4a/Dp2a
         let pick: u8 = u.arbitrary()?;
-        if pick < 140 {
+        if pick < 90 {
+            let op = pick_binop(
+                u,
+                self.cfg.emit_minmax,
+                self.cfg.emit_sub,
+                self.cfg.emit_mulhi,
+                self.cfg.emit_signed_mulhi,
+                self.cfg.emit_bitwise_binops,
+            )?;
             Ok(Inst::Bin {
-                op: pick_binop(u)?,
+                op,
                 dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
+                a: self.pick_bin_operand(u, op)?,
+                b: self.pick_bin_operand(u, op)?,
             })
-        } else if pick < 178 {
-            Ok(Inst::Sel {
-                dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
-                cmp: pick_cmp(u)?,
-                ca: self.pick_operand(u)?,
-                cb: self.pick_operand(u)?,
-                pred: self.alloc_pred(),
-            })
-        } else if pick < 216 {
+        } else if pick < 115 {
+            if self.cfg.emit_set && u.arbitrary::<bool>()? {
+                Ok(Inst::Set {
+                    dst: self.pick_dst(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                })
+            } else {
+                Ok(Inst::Sel {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            }
+        } else if pick < 140 {
             Ok(Inst::Shift {
-                op: pick_shift(u)?,
+                op: pick_shift(u, self.cfg.emit_shl, self.cfg.emit_signed_shr)?,
                 dst: self.pick_dst(u)?,
                 src: self.pick_operand(u)?,
                 amount: u.int_in_range(0..=31)?,
             })
-        } else {
+        } else if pick < 160 {
             Ok(Inst::Unary {
-                op: pick_unary(u)?,
+                op: pick_unary(
+                    u,
+                    self.cfg.emit_not,
+                    self.cfg.emit_clz,
+                    self.cfg.emit_neg,
+                    self.cfg.emit_cnot,
+                    self.cfg.emit_abs,
+                )?,
                 dst: self.pick_dst(u)?,
                 src: self.pick_operand(u)?,
+            })
+        } else if pick < 200 {
+            if self.cfg.emit_lop3 {
+                Ok(Inst::Lop3 {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    imm: u.arbitrary()?,
+                })
+            } else {
+                Ok(Inst::Mad {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 215 {
+            if self.cfg.emit_prmt {
+                Ok(Inst::Prmt {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    ctrl: u.int_in_range(0..=0xFFFF)?,
+                })
+            } else {
+                Ok(Inst::Mad {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 225 {
+            if self.cfg.emit_funnel {
+                Ok(Inst::Funnel {
+                    dir: if u.arbitrary::<bool>()? {
+                        FunnelDir::Left
+                    } else {
+                        FunnelDir::Right
+                    },
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    amount: u.int_in_range(0..=31)?,
+                })
+            } else {
+                Ok(Inst::Mad {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 235 {
+            if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
+                Ok(Inst::Bmsk {
+                    dst: self.pick_dst(u)?,
+                    pos: u.int_in_range(0..=31)?,
+                    len: u.int_in_range(0..=31)?,
+                })
+            } else {
+                Ok(Inst::Bfe {
+                    op: pick_bfe(u)?,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    pos: u.int_in_range(0..=31)?,
+                    len: u.int_in_range(0..=31)?,
+                })
+            }
+        } else if pick < 245 {
+            if self.cfg.emit_bfi {
+                Ok(Inst::Bfi {
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    base: self.pick_operand(u)?,
+                    pos: u.int_in_range(0..=31)?,
+                    len: u.int_in_range(0..=31)?,
+                })
+            } else {
+                Ok(Inst::Mad {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 248 {
+            Ok(Inst::Cvt {
+                op: pick_cvt(u)?,
+                dst: self.pick_dst(u)?,
+                src: self.pick_operand(u)?,
+            })
+        } else if pick < 251 {
+            if (self.cfg.emit_addc || self.cfg.emit_subc) && u.arbitrary::<bool>()? {
+                Ok(Inst::AddCarry {
+                    op: pick_add_carry(u, self.cfg.emit_addc, self.cfg.emit_subc)?,
+                    dst_lo: self.pick_dst(u)?,
+                    dst_hi: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    d: self.pick_operand(u)?,
+                })
+            } else if self.cfg.emit_bfind {
+                Ok(Inst::Bfind {
+                    op: pick_bfind(u)?,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                })
+            } else if self.cfg.emit_mad24 || self.cfg.emit_mul24 {
+                let emit_mul24 = if self.cfg.emit_mad24 && self.cfg.emit_mul24 {
+                    u.arbitrary::<bool>()?
+                } else {
+                    self.cfg.emit_mul24
+                };
+                if emit_mul24 {
+                    Ok(Inst::Mul24 {
+                        op: pick_mul24(u)?,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                    })
+                } else {
+                    Ok(Inst::Mad24 {
+                        op: pick_mad24(u)?,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                    })
+                }
+            } else {
+                Ok(Inst::Mad {
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 253 {
+            let wide_pick: u8 = u.int_in_range(0..=2)?;
+            if self.cfg.emit_wide_int && wide_pick == 0 {
+                Ok(Inst::WideInt {
+                    op: pick_wide_int(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                })
+            } else if self.cfg.emit_mul_wide && wide_pick <= 1 {
+                Ok(Inst::MulWide {
+                    op: pick_mul_wide(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                })
+            } else {
+                let op = pick_divrem(u, self.cfg.emit_signed_divrem)?;
+                Ok(Inst::DivRem {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    divisor: if op.is_signed() {
+                        pick_signed_divisor_imm32(u, self.cfg.max_immediate)
+                    } else {
+                        pick_nonzero_imm32(
+                            u,
+                            self.cfg.max_immediate,
+                            self.cfg.emit_i32_boundary_immediates,
+                        )
+                    }?,
+                })
+            }
+        } else if pick < 254 {
+            if self.cfg.emit_video && u.arbitrary::<bool>()? {
+                Ok(Inst::Video {
+                    op: pick_video(u, self.cfg.emit_vsub4)?,
+                    dst: self.pick_dst(u)?,
+                    a: Operand::Reg(self.pick_dst(u)?),
+                    b: Operand::Reg(self.pick_dst(u)?),
+                    c: Operand::Reg(self.pick_dst(u)?),
+                })
+            } else {
+                Ok(Inst::Sad {
+                    op: pick_sad(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
+        } else if pick < 255 {
+            Ok(Inst::Slct {
+                op: pick_slct(u, self.cfg.emit_s32_slct)?,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+            })
+        } else if self.cfg.emit_dp2a && u.arbitrary::<bool>()? {
+            Ok(Inst::Dp2a {
+                op: pick_dp2a(u)?,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+            })
+        } else {
+            Ok(Inst::Dp4a {
+                op: pick_dp4a(u)?,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
             })
         }
     }
@@ -323,9 +1297,9 @@ impl<'a> Generator<'a> {
         let fwd_hi = n_blocks - 1;
         if pick < 102 {
             Ok(Term::Branch(u.int_in_range(fwd_lo..=fwd_hi)?))
-        } else if pick < 178 {
+        } else if pick < 178 || !self.cfg.emit_arbitrary_loops {
             Ok(Term::CondBranch {
-                cmp: pick_cmp(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                 a: self.pick_operand(u)?,
                 b: self.pick_operand(u)?,
                 pred: self.alloc_pred(),
@@ -344,10 +1318,94 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn gen_basic(&mut self, u: &mut Unstructured) -> Result<StructuredStmt> {
+        let n_insts = u.int_in_range(
+            self.cfg.min_insts_per_block
+                ..=self
+                    .cfg
+                    .max_insts_per_block
+                    .max(self.cfg.min_insts_per_block),
+        )?;
+        let mut insts = Vec::with_capacity(n_insts);
+        for _ in 0..n_insts {
+            insts.push(self.gen_inst(u)?);
+        }
+        Ok(StructuredStmt::Basic(insts))
+    }
+
+    fn gen_structured_seq(
+        &mut self,
+        u: &mut Unstructured,
+        budget: usize,
+        depth: usize,
+    ) -> Result<Vec<StructuredStmt>> {
+        let mut remaining = budget.max(1);
+        let mut out = Vec::new();
+        while remaining > 0 {
+            let pick: u8 = u.arbitrary()?;
+            let can_nest = depth < self.cfg.max_structured_depth;
+            if can_nest && self.cfg.emit_structured_loops && pick < 64 {
+                let body_budget = u.int_in_range(1..=remaining)?;
+                let init = u.int_in_range(0..=self.cfg.max_loop_iters)?;
+                let ctr = self.alloc_counter(init);
+                let pred = self.alloc_pred();
+                let body = self.gen_structured_seq(u, body_budget, depth + 1)?;
+                out.push(StructuredStmt::Loop { ctr, pred, body });
+                remaining -= body_budget;
+            } else if can_nest && pick < 128 && remaining >= 2 {
+                let total_budget = u.int_in_range(2..=remaining)?;
+                let then_budget = u.int_in_range(1..=total_budget - 1)?;
+                let else_budget = total_budget - then_budget;
+                out.push(StructuredStmt::IfElse {
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    pred: self.alloc_pred(),
+                    then_body: self.gen_structured_seq(u, then_budget, depth + 1)?,
+                    else_body: self.gen_structured_seq(u, else_budget, depth + 1)?,
+                });
+                remaining -= total_budget;
+            } else {
+                out.push(self.gen_basic(u)?);
+                remaining -= 1;
+            }
+        }
+        Ok(out)
+    }
+
     fn emit(&self) -> String {
         let mut s = String::with_capacity(4096);
+        self.emit_prologue(&mut s);
+        writeln!(s, "    bra             block_0;").unwrap();
+        writeln!(s).unwrap();
+
+        for (i, blk) in self.blocks.iter().enumerate() {
+            writeln!(s, "block_{i}:").unwrap();
+            for inst in &blk.insts {
+                self.emit_inst(&mut s, inst);
+            }
+            self.emit_terminator(&mut s, &blk.term);
+            writeln!(s).unwrap();
+        }
+
+        self.emit_epilogue(&mut s);
+        s
+    }
+
+    fn emit_structured(&self, body: &[StructuredStmt]) -> String {
+        let mut s = String::with_capacity(4096);
+        let mut next_label = 0u32;
+        self.emit_prologue(&mut s);
+        self.emit_structured_seq(&mut s, body, &mut next_label);
+        writeln!(s, "    bra             exit;").unwrap();
+        writeln!(s).unwrap();
+        self.emit_epilogue(&mut s);
+        s
+    }
+
+    fn emit_prologue(&self, s: &mut String) {
         let tid_reg = self.tid_reg();
-        let total_regs = (self.n_working + 1 + self.counters.len() as u32).max(1);
+        let total_regs = (self.wide_scratch_hi_reg() + 1).max(1);
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -393,30 +1451,79 @@ impl<'a> Generator<'a> {
             writeln!(s, "    mov.u32         %r{reg}, {init};").unwrap();
         }
         writeln!(s).unwrap();
-        writeln!(s, "    bra             block_0;").unwrap();
-        writeln!(s).unwrap();
+    }
 
-        for (i, blk) in self.blocks.iter().enumerate() {
-            writeln!(s, "block_{i}:").unwrap();
-            for inst in &blk.insts {
-                self.emit_inst(&mut s, inst);
-            }
-            self.emit_terminator(&mut s, &blk.term);
-            writeln!(s).unwrap();
-        }
+    fn emit_epilogue(&self, s: &mut String) {
+        let tid_reg = self.tid_reg();
 
         // Epilogue: store output regs to out[tid * N_OUTPUTS * 4 ..]. Uses the
         // reserved tid reg, NOT %r1 (which the body is free to clobber).
         writeln!(s, "exit:").unwrap();
         writeln!(s, "    cvta.to.global.u64 %rd4, %rd1;").unwrap();
-        writeln!(s, "    mul.wide.u32    %rd5, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+        writeln!(
+            s,
+            "    mul.wide.u32    %rd5, %r{tid_reg}, {};",
+            N_OUTPUTS * 4
+        )
+        .unwrap();
         writeln!(s, "    add.s64         %rd4, %rd4, %rd5;").unwrap();
         for k in 0..N_OUTPUTS {
             writeln!(s, "    st.global.u32   [%rd4 + {}], %r{k};", k * 4).unwrap();
         }
         writeln!(s, "    ret;").unwrap();
         writeln!(s, "}}").unwrap();
-        s
+    }
+
+    fn emit_structured_seq(&self, s: &mut String, body: &[StructuredStmt], next_label: &mut u32) {
+        for stmt in body {
+            self.emit_structured_stmt(s, stmt, next_label);
+        }
+    }
+
+    fn emit_structured_stmt(&self, s: &mut String, stmt: &StructuredStmt, next_label: &mut u32) {
+        match stmt {
+            StructuredStmt::Basic(insts) => {
+                for inst in insts {
+                    self.emit_inst(s, inst);
+                }
+            }
+            StructuredStmt::IfElse {
+                cmp,
+                a,
+                b,
+                pred,
+                then_body,
+                else_body,
+            } => {
+                let id = *next_label;
+                *next_label += 1;
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    @%p{pred} bra   structured_if_{id}_then;").unwrap();
+                writeln!(s, "    bra             structured_if_{id}_else;").unwrap();
+                writeln!(s, "structured_if_{id}_then:").unwrap();
+                self.emit_structured_seq(s, then_body, next_label);
+                writeln!(s, "    bra             structured_if_{id}_done;").unwrap();
+                writeln!(s, "structured_if_{id}_else:").unwrap();
+                self.emit_structured_seq(s, else_body, next_label);
+                writeln!(s, "    bra             structured_if_{id}_done;").unwrap();
+                writeln!(s, "structured_if_{id}_done:").unwrap();
+            }
+            StructuredStmt::Loop { ctr, pred, body } => {
+                let id = *next_label;
+                *next_label += 1;
+                writeln!(s, "structured_loop_{id}_header:").unwrap();
+                writeln!(s, "    setp.eq.u32   %p{pred}, %r{ctr}, 0;").unwrap();
+                writeln!(s, "    @%p{pred} bra   structured_loop_{id}_done;").unwrap();
+                writeln!(s, "    sub.u32         %r{ctr}, %r{ctr}, 1;").unwrap();
+                self.emit_structured_seq(s, body, next_label);
+                writeln!(s, "    bra             structured_loop_{id}_header;").unwrap();
+                writeln!(s, "structured_loop_{id}_done:").unwrap();
+            }
+        }
     }
 
     fn emit_inst(&self, s: &mut String, inst: &Inst) {
@@ -428,7 +1535,15 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
             }
-            Inst::Sel { dst, a, b, cmp, ca, cb, pred } => {
+            Inst::Sel {
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
                 write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
                 ca.emit(s);
                 write!(s, ", ").unwrap();
@@ -440,7 +1555,19 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ", %p{pred};").unwrap();
             }
-            Inst::Shift { op, dst, src, amount } => {
+            Inst::Set { dst, cmp, a, b } => {
+                write!(s, "    {:<17} %r{dst}, ", cmp.set_mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Shift {
+                op,
+                dst,
+                src,
+                amount,
+            } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {amount};").unwrap();
@@ -450,6 +1577,196 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::Cvt { op, dst, src } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Bfind { op, dst, src } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::DivRem {
+                op,
+                dst,
+                src,
+                divisor,
+            } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", {divisor};").unwrap();
+            }
+            Inst::Mad24 { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Mul24 { op, dst, a, b } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::MulWide { op, dst, a, b } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::WideInt { op, dst, a, b } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd6, %rd7;", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::AddCarry {
+                op,
+                dst_lo,
+                dst_hi,
+                a,
+                b,
+                c,
+                d,
+            } => {
+                let (first, second) = match op {
+                    AddCarryOp::Add => ("add.cc.u32", "addc.u32"),
+                    AddCarryOp::Sub => ("sub.cc.u32", "subc.u32"),
+                };
+                write!(s, "    {first:<13} %r{dst_lo}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {second:<13} %r{dst_hi}, ").unwrap();
+                c.emit(s);
+                write!(s, ", ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Sad { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Slct { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Dp4a { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Dp2a { op, dst, a, b, c } => {
+                write!(s, "    {:<17} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Video { op, dst, a, b, c } => {
+                write!(s, "    {:<24} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Mad { dst, a, b, c } => {
+                write!(s, "    mad.lo.u32    %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Lop3 { dst, a, b, c, imm } => {
+                write!(s, "    lop3.b32      %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ", 0x{imm:02x};").unwrap();
+            }
+            Inst::Prmt { dst, a, b, ctrl } => {
+                write!(s, "    prmt.b32      %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ", 0x{ctrl:x};").unwrap();
+            }
+            Inst::Funnel {
+                dir,
+                dst,
+                a,
+                b,
+                amount,
+            } => {
+                write!(s, "    {:<13} %r{dst}, ", dir.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ", {amount};").unwrap();
+            }
+            Inst::Bfe {
+                op,
+                dst,
+                src,
+                pos,
+                len,
+            } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", {pos}, {len};").unwrap();
+            }
+            Inst::Bfi {
+                dst,
+                src,
+                base,
+                pos,
+                len,
+            } => {
+                write!(s, "    bfi.b32       %r{dst}, ").unwrap();
+                src.emit(s);
+                write!(s, ", ").unwrap();
+                base.emit(s);
+                writeln!(s, ", {pos}, {len};").unwrap();
+            }
+            Inst::Bmsk { dst, pos, len } => {
+                writeln!(s, "    bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
+            }
         }
     }
 
@@ -458,7 +1775,14 @@ impl<'a> Generator<'a> {
             Term::Branch(tgt) => {
                 writeln!(s, "    bra             block_{tgt};").unwrap();
             }
-            Term::CondBranch { cmp, a, b, pred, t: tt, f: ff } => {
+            Term::CondBranch {
+                cmp,
+                a,
+                b,
+                pred,
+                t: tt,
+                f: ff,
+            } => {
                 write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
@@ -467,7 +1791,12 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    @%p{pred} bra   block_{tt};").unwrap();
                 writeln!(s, "    bra             block_{ff};").unwrap();
             }
-            Term::Loop { ctr, pred, back, fwd } => {
+            Term::Loop {
+                ctr,
+                pred,
+                back,
+                fwd,
+            } => {
                 writeln!(s, "    setp.eq.u32   %p{pred}, %r{ctr}, 0;").unwrap();
                 writeln!(s, "    @%p{pred} bra   loop_done_{ctr};").unwrap();
                 writeln!(s, "    sub.u32         %r{ctr}, %r{ctr}, 1;").unwrap();
@@ -482,32 +1811,379 @@ impl<'a> Generator<'a> {
     }
 }
 
-fn pick_binop(u: &mut Unstructured) -> Result<BinOp> {
+fn pick_binop(
+    u: &mut Unstructured,
+    emit_minmax: bool,
+    emit_sub: bool,
+    emit_mulhi: bool,
+    emit_signed_mulhi: bool,
+    emit_bitwise_binops: bool,
+) -> Result<BinOp> {
+    let mut ops = vec![BinOp::Add, BinOp::Mul];
+    if emit_sub {
+        ops.push(BinOp::Sub);
+    }
+    if emit_bitwise_binops {
+        ops.extend([BinOp::And, BinOp::Or, BinOp::Xor]);
+    }
+    if emit_mulhi {
+        ops.push(BinOp::MulHi);
+        if emit_signed_mulhi {
+            ops.push(BinOp::MulHiS);
+        }
+    }
+    if emit_minmax {
+        ops.extend([BinOp::Min, BinOp::Max, BinOp::MinS, BinOp::MaxS]);
+    }
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
+    let ops_with_signed = [
+        CmpOp::Eq,
+        CmpOp::Ne,
+        CmpOp::Lt,
+        CmpOp::Le,
+        CmpOp::Gt,
+        CmpOp::Ge,
+        CmpOp::LtS,
+        CmpOp::LeS,
+        CmpOp::GtS,
+        CmpOp::GeS,
+    ];
+    let ops_without_signed = [
+        CmpOp::Eq,
+        CmpOp::Ne,
+        CmpOp::Lt,
+        CmpOp::Le,
+        CmpOp::Gt,
+        CmpOp::Ge,
+    ];
+    let ops: &[CmpOp] = if emit_signed_cmp {
+        &ops_with_signed
+    } else {
+        &ops_without_signed
+    };
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_shift(u: &mut Unstructured, emit_shl: bool, emit_signed_shr: bool) -> Result<ShiftOp> {
+    let ops_all = [ShiftOp::Shl, ShiftOp::Shr, ShiftOp::ShrS];
+    let ops_no_signed_shr = [ShiftOp::Shl, ShiftOp::Shr];
+    let ops_no_shl = [ShiftOp::Shr, ShiftOp::ShrS];
+    let ops_unsigned_shr_only = [ShiftOp::Shr];
+    let ops: &[ShiftOp] = match (emit_shl, emit_signed_shr) {
+        (true, true) => &ops_all,
+        (true, false) => &ops_no_signed_shr,
+        (false, true) => &ops_no_shl,
+        (false, false) => &ops_unsigned_shr_only,
+    };
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_unary(
+    u: &mut Unstructured,
+    emit_not: bool,
+    emit_clz: bool,
+    emit_neg: bool,
+    emit_cnot: bool,
+    emit_abs: bool,
+) -> Result<UnaryOp> {
+    let ops_all = [
+        UnaryOp::Not,
+        UnaryOp::Cnot,
+        UnaryOp::Popc,
+        UnaryOp::Clz,
+        UnaryOp::Brev,
+        UnaryOp::AbsS,
+        UnaryOp::NegS,
+    ];
+    let ops = ops_all
+        .into_iter()
+        .filter(|op| match op {
+            UnaryOp::Not => emit_not,
+            UnaryOp::NegS => emit_neg,
+            UnaryOp::Cnot => emit_cnot,
+            UnaryOp::AbsS => emit_abs,
+            UnaryOp::Clz => emit_clz,
+            UnaryOp::Popc | UnaryOp::Brev => true,
+        })
+        .collect::<Vec<_>>();
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_cvt(u: &mut Unstructured) -> Result<CvtOp> {
     let ops = [
-        BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::MulHi,
-        BinOp::And, BinOp::Or, BinOp::Xor, BinOp::Min, BinOp::Max,
+        CvtOp::U8ToU32,
+        CvtOp::U16ToU32,
+        CvtOp::U8ToS32,
+        CvtOp::U16ToS32,
+        CvtOp::S8ToU32,
+        CvtOp::S16ToU32,
+        CvtOp::S8ToS32,
+        CvtOp::S16ToS32,
     ];
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_cmp(u: &mut Unstructured) -> Result<CmpOp> {
-    let ops = [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge];
+fn pick_bfind(u: &mut Unstructured) -> Result<BfindOp> {
+    let ops = [BfindOp::Position, BfindOp::ShiftAmount];
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_shift(u: &mut Unstructured) -> Result<ShiftOp> {
-    let ops = [ShiftOp::Shl, ShiftOp::Shr];
+fn pick_bfe(u: &mut Unstructured) -> Result<BfeOp> {
+    let ops = [BfeOp::U32, BfeOp::S32];
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_unary(u: &mut Unstructured) -> Result<UnaryOp> {
-    let ops = [UnaryOp::Not, UnaryOp::Popc, UnaryOp::Clz, UnaryOp::Brev];
+fn pick_mad24(u: &mut Unstructured) -> Result<Mad24Op> {
+    let ops = [
+        Mad24Op::LoU32,
+        Mad24Op::HiU32,
+        Mad24Op::LoS32,
+        Mad24Op::HiS32,
+    ];
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_mul24(u: &mut Unstructured) -> Result<Mul24Op> {
+    let ops = [
+        Mul24Op::LoU32,
+        Mul24Op::HiU32,
+        Mul24Op::LoS32,
+        Mul24Op::HiS32,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_mul_wide(u: &mut Unstructured) -> Result<MulWideOp> {
+    let ops = [MulWideOp::U32, MulWideOp::S32];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_wide_int(u: &mut Unstructured) -> Result<WideIntOp> {
+    let ops = [
+        WideIntOp::AddU64,
+        WideIntOp::SubU64,
+        WideIntOp::MulLoU64,
+        WideIntOp::AddS64,
+        WideIntOp::SubS64,
+        WideIntOp::MulLoS64,
+        WideIntOp::AndB64,
+        WideIntOp::OrB64,
+        WideIntOp::XorB64,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_add_carry(u: &mut Unstructured, emit_addc: bool, emit_subc: bool) -> Result<AddCarryOp> {
+    let ops: &[AddCarryOp] = match (emit_addc, emit_subc) {
+        (true, true) => &[AddCarryOp::Add, AddCarryOp::Sub],
+        (true, false) => &[AddCarryOp::Add],
+        (false, true) => &[AddCarryOp::Sub],
+        (false, false) => unreachable!(),
+    };
+    Ok(*u.choose(ops)?)
+}
+
+fn pick_dp4a(u: &mut Unstructured) -> Result<Dp4aOp> {
+    let ops = [
+        Dp4aOp::U32U32,
+        Dp4aOp::U32S32,
+        Dp4aOp::S32U32,
+        Dp4aOp::S32S32,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_dp2a(u: &mut Unstructured) -> Result<Dp2aOp> {
+    let ops = [
+        Dp2aOp::LoU32U32,
+        Dp2aOp::HiU32U32,
+        Dp2aOp::LoU32S32,
+        Dp2aOp::HiU32S32,
+        Dp2aOp::LoS32U32,
+        Dp2aOp::HiS32U32,
+        Dp2aOp::LoS32S32,
+        Dp2aOp::HiS32S32,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_sad(u: &mut Unstructured) -> Result<SadOp> {
+    let ops = [SadOp::U32, SadOp::S32];
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_slct(u: &mut Unstructured, emit_s32_slct: bool) -> Result<SlctOp> {
+    let ops: &[SlctOp] = if emit_s32_slct {
+        &[SlctOp::U32S32, SlctOp::S32S32, SlctOp::B32S32]
+    } else {
+        &[SlctOp::U32S32, SlctOp::B32S32]
+    };
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_video(u: &mut Unstructured, emit_vsub4: bool) -> Result<VideoOp> {
+    const OPS_WITH_VSUB4: &[VideoOp] = &[
+        VideoOp::Add2,
+        VideoOp::Sub2,
+        VideoOp::Avrg2,
+        VideoOp::Avrg2Add,
+        VideoOp::AbsDiff2Add,
+        VideoOp::Min2,
+        VideoOp::Min2Add,
+        VideoOp::Max2,
+        VideoOp::Max2Add,
+        VideoOp::Add4,
+        VideoOp::Sub4,
+        VideoOp::Avrg4,
+        VideoOp::Avrg4Add,
+        VideoOp::AbsDiff4Add,
+        VideoOp::Min4,
+        VideoOp::Min4Add,
+        VideoOp::Max4,
+        VideoOp::Max4Add,
+    ];
+    const OPS_WITHOUT_VSUB4: &[VideoOp] = &[
+        VideoOp::Add2,
+        VideoOp::Sub2,
+        VideoOp::Avrg2,
+        VideoOp::Avrg2Add,
+        VideoOp::AbsDiff2Add,
+        VideoOp::Min2,
+        VideoOp::Min2Add,
+        VideoOp::Max2,
+        VideoOp::Max2Add,
+        VideoOp::Add4,
+        VideoOp::Avrg4,
+        VideoOp::Avrg4Add,
+        VideoOp::AbsDiff4Add,
+        VideoOp::Min4,
+        VideoOp::Min4Add,
+        VideoOp::Max4,
+        VideoOp::Max4Add,
+    ];
+    let ops = if emit_vsub4 {
+        OPS_WITH_VSUB4
+    } else {
+        OPS_WITHOUT_VSUB4
+    };
+    Ok(*u.choose(ops)?)
+}
+
+fn pick_divrem(u: &mut Unstructured, emit_signed_divrem: bool) -> Result<DivRemOp> {
+    let ops_all = [
+        DivRemOp::DivU,
+        DivRemOp::RemU,
+        DivRemOp::DivS,
+        DivRemOp::RemS,
+    ];
+    let ops_unsigned = [DivRemOp::DivU, DivRemOp::RemU];
+    let ops: &[DivRemOp] = if emit_signed_divrem {
+        &ops_all
+    } else {
+        &ops_unsigned
+    };
+    Ok(*u.choose(&ops)?)
+}
+
+/// Pick a u32 immediate with a weighted distribution that favors small values
+/// (for arithmetic legibility) while still hitting the corner cases the
+/// constant-folder cares about: 0, INT_MIN, INT_MAX, 0xFFFFFFFF, powers of
+/// two. `max_small` caps the uniform-small bucket.
+fn sanitize_imm32(v: u32, max_small: u32, emit_i32_boundary_immediates: bool) -> u32 {
+    if !emit_i32_boundary_immediates && matches!(v, 0x7FFF_FFFF | 0x8000_0000) {
+        max_small.min(0x7FFF_FFFE)
+    } else {
+        v
+    }
+}
+
+fn pick_imm32(
+    u: &mut Unstructured,
+    max_small: u32,
+    emit_i32_boundary_immediates: bool,
+) -> Result<u32> {
+    let pick: u8 = u.arbitrary()?;
+    if pick < 154 {
+        // 60% small uniform
+        Ok(sanitize_imm32(
+            u.int_in_range(0..=max_small)?,
+            max_small,
+            emit_i32_boundary_immediates,
+        ))
+    } else if pick < 205 {
+        // 20% power of two (1, 2, 4, ..., 0x80000000)
+        let shift: u8 = u.int_in_range(0..=31)?;
+        Ok(sanitize_imm32(
+            1u32 << shift,
+            max_small,
+            emit_i32_boundary_immediates,
+        ))
+    } else if pick < 230 {
+        // 10% specials: corner cases for constant folding & sign-extension
+        let specials_with_boundaries = [
+            0u32,
+            1,
+            0xFFFF_FFFF, // -1 / UINT_MAX
+            0x8000_0000, // INT_MIN
+            0x7FFF_FFFF, // INT_MAX
+            0xAAAA_AAAA, // alternating bits
+            0x5555_5555,
+            0x0000_FFFF,
+            0xFFFF_0000,
+            0xFF00_FF00,
+            0x0F0F_0F0F,
+        ];
+        let specials_without_boundaries = [
+            0u32,
+            1,
+            0xFFFF_FFFF, // -1 / UINT_MAX
+            0xAAAA_AAAA, // alternating bits
+            0x5555_5555,
+            0x0000_FFFF,
+            0xFFFF_0000,
+            0xFF00_FF00,
+            0x0F0F_0F0F,
+        ];
+        if emit_i32_boundary_immediates {
+            Ok(*u.choose(&specials_with_boundaries)?)
+        } else {
+            Ok(*u.choose(&specials_without_boundaries)?)
+        }
+    } else {
+        // 10% arbitrary
+        Ok(sanitize_imm32(
+            u.arbitrary()?,
+            max_small,
+            emit_i32_boundary_immediates,
+        ))
+    }
+}
+
+fn pick_nonzero_imm32(
+    u: &mut Unstructured,
+    max_small: u32,
+    emit_i32_boundary_immediates: bool,
+) -> Result<u32> {
+    Ok(pick_imm32(u, max_small, emit_i32_boundary_immediates)?.max(1))
+}
+
+fn pick_signed_divisor_imm32(u: &mut Unstructured, max_small: u32) -> Result<u32> {
+    let upper = max_small.max(2);
+    u.int_in_range(2..=upper)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn has_mnemonic(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(|line| line.trim_start().split_whitespace().next())
+            .any(|token| token == mnemonic)
+    }
 
     #[test]
     fn empty_bytes_does_not_panic() {
@@ -535,5 +2211,1198 @@ mod tests {
         assert!(ptx.contains("ret;"));
         assert!(ptx.contains("ld.param.u64"));
         assert!(ptx.contains("st.global.u32"));
+    }
+
+    #[test]
+    fn structured_mode_does_not_emit_arbitrary_block_graph() {
+        let bytes = bytes_from_seed(0x1234, 4096);
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Structured,
+            ..GenConfig::default()
+        };
+        let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+        assert!(!ptx.contains("block_"));
+        assert!(ptx.contains("bra             exit;"));
+    }
+
+    #[test]
+    fn structured_depth_zero_emits_only_basic_sequence() {
+        let bytes = bytes_from_seed(0x1234, 4096);
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Structured,
+            max_structured_depth: 0,
+            ..GenConfig::default()
+        };
+        let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+        assert!(!ptx.contains("structured_loop_"));
+        assert!(!ptx.contains("structured_if_"));
+        assert!(ptx.contains("bra             exit;"));
+    }
+
+    #[test]
+    fn structured_loop_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Structured,
+            emit_structured_loops: false,
+            ..GenConfig::default()
+        };
+
+        let mut saw_if = false;
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("structured_loop_"),
+                "seed {seed:x} emitted structured loop"
+            );
+            saw_if |= ptx.contains("structured_if_");
+        }
+        assert!(
+            saw_if,
+            "structured if/else coverage was unexpectedly absent"
+        );
+    }
+
+    #[test]
+    fn arbitrary_loop_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            emit_arbitrary_loops: false,
+            ..GenConfig::default()
+        };
+
+        let mut saw_conditional_branch = false;
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("loop_done_"),
+                "seed {seed:x} emitted arbitrary backedge loop"
+            );
+            saw_conditional_branch |= ptx.contains("@%p");
+        }
+        assert!(
+            saw_conditional_branch,
+            "arbitrary conditional branch coverage was unexpectedly absent"
+        );
+    }
+
+    #[test]
+    fn lop3_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("lop3.b32"), "seed {seed:x} emitted lop3");
+        }
+    }
+
+    #[test]
+    fn minmax_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_minmax: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["min.u32", "max.u32", "min.s32", "max.s32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn sub_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_sub: false,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("sub.u32"), "seed {seed:x} emitted sub.u32");
+        }
+    }
+
+    #[test]
+    fn mulhi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mulhi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["mul.hi.u32", "mul.hi.s32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_mulhi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_mulhi: false,
+            ..GenConfig::default()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("mul.hi.s32"),
+                "seed {seed:x} emitted mul.hi.s32"
+            );
+            saw_unsigned |= ptx.contains("mul.hi.u32");
+        }
+        assert!(saw_unsigned, "sample did not retain mul.hi.u32 coverage");
+    }
+
+    #[test]
+    fn bitwise_binop_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bitwise_binops: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["and.b32", "or.b32", "xor.b32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn prmt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_prmt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("prmt.b32"), "seed {seed:x} emitted prmt");
+        }
+    }
+
+    #[test]
+    fn not_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_not: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.lines()
+                    .any(|line| line.trim_start().starts_with("not.b32")),
+                "seed {seed:x} emitted not.b32"
+            );
+            assert!(
+                !ptx.lines().any(|line| {
+                    let line = line.trim_start();
+                    line.starts_with("xor.b32") && line.contains("4294967295")
+                }),
+                "seed {seed:x} emitted xor.b32 with 0xffffffff"
+            );
+        }
+    }
+
+    #[test]
+    fn not_suppression_sanitizes_xor_all_ones() {
+        assert_eq!(
+            sanitize_xor_not_operand(Operand::Imm(0xFFFF_FFFF)),
+            Operand::Imm(0xFFFF_FFFE)
+        );
+        assert_eq!(
+            sanitize_xor_not_operand(Operand::Imm(0xFFFF_FFFD)),
+            Operand::Imm(0xFFFF_FFFD)
+        );
+        assert_eq!(sanitize_xor_not_operand(Operand::Reg(3)), Operand::Reg(3));
+    }
+
+    #[test]
+    fn clz_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_clz: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("clz.b32"), "seed {seed:x} emitted clz.b32");
+        }
+    }
+
+    #[test]
+    fn cnot_generation_is_reachable() {
+        let mut saw_cnot = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("cnot.b32") {
+                saw_cnot = true;
+                break;
+            }
+        }
+        assert!(saw_cnot, "no seed in sample emitted cnot.b32");
+    }
+
+    #[test]
+    fn cnot_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_cnot: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("cnot.b32"), "seed {seed:x} emitted cnot.b32");
+        }
+    }
+
+    #[test]
+    fn abs_generation_is_reachable() {
+        let mut saw_abs = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("abs.s32") {
+                saw_abs = true;
+                break;
+            }
+        }
+        assert!(saw_abs, "no seed in sample emitted abs.s32");
+    }
+
+    #[test]
+    fn abs_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_abs: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("abs.s32"), "seed {seed:x} emitted abs.s32");
+        }
+    }
+
+    #[test]
+    fn neg_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_neg: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("neg.s32"), "seed {seed:x} emitted neg.s32");
+        }
+    }
+
+    #[test]
+    fn shl_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shl: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("shl.b32"), "seed {seed:x} emitted shl.b32");
+        }
+    }
+
+    #[test]
+    fn signed_shr_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_shr: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("shr.s32"), "seed {seed:x} emitted shr.s32");
+        }
+    }
+
+    #[test]
+    fn bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["bfind.u32", "bfind.shiftamt.u32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn bmsk_generation_is_reachable() {
+        let mut saw_bmsk = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("bmsk.clamp.b32") {
+                saw_bmsk = true;
+                break;
+            }
+        }
+        assert!(saw_bmsk, "no seed in sample emitted bmsk.clamp.b32");
+    }
+
+    #[test]
+    fn bmsk_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bmsk: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("bmsk.clamp.b32"),
+                "seed {seed:x} emitted bmsk.clamp.b32"
+            );
+        }
+    }
+
+    #[test]
+    fn bfi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("bfi.b32"), "seed {seed:x} emitted bfi.b32");
+        }
+    }
+
+    #[test]
+    fn bfi_generation_is_reachable() {
+        let mut saw_bfi = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("bfi.b32") {
+                saw_bfi = true;
+                break;
+            }
+        }
+        assert!(saw_bfi, "no seed in sample emitted bfi.b32");
+    }
+
+    #[test]
+    fn bfe_generation_is_reachable() {
+        let mnemonics = ["bfe.u32", "bfe.s32"];
+        let mut found = [false; 2];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn mad24_generation_is_reachable_when_bfind_is_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            ..GenConfig::default()
+        };
+
+        let mnemonics = [
+            "mad24.lo.u32",
+            "mad24.hi.u32",
+            "mad24.lo.s32",
+            "mad24.hi.s32",
+        ];
+        let mut found = [false; 4];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn mad24_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "mad24.lo.u32",
+                "mad24.hi.u32",
+                "mad24.lo.s32",
+                "mad24.hi.s32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn mul24_generation_is_reachable_when_bfind_is_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_mad24: false,
+            ..GenConfig::default()
+        };
+
+        let mnemonics = [
+            "mul24.lo.u32",
+            "mul24.hi.u32",
+            "mul24.lo.s32",
+            "mul24.hi.s32",
+        ];
+        let mut found = [false; 4];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn mul24_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "mul24.lo.u32",
+                "mul24.hi.u32",
+                "mul24.lo.s32",
+                "mul24.hi.s32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn mul_wide_generation_is_reachable() {
+        let mnemonics = ["mul.wide.u32", "mul.wide.s32"];
+        let mut found = [false; 2];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            let mul_wide_u32_count = ptx
+                .lines()
+                .filter(|line| line.trim_start().starts_with("mul.wide.u32"))
+                .count();
+            found[0] |= mul_wide_u32_count > 2; // prologue/epilogue always use two.
+            found[1] |= has_mnemonic(&ptx, mnemonics[1]);
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn mul_wide_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            let mul_wide_u32_count = ptx
+                .lines()
+                .filter(|line| line.trim_start().starts_with("mul.wide.u32"))
+                .count();
+            assert_eq!(
+                mul_wide_u32_count, 2,
+                "seed {seed:x} emitted body mul.wide.u32"
+            );
+            assert!(
+                !ptx.contains("mul.wide.s32"),
+                "seed {seed:x} emitted mul.wide.s32"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_int_generation_is_reachable() {
+        let mnemonics = [
+            "add.u64",
+            "sub.u64",
+            "mul.lo.u64",
+            "add.s64",
+            "sub.s64",
+            "mul.lo.s64",
+            "and.b64",
+            "or.b64",
+            "xor.b64",
+        ];
+        let mut found = [false; 9];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                let count = ptx
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with(mnemonic))
+                    .count();
+                found[i] |= if *mnemonic == "add.s64" {
+                    count > 2 // prologue/epilogue address arithmetic always use two.
+                } else {
+                    count > 0
+                };
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn wide_int_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "add.u64",
+                "sub.u64",
+                "mul.lo.u64",
+                "sub.s64",
+                "mul.lo.s64",
+                "and.b64",
+                "or.b64",
+                "xor.b64",
+            ] {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            let add_s64_count = ptx
+                .lines()
+                .filter(|line| line.trim_start().starts_with("add.s64"))
+                .count();
+            assert_eq!(add_s64_count, 2, "seed {seed:x} emitted body add.s64");
+        }
+    }
+
+    #[test]
+    fn addc_generation_is_reachable() {
+        let mut saw_addc = false;
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("add.cc.u32") && ptx.contains("addc.u32") {
+                saw_addc = true;
+                break;
+            }
+        }
+
+        assert!(saw_addc, "no seed in sample emitted addc");
+    }
+
+    #[test]
+    fn addc_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_addc: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["add.cc.u32", "addc.u32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn subc_generation_is_reachable_when_addc_is_disabled() {
+        let cfg = GenConfig {
+            emit_addc: false,
+            ..GenConfig::default()
+        };
+        let mut saw_subc = false;
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if ptx.contains("sub.cc.u32") && ptx.contains("subc.u32") {
+                saw_subc = true;
+                break;
+            }
+        }
+
+        assert!(saw_subc, "no seed in sample emitted subc");
+    }
+
+    #[test]
+    fn subc_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_subc: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["sub.cc.u32", "subc.u32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn i32_boundary_immediates_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_i32_boundary_immediates: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for imm in ["2147483647", "2147483648"] {
+                assert!(!ptx.contains(imm), "seed {seed:x} emitted {imm}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_cmp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_cmp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "setp.lt.s32",
+                "setp.le.s32",
+                "setp.gt.s32",
+                "setp.ge.s32",
+                "set.lt.u32.s32",
+                "set.le.u32.s32",
+                "set.gt.u32.s32",
+                "set.ge.u32.s32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn cvt_generation_is_reachable() {
+        let mnemonics = [
+            "cvt.u32.u8",
+            "cvt.u32.u16",
+            "cvt.s32.u8",
+            "cvt.s32.u16",
+            "cvt.u32.s8",
+            "cvt.u32.s16",
+            "cvt.s32.s8",
+            "cvt.s32.s16",
+        ];
+        let mut found = [false; 8];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn bfind_generation_is_reachable() {
+        let mut saw_bfind = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("bfind.") {
+                saw_bfind = true;
+                break;
+            }
+        }
+        assert!(saw_bfind, "no seed in sample emitted bfind");
+    }
+
+    #[test]
+    fn divrem_generation_is_reachable_and_nonzero() {
+        let mnemonics = ["div.u32", "rem.u32", "div.s32", "rem.s32"];
+        let mut found = [false; 4];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for line in ptx.lines() {
+                for (i, mnemonic) in mnemonics.iter().enumerate() {
+                    found[i] |= line.trim_start().starts_with(mnemonic);
+                }
+                if line.contains("div.u32") || line.contains("rem.u32") {
+                    assert!(
+                        !line.trim_end().ends_with(", 0;"),
+                        "seed {seed:x} emitted {line}"
+                    );
+                }
+                if line.contains("div.s32") || line.contains("rem.s32") {
+                    assert!(
+                        !line.trim_end().ends_with(", 0;") && !line.trim_end().ends_with(", 1;"),
+                        "seed {seed:x} emitted {line}"
+                    );
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn signed_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["div.s32", "rem.s32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn sad_generation_is_reachable() {
+        let mnemonics = ["sad.u32", "sad.s32"];
+        let mut found = [false; 2];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn slct_generation_is_reachable() {
+        let mnemonics = ["slct.u32.s32", "slct.s32.s32", "slct.b32.s32"];
+        let mut found = [false; 3];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn s32_slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_s32_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("slct.s32.s32"),
+                "seed {seed:x} emitted slct.s32.s32"
+            );
+        }
+    }
+
+    #[test]
+    fn dp4a_generation_is_reachable() {
+        let mnemonics = [
+            "dp4a.u32.u32",
+            "dp4a.u32.s32",
+            "dp4a.s32.u32",
+            "dp4a.s32.s32",
+        ];
+        let mut found = [false; 4];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn dp2a_generation_is_reachable() {
+        let mnemonics = [
+            "dp2a.lo.u32.u32",
+            "dp2a.hi.u32.u32",
+            "dp2a.lo.u32.s32",
+            "dp2a.hi.u32.s32",
+            "dp2a.lo.s32.u32",
+            "dp2a.hi.s32.u32",
+            "dp2a.lo.s32.s32",
+            "dp2a.hi.s32.s32",
+        ];
+        let mut found = [false; 8];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn dp2a_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_dp2a: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "dp2a.lo.u32.u32",
+                "dp2a.hi.u32.u32",
+                "dp2a.lo.u32.s32",
+                "dp2a.hi.u32.s32",
+                "dp2a.lo.s32.u32",
+                "dp2a.hi.s32.u32",
+                "dp2a.lo.s32.s32",
+                "dp2a.hi.s32.s32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn video_generation_is_reachable() {
+        let mnemonics = [
+            "vadd2.u32.u32.u32",
+            "vsub2.u32.u32.u32",
+            "vavrg2.u32.u32.u32",
+            "vavrg2.u32.u32.u32.add",
+            "vabsdiff2.u32.u32.u32.add",
+            "vmin2.u32.u32.u32",
+            "vmin2.u32.u32.u32.add",
+            "vmax2.u32.u32.u32",
+            "vmax2.u32.u32.u32.add",
+            "vadd4.u32.u32.u32",
+            "vsub4.u32.u32.u32",
+            "vavrg4.u32.u32.u32",
+            "vavrg4.u32.u32.u32.add",
+            "vabsdiff4.u32.u32.u32.add",
+            "vmin4.u32.u32.u32",
+            "vmin4.u32.u32.u32.add",
+            "vmax4.u32.u32.u32",
+            "vmax4.u32.u32.u32.add",
+        ];
+        let mut found = [false; 18];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn video_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_video: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "vadd4.u32.u32.u32",
+                "vsub4.u32.u32.u32",
+                "vabsdiff4.u32.u32.u32.add",
+                "vadd2.u32.u32.u32",
+                "vsub2.u32.u32.u32",
+                "vavrg2.u32.u32.u32",
+                "vavrg2.u32.u32.u32.add",
+                "vabsdiff2.u32.u32.u32.add",
+                "vmin2.u32.u32.u32",
+                "vmin2.u32.u32.u32.add",
+                "vmax2.u32.u32.u32",
+                "vmax2.u32.u32.u32.add",
+                "vavrg4.u32.u32.u32",
+                "vavrg4.u32.u32.u32.add",
+                "vmin4.u32.u32.u32",
+                "vmin4.u32.u32.u32.add",
+                "vmax4.u32.u32.u32",
+                "vmax4.u32.u32.u32.add",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn vsub4_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_vsub4: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "vsub4.u32.u32.u32"),
+                "seed {seed:x} emitted vsub4"
+            );
+        }
+    }
+
+    #[test]
+    fn set_generation_is_reachable() {
+        let mut saw_set = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            if ptx.contains("set.eq.u32")
+                || ptx.contains("set.ne.u32")
+                || ptx.contains("set.lt.u32")
+                || ptx.contains("set.le.u32")
+                || ptx.contains("set.gt.u32")
+                || ptx.contains("set.ge.u32")
+            {
+                saw_set = true;
+                break;
+            }
+        }
+        assert!(saw_set, "no seed in sample emitted set");
+    }
+
+    #[test]
+    fn set_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_set: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in [
+                "set.eq.u32",
+                "set.ne.u32",
+                "set.lt.u32",
+                "set.le.u32",
+                "set.gt.u32",
+                "set.ge.u32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn funnel_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_funnel: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["shf.l.wrap.b32", "shf.r.wrap.b32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
     }
 }

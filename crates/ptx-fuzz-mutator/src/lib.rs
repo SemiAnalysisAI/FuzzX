@@ -38,7 +38,9 @@ struct State {
 /// passed back to our other hooks. We must return a non-null pointer.
 #[no_mangle]
 pub extern "C" fn afl_custom_init(_afl: *mut c_void, _seed: u32) -> *mut c_void {
-    let s = Box::new(State { out: Vec::with_capacity(8 * 1024) });
+    let s = Box::new(State {
+        out: Vec::with_capacity(8 * 1024),
+    });
     Box::into_raw(s) as *mut c_void
 }
 
@@ -102,14 +104,8 @@ mod tests {
 
         let mut input = b"some random bytes".to_vec();
         let mut out_ptr: *const u8 = std::ptr::null();
-        let n = unsafe {
-            afl_custom_post_process(
-                data,
-                input.as_mut_ptr(),
-                input.len(),
-                &mut out_ptr,
-            )
-        };
+        let n =
+            unsafe { afl_custom_post_process(data, input.as_mut_ptr(), input.len(), &mut out_ptr) };
         assert!(n > 0);
         assert!(!out_ptr.is_null());
         let produced = unsafe { std::slice::from_raw_parts(out_ptr, n) };

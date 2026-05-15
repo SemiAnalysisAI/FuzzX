@@ -1,27 +1,118 @@
-//! Inner-loop differential fuzzer for ptxas.
+//! Multi-worker differential fuzzer for ptxas.
 //!
 //! For each iteration:
-//!   1. Derive a byte buffer from `starting_seed + iter`.
-//!   2. Generate a PTX kernel.
-//!   3. Compile + launch at both `-O0` and `-O3` on the GPU.
-//!   4. If outputs differ (or compile/launch is asymmetric), save the
+//!   1. Pull the next seed from a shared atomic counter.
+//!   2. Derive a byte buffer from the seed.
+//!   3. Generate a PTX kernel.
+//!   4. Compile + launch at both `-O0` and `-O3` on this worker's GPU.
+//!   5. If outputs differ (or compile/launch is asymmetric), save the
 //!      reproducer under `<out_dir>/div-<timestamp>-<seed>/`.
 //!
 //! Configured via env vars (env over args for parity with the AFL scripts):
-//!   DIV_OUT_DIR          default: `divergences`
-//!   DIV_STARTING_SEED    default: nanos since epoch
-//!   DIV_MAX_ITERS        default: unlimited
-//!   DIV_PRINT_EVERY_SECS default: 5
-//!   DIV_PROGRAM_BYTES    default: 4096
+//!   DIV_OUT_DIR           default: `divergences`
+//!   DIV_STARTING_SEED     default: nanos since epoch
+//!   DIV_MAX_ITERS         default: unlimited
+//!   DIV_PRINT_EVERY_SECS  default: 5
+//!   DIV_PROGRAM_BYTES     default: 4096
+//!   DIV_STRUCTURED_CONTROL_FLOW default: false; set 1/true/yes/on for
+//!                                single-entry structured if/loop generation
+//!   DIV_DISABLE_STRUCTURED_LOOPS default: false; set 1/true/yes/on to suppress
+//!                                counted-loop shapes in structured mode
+//!   DIV_DISABLE_ARBITRARY_LOOPS default: false; set 1/true/yes/on to suppress
+//!                                backedge loop terminators in arbitrary CFG mode
+//!   DIV_DISABLE_LOP3      default: false; set 1/true/yes/on to suppress
+//!                         explicit PTX lop3.b32 generation
+//!   DIV_DISABLE_MINMAX    default: false; set 1/true/yes/on to suppress
+//!                         PTX min.u32/max.u32/min.s32/max.s32 generation
+//!   DIV_DISABLE_SUB       default: false; set 1/true/yes/on to suppress
+//!                         random ALU PTX sub.u32 generation
+//!   DIV_DISABLE_MULHI     default: false; set 1/true/yes/on to suppress
+//!                         PTX mul.hi.u32/mul.hi.s32 generation
+//!   DIV_DISABLE_SIGNED_MULHI default: false; set 1/true/yes/on to suppress
+//!                         PTX mul.hi.s32 generation while retaining mul.hi.u32
+//!   DIV_DISABLE_BITWISE_BINOPS default: false; set 1/true/yes/on to suppress
+//!                         PTX and.b32/or.b32/xor.b32 generation
+//!   DIV_DISABLE_PRMT      default: false; set 1/true/yes/on to suppress
+//!                         PTX prmt.b32 generation
+//!   DIV_DISABLE_NOT       default: false; set 1/true/yes/on to suppress
+//!                         PTX not.b32 generation and xor.b32-by-0xffffffff
+//!   DIV_DISABLE_CLZ       default: false; set 1/true/yes/on to suppress
+//!                         PTX clz.b32 generation
+//!   DIV_DISABLE_CNOT      default: false; set 1/true/yes/on to suppress
+//!                         PTX cnot.b32 generation
+//!   DIV_DISABLE_ABS       default: false; set 1/true/yes/on to suppress
+//!                         PTX abs.s32 generation
+//!   DIV_DISABLE_SIGNED_CMP default: false; set 1/true/yes/on to suppress
+//!                         PTX setp.{lt,le,gt,ge}.s32 generation
+//!   DIV_DISABLE_SIGNED_DIVREM default: false; set 1/true/yes/on to suppress
+//!                         PTX div.s32/rem.s32 generation
+//!   DIV_DISABLE_FUNNEL    default: false; set 1/true/yes/on to suppress
+//!                         PTX shf.{l,r}.wrap.b32 generation
+//!   DIV_DISABLE_NEG       default: false; set 1/true/yes/on to suppress
+//!                         PTX neg.s32 generation
+//!   DIV_DISABLE_SHL       default: false; set 1/true/yes/on to suppress
+//!                         PTX shl.b32 generation
+//!   DIV_DISABLE_SIGNED_SHR default: false; set 1/true/yes/on to suppress
+//!                         PTX shr.s32 generation
+//!   DIV_DISABLE_BFIND     default: false; set 1/true/yes/on to suppress
+//!                         PTX bfind.u32/bfind.shiftamt.u32 generation
+//!   DIV_DISABLE_BFI       default: false; set 1/true/yes/on to suppress
+//!                         PTX bfi.b32 generation
+//!   DIV_DISABLE_BMSK      default: false; set 1/true/yes/on to suppress
+//!                         PTX bmsk.clamp.b32 generation
+//!   DIV_DISABLE_MAD24     default: false; set 1/true/yes/on to suppress
+//!                         PTX mad24.lo.u32/mad24.hi.u32 generation
+//!   DIV_DISABLE_MUL24     default: false; set 1/true/yes/on to suppress
+//!                         PTX mul24.{lo,hi}.{u32,s32} generation
+//!   DIV_DISABLE_MUL_WIDE  default: false; set 1/true/yes/on to suppress
+//!                         PTX mul.wide.{u32,s32} generation
+//!   DIV_DISABLE_WIDE_INT  default: false; set 1/true/yes/on to suppress
+//!                         PTX 64-bit ALU scratch-register generation
+//!   DIV_DISABLE_ADDC      default: false; set 1/true/yes/on to suppress
+//!                         PTX add.cc.u32/addc.u32 pair generation
+//!   DIV_DISABLE_SUBC      default: false; set 1/true/yes/on to suppress
+//!                         PTX sub.cc.u32/subc.u32 pair generation
+//!   DIV_DISABLE_I32_BOUNDARY_IMMS default: false; set 1/true/yes/on to
+//!                         suppress immediate 0x7fffffff/0x80000000 generation
+//!   DIV_DISABLE_DP2A      default: false; set 1/true/yes/on to suppress
+//!                         PTX dp2a.{lo,hi}.u32.u32 generation
+//!   DIV_DISABLE_SET       default: false; set 1/true/yes/on to suppress
+//!                         PTX set.{cmp}.u32.{u32,s32} generation
+//!   DIV_DISABLE_S32_SLCT  default: false; set 1/true/yes/on to suppress
+//!                         PTX slct.s32.s32 generation
+//!   DIV_DISABLE_VIDEO     default: false; set 1/true/yes/on to suppress
+//!                         PTX video instruction generation
+//!   DIV_DISABLE_VSUB4     default: false; set 1/true/yes/on to suppress
+//!                         PTX vsub4.u32.u32.u32 generation
+//!   DIV_MIN_BLOCKS        default: generator default
+//!   DIV_MAX_BLOCKS        default: generator default
+//!   DIV_MIN_INSTS_PER_BLOCK default: generator default
+//!   DIV_MAX_INSTS_PER_BLOCK default: generator default
+//!   DIV_WORKING_REGS      default: generator default
+//!   DIV_MAX_LOOP_ITERS    default: generator default
+//!   DIV_MAX_IMMEDIATE     default: generator default
+//!   DIV_MAX_STRUCTURED_DEPTH default: generator default
+//!   DIV_GPUS              default: all visible devices (e.g. "0,1,2")
+//!   DIV_WORKERS_PER_GPU   default: 16  (B300 + 54-core sweep: knee at 48 total
+//!                                       workers / 16 per GPU, ~2400 iter/s steady)
+//!
+//! Each worker thread owns its own CUDA context (pinned to one GPU) and a
+//! single pair of pre-allocated input/output buffers — no per-iter
+//! `cuMemAlloc`/`Free`. ptxas temp files go to `TMPDIR` (this binary sets
+//! `TMPDIR=/dev/shm` by default if not already set).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
-use ptx_fuzz_exec::{differential, Cuda, DiffOutcome};
+use ptx_fuzz_exec::{compile, Cuda, CudaBuffers, DiffOutcome};
 use ptx_fuzz_execgen::{
-    bytes_from_seed, generate_from_bytes, input_for_seed, output_len, KERNEL_NAME, N_THREADS,
-    TARGET_ARCH,
+    bytes_from_seed, generate_from_bytes_with_config, input_for_seed, input_len, output_len,
+    ControlFlowMode, GenConfig, KERNEL_NAME, N_THREADS, TARGET_ARCH,
 };
 
 struct Config {
@@ -30,6 +121,9 @@ struct Config {
     max_iters: Option<u64>,
     print_every: Duration,
     program_bytes: usize,
+    gen_config: GenConfig,
+    gpus: Vec<i32>,
+    workers_per_gpu: usize,
 }
 
 impl Config {
@@ -46,10 +140,141 @@ impl Config {
                 Err(_) => Ok(None),
             }
         }
+        fn env_bool(key: &str) -> Result<Option<bool>> {
+            match std::env::var(key) {
+                Ok(v) => {
+                    let parsed = match v.as_str() {
+                        "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "on" | "ON" => true,
+                        "0" | "false" | "FALSE" | "False" | "no" | "NO" | "off" | "OFF" => false,
+                        _ => anyhow::bail!("env {key}={v:?} must be a boolean"),
+                    };
+                    Ok(Some(parsed))
+                }
+                Err(_) => Ok(None),
+            }
+        }
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
+        let gpus = match std::env::var("DIV_GPUS") {
+            Ok(s) => s
+                .split(',')
+                .map(|t| {
+                    t.trim()
+                        .parse::<i32>()
+                        .map_err(|e| anyhow::anyhow!("DIV_GPUS entry {t:?}: {e}"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            Err(_) => {
+                let n = Cuda::device_count().context("Cuda::device_count")?;
+                if n <= 0 {
+                    anyhow::bail!("no CUDA devices visible");
+                }
+                (0..n).collect()
+            }
+        };
+        let structured_control_flow = env_bool("DIV_STRUCTURED_CONTROL_FLOW")?.unwrap_or(false);
+        let disable_structured_loops = env_bool("DIV_DISABLE_STRUCTURED_LOOPS")?.unwrap_or(false);
+        let disable_arbitrary_loops = env_bool("DIV_DISABLE_ARBITRARY_LOOPS")?.unwrap_or(false);
+        let disable_lop3 = env_bool("DIV_DISABLE_LOP3")?.unwrap_or(false);
+        let disable_minmax = env_bool("DIV_DISABLE_MINMAX")?.unwrap_or(false);
+        let disable_sub = env_bool("DIV_DISABLE_SUB")?.unwrap_or(false);
+        let disable_mulhi = env_bool("DIV_DISABLE_MULHI")?.unwrap_or(false);
+        let disable_signed_mulhi = env_bool("DIV_DISABLE_SIGNED_MULHI")?.unwrap_or(false);
+        let disable_bitwise_binops = env_bool("DIV_DISABLE_BITWISE_BINOPS")?.unwrap_or(false);
+        let disable_prmt = env_bool("DIV_DISABLE_PRMT")?.unwrap_or(false);
+        let disable_not = env_bool("DIV_DISABLE_NOT")?.unwrap_or(false);
+        let disable_clz = env_bool("DIV_DISABLE_CLZ")?.unwrap_or(false);
+        let disable_cnot = env_bool("DIV_DISABLE_CNOT")?.unwrap_or(false);
+        let disable_abs = env_bool("DIV_DISABLE_ABS")?.unwrap_or(false);
+        let disable_signed_cmp = env_bool("DIV_DISABLE_SIGNED_CMP")?.unwrap_or(false);
+        let disable_signed_divrem = env_bool("DIV_DISABLE_SIGNED_DIVREM")?.unwrap_or(false);
+        let disable_funnel = env_bool("DIV_DISABLE_FUNNEL")?.unwrap_or(false);
+        let disable_neg = env_bool("DIV_DISABLE_NEG")?.unwrap_or(false);
+        let disable_shl = env_bool("DIV_DISABLE_SHL")?.unwrap_or(false);
+        let disable_signed_shr = env_bool("DIV_DISABLE_SIGNED_SHR")?.unwrap_or(false);
+        let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
+        let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
+        let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
+        let disable_mad24 = env_bool("DIV_DISABLE_MAD24")?.unwrap_or(false);
+        let disable_mul24 = env_bool("DIV_DISABLE_MUL24")?.unwrap_or(false);
+        let disable_mul_wide = env_bool("DIV_DISABLE_MUL_WIDE")?.unwrap_or(false);
+        let disable_wide_int = env_bool("DIV_DISABLE_WIDE_INT")?.unwrap_or(false);
+        let disable_addc = env_bool("DIV_DISABLE_ADDC")?.unwrap_or(false);
+        let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
+        let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
+        let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
+        let disable_set = env_bool("DIV_DISABLE_SET")?.unwrap_or(false);
+        let disable_s32_slct = env_bool("DIV_DISABLE_S32_SLCT")?.unwrap_or(false);
+        let disable_video = env_bool("DIV_DISABLE_VIDEO")?.unwrap_or(false);
+        let disable_vsub4 = env_bool("DIV_DISABLE_VSUB4")?.unwrap_or(false);
+        let mut gen_config = GenConfig {
+            control_flow: if structured_control_flow {
+                ControlFlowMode::Structured
+            } else {
+                ControlFlowMode::Arbitrary
+            },
+            emit_structured_loops: !disable_structured_loops,
+            emit_arbitrary_loops: !disable_arbitrary_loops,
+            emit_lop3: !disable_lop3,
+            emit_minmax: !disable_minmax,
+            emit_sub: !disable_sub,
+            emit_mulhi: !disable_mulhi,
+            emit_signed_mulhi: !disable_signed_mulhi,
+            emit_bitwise_binops: !disable_bitwise_binops,
+            emit_prmt: !disable_prmt,
+            emit_not: !disable_not,
+            emit_clz: !disable_clz,
+            emit_cnot: !disable_cnot,
+            emit_abs: !disable_abs,
+            emit_signed_cmp: !disable_signed_cmp,
+            emit_signed_divrem: !disable_signed_divrem,
+            emit_funnel: !disable_funnel,
+            emit_neg: !disable_neg,
+            emit_shl: !disable_shl,
+            emit_signed_shr: !disable_signed_shr,
+            emit_bfind: !disable_bfind,
+            emit_bfi: !disable_bfi,
+            emit_bmsk: !disable_bmsk,
+            emit_mad24: !disable_mad24,
+            emit_mul24: !disable_mul24,
+            emit_mul_wide: !disable_mul_wide,
+            emit_wide_int: !disable_wide_int,
+            emit_addc: !disable_addc,
+            emit_subc: !disable_subc,
+            emit_i32_boundary_immediates: !disable_i32_boundary_imms,
+            emit_dp2a: !disable_dp2a,
+            emit_set: !disable_set,
+            emit_s32_slct: !disable_s32_slct,
+            emit_video: !disable_video,
+            emit_vsub4: !disable_vsub4,
+            ..GenConfig::default()
+        };
+        if let Some(v) = env("DIV_MIN_BLOCKS")? {
+            gen_config.min_blocks = v;
+        }
+        if let Some(v) = env("DIV_MAX_BLOCKS")? {
+            gen_config.max_blocks = v;
+        }
+        if let Some(v) = env("DIV_MIN_INSTS_PER_BLOCK")? {
+            gen_config.min_insts_per_block = v;
+        }
+        if let Some(v) = env("DIV_MAX_INSTS_PER_BLOCK")? {
+            gen_config.max_insts_per_block = v;
+        }
+        if let Some(v) = env("DIV_WORKING_REGS")? {
+            gen_config.n_working_regs = v;
+        }
+        if let Some(v) = env("DIV_MAX_LOOP_ITERS")? {
+            gen_config.max_loop_iters = v;
+        }
+        if let Some(v) = env("DIV_MAX_IMMEDIATE")? {
+            gen_config.max_immediate = v;
+        }
+        if let Some(v) = env("DIV_MAX_STRUCTURED_DEPTH")? {
+            gen_config.max_structured_depth = v;
+        }
         Ok(Config {
             out_dir: env::<String>("DIV_OUT_DIR")?
                 .map(PathBuf::from)
@@ -58,12 +283,25 @@ impl Config {
             max_iters: env("DIV_MAX_ITERS")?,
             print_every: Duration::from_secs(env("DIV_PRINT_EVERY_SECS")?.unwrap_or(5)),
             program_bytes: env("DIV_PROGRAM_BYTES")?.unwrap_or(4096),
+            gen_config,
+            gpus,
+            workers_per_gpu: env("DIV_WORKERS_PER_GPU")?.unwrap_or(16),
         })
     }
 }
 
+/// Atomic counters shared across all worker threads.
+struct Stats {
+    next_seed: AtomicU64,
+    iters: AtomicU64,
+    divergences: AtomicU64,
+    both_failed: AtomicU64,
+    skipped: AtomicU64,
+}
+
 fn save_divergence(
     out_dir: &Path,
+    log_lock: &Mutex<()>,
     seed: u64,
     bytes: &[u8],
     ptx: &str,
@@ -75,8 +313,7 @@ fn save_divergence(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let dir = out_dir.join(format!("div-{ts}-{seed:016x}"));
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("creating {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::write(dir.join("seed.bin"), bytes)?;
     std::fs::write(dir.join("program.ptx"), ptx)?;
     std::fs::write(dir.join("input.bin"), input)?;
@@ -101,86 +338,226 @@ fn save_divergence(
         }
     );
     std::fs::write(dir.join("summary.txt"), summary)?;
+    // Serialize the announcement so concurrent workers don't interleave lines.
+    let _g = log_lock.lock().unwrap_or_else(|p| p.into_inner());
+    eprintln!("DIVERGENCE seed=0x{seed:016x} saved={}", dir.display());
     Ok(dir)
 }
 
+/// One worker thread: owns a CUDA context on `gpu` and a single pair of
+/// reusable in/out buffers. Loops, pulling seeds from `stats.next_seed`,
+/// until either `max_iters` or `stats.stop_at_iter` is hit (we hit the
+/// stop sentinel by setting it to 0 on Ctrl-C — see main).
+fn worker_loop(
+    worker_id: usize,
+    gpu: i32,
+    cfg: &Config,
+    arch: &str,
+    stats: &Stats,
+    log_lock: &Mutex<()>,
+) -> Result<()> {
+    let cuda = Cuda::init(gpu).with_context(|| format!("Cuda::init gpu={gpu}"))?;
+    let bufs: CudaBuffers = cuda
+        .alloc_buffers(input_len(), output_len())
+        .context("alloc_buffers")?;
+
+    loop {
+        let i = stats.next_seed.fetch_add(1, Ordering::Relaxed);
+        let i = i.wrapping_sub(cfg.starting_seed);
+        if let Some(max) = cfg.max_iters {
+            if i >= max {
+                return Ok(());
+            }
+        }
+        let seed = cfg.starting_seed.wrapping_add(i);
+        let bytes = bytes_from_seed(seed, cfg.program_bytes);
+        let ptx = match generate_from_bytes_with_config(&bytes, &cfg.gen_config) {
+            Ok(p) => p,
+            Err(_) => {
+                stats.skipped.fetch_add(1, Ordering::Relaxed);
+                stats.iters.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+        };
+        let input = input_for_seed(seed);
+
+        let run_at = |opt: &str| -> Result<Vec<u8>> {
+            let cubin = compile(&ptx, &[arch, opt])?;
+            cuda.launch_with(
+                &bufs,
+                &cubin,
+                KERNEL_NAME,
+                (1, 1, 1),
+                (N_THREADS, 1, 1),
+                &input,
+                output_len(),
+                N_THREADS,
+            )
+        };
+        let outcome = DiffOutcome {
+            o0: run_at("-O0"),
+            o3: run_at("-O3"),
+        };
+
+        if outcome.diverged() {
+            stats.divergences.fetch_add(1, Ordering::Relaxed);
+            if let Err(e) =
+                save_divergence(&cfg.out_dir, log_lock, seed, &bytes, &ptx, &input, &outcome)
+            {
+                let _g = log_lock.lock().unwrap_or_else(|p| p.into_inner());
+                eprintln!("worker {worker_id}: save_divergence failed: {e:#}");
+            }
+        } else if !outcome.matches() {
+            stats.both_failed.fetch_add(1, Ordering::Relaxed);
+        }
+
+        stats.iters.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn main() -> Result<()> {
+    // ptxas writes temp files; /dev/shm is tmpfs on this box, /tmp is real disk.
+    // Only override if the caller didn't already set TMPDIR.
+    if std::env::var_os("TMPDIR").is_none() {
+        let shm = Path::new("/dev/shm");
+        if shm.is_dir() {
+            std::env::set_var("TMPDIR", shm);
+        }
+    }
+
     let cfg = Config::from_env()?;
     std::fs::create_dir_all(&cfg.out_dir)?;
-    let cuda = Cuda::init(0).context("Cuda::init")?;
     let arch = format!("-arch={TARGET_ARCH}");
 
+    let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "ptx-fuzz-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={}",
+        "ptx-fuzz-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_sub={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_prmt={} emit_not={} emit_clz={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
         cfg.max_iters
             .map(|n| n.to_string())
             .unwrap_or_else(|| "∞".to_string()),
+        cfg.gen_config.control_flow,
+        cfg.gen_config.min_blocks,
+        cfg.gen_config.max_blocks,
+        cfg.gen_config.min_insts_per_block,
+        cfg.gen_config.max_insts_per_block,
+        cfg.gen_config.n_working_regs,
+        cfg.gen_config.max_loop_iters,
+        cfg.gen_config.max_immediate,
+        cfg.gen_config.max_structured_depth,
+        cfg.gen_config.emit_structured_loops,
+        cfg.gen_config.emit_arbitrary_loops,
+        cfg.gen_config.emit_lop3,
+        cfg.gen_config.emit_minmax,
+        cfg.gen_config.emit_sub,
+        cfg.gen_config.emit_mulhi,
+        cfg.gen_config.emit_signed_mulhi,
+        cfg.gen_config.emit_bitwise_binops,
+        cfg.gen_config.emit_prmt,
+        cfg.gen_config.emit_not,
+        cfg.gen_config.emit_clz,
+        cfg.gen_config.emit_cnot,
+        cfg.gen_config.emit_abs,
+        cfg.gen_config.emit_signed_cmp,
+        cfg.gen_config.emit_signed_divrem,
+        cfg.gen_config.emit_funnel,
+        cfg.gen_config.emit_neg,
+        cfg.gen_config.emit_shl,
+        cfg.gen_config.emit_signed_shr,
+        cfg.gen_config.emit_bfind,
+        cfg.gen_config.emit_bfi,
+        cfg.gen_config.emit_bmsk,
+        cfg.gen_config.emit_mad24,
+        cfg.gen_config.emit_mul24,
+        cfg.gen_config.emit_mul_wide,
+        cfg.gen_config.emit_wide_int,
+        cfg.gen_config.emit_addc,
+        cfg.gen_config.emit_subc,
+        cfg.gen_config.emit_i32_boundary_immediates,
+        cfg.gen_config.emit_dp2a,
+        cfg.gen_config.emit_set,
+        cfg.gen_config.emit_s32_slct,
+        cfg.gen_config.emit_video,
+        cfg.gen_config.emit_vsub4,
+        cfg.gpus,
+        cfg.workers_per_gpu,
+        total_workers,
     );
 
+    let stats = Arc::new(Stats {
+        next_seed: AtomicU64::new(cfg.starting_seed),
+        iters: AtomicU64::new(0),
+        divergences: AtomicU64::new(0),
+        both_failed: AtomicU64::new(0),
+        skipped: AtomicU64::new(0),
+    });
+    let log_lock = Arc::new(Mutex::new(()));
+    let cfg = Arc::new(cfg);
+
     let start = Instant::now();
-    let mut last_print = start;
-    let mut iter: u64 = 0;
-    let mut divergences: u64 = 0;
-    let mut both_failed: u64 = 0;
-    let mut skipped: u64 = 0;
 
-    loop {
-        if let Some(max) = cfg.max_iters {
-            if iter >= max {
-                break;
-            }
-        }
-
-        let seed = cfg.starting_seed.wrapping_add(iter);
-        let bytes = bytes_from_seed(seed, cfg.program_bytes);
-        let ptx = match generate_from_bytes(&bytes) {
-            Ok(p) => p,
-            Err(_) => {
-                skipped += 1;
-                iter += 1;
-                continue;
-            }
-        };
-        let input = input_for_seed(seed);
-        let outcome = differential(
-            &cuda,
-            &ptx,
-            &arch,
-            KERNEL_NAME,
-            (1, 1, 1),
-            (N_THREADS, 1, 1),
-            &input,
-            output_len(),
-            N_THREADS,
-        );
-
-        if outcome.diverged() {
-            divergences += 1;
-            let dir = save_divergence(&cfg.out_dir, seed, &bytes, &ptx, &input, &outcome)?;
-            eprintln!("DIVERGENCE seed=0x{seed:016x} saved={}", dir.display());
-        } else if !outcome.matches() {
-            both_failed += 1;
-        }
-
-        iter += 1;
-
-        if last_print.elapsed() >= cfg.print_every {
-            let elapsed = start.elapsed().as_secs_f64();
-            let rate = iter as f64 / elapsed.max(1e-6);
-            eprintln!(
-                "iter {iter}  {rate:.1} iter/s  divergences {divergences}  both_failed {both_failed}  skipped {skipped}  elapsed {elapsed:.0}s",
-            );
-            last_print = Instant::now();
+    let mut handles = Vec::with_capacity(total_workers);
+    let mut worker_id = 0usize;
+    for &gpu in &cfg.gpus {
+        for _ in 0..cfg.workers_per_gpu {
+            let cfg_w = Arc::clone(&cfg);
+            let stats_w = Arc::clone(&stats);
+            let log_w = Arc::clone(&log_lock);
+            let arch_w = arch.clone();
+            let id = worker_id;
+            handles.push(thread::spawn(move || {
+                if let Err(e) = worker_loop(id, gpu, &cfg_w, &arch_w, &stats_w, &log_w) {
+                    let _g = log_w.lock().unwrap_or_else(|p| p.into_inner());
+                    eprintln!("worker {id} (gpu {gpu}) exited with error: {e:#}");
+                }
+            }));
+            worker_id += 1;
         }
     }
 
+    // Reporter loop on the main thread. Polls stats; exits when all workers
+    // finish (only possible under DIV_MAX_ITERS).
+    let mut last_iters: u64 = 0;
+    let mut last_print = Instant::now();
+    loop {
+        thread::sleep(Duration::from_millis(250));
+        let all_done = handles.iter().all(|h| h.is_finished());
+        if last_print.elapsed() >= cfg.print_every || all_done {
+            let iters = stats.iters.load(Ordering::Relaxed);
+            let divergences = stats.divergences.load(Ordering::Relaxed);
+            let both_failed = stats.both_failed.load(Ordering::Relaxed);
+            let skipped = stats.skipped.load(Ordering::Relaxed);
+            let elapsed = start.elapsed().as_secs_f64();
+            let rate_total = iters as f64 / elapsed.max(1e-6);
+            let rate_recent =
+                (iters - last_iters) as f64 / last_print.elapsed().as_secs_f64().max(1e-6);
+            let _g = log_lock.lock().unwrap_or_else(|p| p.into_inner());
+            eprintln!(
+                "iter {iters}  {rate_recent:.1} iter/s (avg {rate_total:.1})  divergences {divergences}  both_failed {both_failed}  skipped {skipped}  elapsed {elapsed:.0}s",
+            );
+            drop(_g);
+            last_iters = iters;
+            last_print = Instant::now();
+        }
+        if all_done {
+            break;
+        }
+    }
+
+    for h in handles {
+        let _ = h.join();
+    }
+
     let elapsed = start.elapsed().as_secs_f64();
+    let iters = stats.iters.load(Ordering::Relaxed);
     eprintln!(
-        "done. iter={iter} divergences={divergences} both_failed={both_failed} skipped={skipped} elapsed={elapsed:.1}s rate={:.1} iter/s",
-        iter as f64 / elapsed.max(1e-6),
+        "done. iter={iters} divergences={} both_failed={} skipped={} elapsed={elapsed:.1}s rate={:.1} iter/s",
+        stats.divergences.load(Ordering::Relaxed),
+        stats.both_failed.load(Ordering::Relaxed),
+        stats.skipped.load(Ordering::Relaxed),
+        iters as f64 / elapsed.max(1e-6),
     );
     Ok(())
 }

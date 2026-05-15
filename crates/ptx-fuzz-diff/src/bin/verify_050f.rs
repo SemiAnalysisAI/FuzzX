@@ -169,15 +169,24 @@ fn main() -> Result<()> {
         println!(
             "t{tid:02}  {:#010x}  [{:#010x} {:#010x} {:#010x} {:#010x}]   {}        {}",
             input_u[tid],
-            sim[0], sim[1], sim[2], sim[3],
+            sim[0],
+            sim[1],
+            sim[2],
+            sim[3],
             if match_o0 { "y" } else { "N" },
             if match_o3 { "y" } else { "N" },
         );
     }
 
     println!();
-    println!("simulation matches -O0 on all {} threads: {sim_matches_o0}", N_THREADS);
-    println!("simulation matches -O3 on all {} threads: {sim_matches_o3}", N_THREADS);
+    println!(
+        "simulation matches -O0 on all {} threads: {sim_matches_o0}",
+        N_THREADS
+    );
+    println!(
+        "simulation matches -O3 on all {} threads: {sim_matches_o3}",
+        N_THREADS
+    );
     if !sim_matches_o0 {
         println!("  -O0 disagrees on tids: {:?}", o0_disagrees);
     }

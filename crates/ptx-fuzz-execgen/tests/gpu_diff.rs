@@ -6,8 +6,8 @@
 
 use ptx_fuzz_exec::{differential, Cuda};
 use ptx_fuzz_execgen::{
-    bytes_from_seed, generate_from_bytes, input_for_seed, output_len, KERNEL_NAME, N_THREADS,
-    TARGET_ARCH,
+    bytes_from_seed, generate_from_bytes_with_config, input_for_seed, output_len, ControlFlowMode,
+    GenConfig, KERNEL_NAME, N_THREADS, TARGET_ARCH,
 };
 
 const SEEDS: u64 = 200;
@@ -17,12 +17,31 @@ const PROGRAM_BYTES: usize = 4096;
 fn every_generated_kernel_matches_at_o0_and_o3() {
     let cuda = Cuda::init(0).expect("Cuda::init");
     let arch = format!("-arch={TARGET_ARCH}");
+    let cfg = GenConfig {
+        control_flow: ControlFlowMode::Structured,
+        emit_lop3: false,
+        emit_minmax: false,
+        emit_mulhi: false,
+        emit_prmt: false,
+        emit_not: false,
+        emit_abs: false,
+        emit_signed_cmp: false,
+        emit_funnel: false,
+        emit_neg: false,
+        emit_signed_shr: false,
+        emit_bfind: false,
+        emit_mul24: true,
+        emit_i32_boundary_immediates: false,
+        emit_set: false,
+        emit_vsub4: false,
+        ..GenConfig::default()
+    };
 
     let mut bad: Vec<(u64, &'static str, String)> = Vec::new();
 
     for seed in 0..SEEDS {
         let bytes = bytes_from_seed(seed, PROGRAM_BYTES);
-        let ptx = match generate_from_bytes(&bytes) {
+        let ptx = match generate_from_bytes_with_config(&bytes, &cfg) {
             Ok(p) => p,
             Err(_) => continue, // out of entropy, skip
         };
@@ -39,11 +58,21 @@ fn every_generated_kernel_matches_at_o0_and_o3() {
             N_THREADS,
         );
         if !out.matches() {
-            let kind = if out.diverged() { "diverged" } else { "both_failed" };
+            let kind = if out.diverged() {
+                "diverged"
+            } else {
+                "both_failed"
+            };
             let detail = format!(
                 "o0={}\no3={}",
-                match &out.o0 { Ok(b) => format!("ok ({} bytes)", b.len()), Err(e) => format!("err: {e}") },
-                match &out.o3 { Ok(b) => format!("ok ({} bytes)", b.len()), Err(e) => format!("err: {e}") },
+                match &out.o0 {
+                    Ok(b) => format!("ok ({} bytes)", b.len()),
+                    Err(e) => format!("err: {e}"),
+                },
+                match &out.o3 {
+                    Ok(b) => format!("ok ({} bytes)", b.len()),
+                    Err(e) => format!("err: {e}"),
+                },
             );
             bad.push((seed, kind, detail));
         }

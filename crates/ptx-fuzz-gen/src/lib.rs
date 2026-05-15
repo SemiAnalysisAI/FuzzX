@@ -17,7 +17,7 @@
 //! groups, FP16/BF16. Adding more shapes is mostly a matter of extending
 //! the opcode menus in `emit_statement`.
 
-use arbitrary::{Unstructured, Result};
+use arbitrary::{Result, Unstructured};
 
 /// Hard cap on the produced PTX text. ptxas can chew through huge
 /// programs but the marginal coverage win drops off quickly and big
@@ -30,10 +30,10 @@ const MAX_STATEMENTS: usize = 256;
 
 // Fixed pools of pre-declared registers. Indexing by `u32` consumed
 // from `Unstructured` lets AFL mutate "which register" cheaply.
-const N_R32:  u32 = 16;
-const N_R64:  u32 = 8;
-const N_F32:  u32 = 8;
-const N_F64:  u32 = 8;
+const N_R32: u32 = 16;
+const N_R64: u32 = 8;
+const N_F32: u32 = 8;
+const N_F64: u32 = 8;
 const N_PRED: u32 = 8;
 const N_LABELS: u32 = 8;
 
@@ -47,7 +47,14 @@ pub fn generate_ptx(data: &[u8]) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IntTy { S32, U32, S64, U64, B32, B64 }
+enum IntTy {
+    S32,
+    U32,
+    S64,
+    U64,
+    B32,
+    B64,
+}
 
 impl IntTy {
     fn name(self) -> &'static str {
@@ -60,15 +67,23 @@ impl IntTy {
             IntTy::B64 => "b64",
         }
     }
-    fn is_64(self) -> bool { matches!(self, IntTy::S64 | IntTy::U64 | IntTy::B64) }
+    fn is_64(self) -> bool {
+        matches!(self, IntTy::S64 | IntTy::U64 | IntTy::B64)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FloatTy { F32, F64 }
+enum FloatTy {
+    F32,
+    F64,
+}
 
 impl FloatTy {
     fn name(self) -> &'static str {
-        match self { FloatTy::F32 => "f32", FloatTy::F64 => "f64" }
+        match self {
+            FloatTy::F32 => "f32",
+            FloatTy::F64 => "f64",
+        }
     }
 }
 
@@ -118,12 +133,13 @@ impl Builder {
         // sane.
         let n_globals: u8 = u.int_in_range(0..=2)?;
         for i in 0..n_globals {
-            let elems: u32 = 1 << u.int_in_range(0..=6)?;  // 1..=64
-            self.out.push_str(&format!(
-                ".global .align 8 .u32 g{i}[{elems}];\n"
-            ));
+            let elems: u32 = 1 << u.int_in_range(0..=6)?; // 1..=64
+            self.out
+                .push_str(&format!(".global .align 8 .u32 g{i}[{elems}];\n"));
         }
-        if n_globals > 0 { self.out.push('\n'); }
+        if n_globals > 0 {
+            self.out.push('\n');
+        }
 
         self.out.push_str(
             ".visible .entry kernel(\n\
@@ -132,12 +148,14 @@ impl Builder {
             \x20   .param .u32 p2\n\
              ) {\n",
         );
-        self.out.push_str(&format!("    .reg .pred %p<{N_PRED}>;\n"));
+        self.out
+            .push_str(&format!("    .reg .pred %p<{N_PRED}>;\n"));
         self.out.push_str(&format!("    .reg .b16 %rs<8>;\n"));
         self.out.push_str(&format!("    .reg .b32 %r<{N_R32}>;\n"));
         self.out.push_str(&format!("    .reg .b64 %rd<{N_R64}>;\n"));
         self.out.push_str(&format!("    .reg .f32 %f<{N_F32}>;\n"));
-        self.out.push_str(&format!("    .reg .f64 %fd<{N_F64}>;\n\n"));
+        self.out
+            .push_str(&format!("    .reg .f64 %fd<{N_F64}>;\n\n"));
 
         // Bind param addresses into registers so subsequent ld.global
         // through %rd0/1 actually has somewhere to land.
@@ -152,11 +170,10 @@ impl Builder {
         // `Unstructured::int_in_range` and friends don't return
         // `NotEnoughData` when empty — they ratchet down to zero
         // forever — so we have to check `is_empty()` explicitly.
-        while !u.is_empty()
-            && self.stmts < MAX_STATEMENTS
-            && self.out.len() < MAX_OUTPUT_BYTES
-        {
-            if self.emit_statement(u).is_err() { break; }
+        while !u.is_empty() && self.stmts < MAX_STATEMENTS && self.out.len() < MAX_OUTPUT_BYTES {
+            if self.emit_statement(u).is_err() {
+                break;
+            }
             self.stmts += 1;
         }
         Ok(())
@@ -169,37 +186,37 @@ impl Builder {
         // for the common ones.
         let pick: u8 = u.int_in_range(0..=47)?;
         match pick {
-            0..=4   => self.emit_arith_int(u)?,
-            5..=7   => self.emit_logic_int(u)?,
-            8..=9   => self.emit_shift_int(u)?,
+            0..=4 => self.emit_arith_int(u)?,
+            5..=7 => self.emit_logic_int(u)?,
+            8..=9 => self.emit_shift_int(u)?,
             10..=12 => self.emit_mov(u)?,
             13..=15 => self.emit_ld(u)?,
             16..=18 => self.emit_st(u)?,
-            19      => self.emit_setp(u)?,
-            20      => self.emit_selp(u)?,
-            21      => self.emit_bra(u)?,
-            22      => self.emit_label(u)?,
-            23      => self.emit_cvt(u)?,
-            24      => self.emit_mul_wide(u)?,
-            25      => self.emit_fma(u)?,
-            26      => self.emit_arith_float(u)?,
-            27      => self.emit_atom(u)?,
-            28      => self.out.push_str("    bar.sync 0;\n"),
-            29      => self.out.push_str("    membar.gl;\n"),
-            30      => self.emit_neg_abs(u)?,
-            31      => self.emit_min_max(u)?,
+            19 => self.emit_setp(u)?,
+            20 => self.emit_selp(u)?,
+            21 => self.emit_bra(u)?,
+            22 => self.emit_label(u)?,
+            23 => self.emit_cvt(u)?,
+            24 => self.emit_mul_wide(u)?,
+            25 => self.emit_fma(u)?,
+            26 => self.emit_arith_float(u)?,
+            27 => self.emit_atom(u)?,
+            28 => self.out.push_str("    bar.sync 0;\n"),
+            29 => self.out.push_str("    membar.gl;\n"),
+            30 => self.emit_neg_abs(u)?,
+            31 => self.emit_min_max(u)?,
             32..=33 => self.emit_mad(u)?,
-            34      => self.emit_bfe(u)?,
-            35      => self.emit_bfi(u)?,
+            34 => self.emit_bfe(u)?,
+            35 => self.emit_bfi(u)?,
             36..=37 => self.emit_bit_count(u)?,
-            38      => self.emit_prmt(u)?,
+            38 => self.emit_prmt(u)?,
             39..=41 => self.emit_special_reg(u)?,
-            42      => self.emit_sad(u)?,
+            42 => self.emit_sad(u)?,
             43..=44 => self.emit_vector_ld_st(u)?,
-            45      => self.emit_dp4a(u)?,
-            46      => self.emit_brev(u)?,
-            47      => self.emit_rcp_sqrt(u)?,
-            _       => unreachable!(),
+            45 => self.emit_dp4a(u)?,
+            46 => self.emit_brev(u)?,
+            47 => self.emit_rcp_sqrt(u)?,
+            _ => unreachable!(),
         }
         Ok(())
     }
@@ -223,14 +240,28 @@ impl Builder {
     }
 
     fn int_reg(&self, u: &mut Unstructured, ty: IntTy) -> Result<String> {
-        if ty.is_64() { self.reg64(u) } else { self.reg32(u) }
+        if ty.is_64() {
+            self.reg64(u)
+        } else {
+            self.reg32(u)
+        }
     }
     fn float_reg(&self, u: &mut Unstructured, ty: FloatTy) -> Result<String> {
-        match ty { FloatTy::F32 => self.regf32(u), FloatTy::F64 => self.regf64(u) }
+        match ty {
+            FloatTy::F32 => self.regf32(u),
+            FloatTy::F64 => self.regf64(u),
+        }
     }
 
     fn int_ty(&self, u: &mut Unstructured) -> Result<IntTy> {
-        Ok(*u.choose(&[IntTy::S32, IntTy::U32, IntTy::S64, IntTy::U64, IntTy::B32, IntTy::B64])?)
+        Ok(*u.choose(&[
+            IntTy::S32,
+            IntTy::U32,
+            IntTy::S64,
+            IntTy::U64,
+            IntTy::B32,
+            IntTy::B64,
+        ])?)
     }
     fn int_ty_arith(&self, u: &mut Unstructured) -> Result<IntTy> {
         // ops like add/sub/mul don't accept .bNN
@@ -258,7 +289,8 @@ impl Builder {
         let d = self.int_reg(u, ty)?;
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
         Ok(())
     }
 
@@ -268,7 +300,8 @@ impl Builder {
         let d = self.int_reg(u, ty)?;
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
         Ok(())
     }
 
@@ -282,7 +315,8 @@ impl Builder {
         let a = self.int_reg(u, ty)?;
         // Shift amount is always a .u32, given as a literal here.
         let shift: u32 = u.int_in_range(0..=63)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {a}, {shift};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {a}, {shift};\n", ty.name()));
         Ok(())
     }
 
@@ -293,16 +327,19 @@ impl Builder {
             let d = self.int_reg(u, ty)?;
             if u.arbitrary()? {
                 let s = self.int_reg(u, ty)?;
-                self.out.push_str(&format!("    mov.{} {d}, {s};\n", ty.name()));
+                self.out
+                    .push_str(&format!("    mov.{} {d}, {s};\n", ty.name()));
             } else {
                 let imm = self.int_imm(u, ty)?;
-                self.out.push_str(&format!("    mov.{} {d}, {imm};\n", ty.name()));
+                self.out
+                    .push_str(&format!("    mov.{} {d}, {imm};\n", ty.name()));
             }
         } else {
             let ty = self.float_ty(u)?;
             let d = self.float_reg(u, ty)?;
             let s = self.float_reg(u, ty)?;
-            self.out.push_str(&format!("    mov.{} {d}, {s};\n", ty.name()));
+            self.out
+                .push_str(&format!("    mov.{} {d}, {s};\n", ty.name()));
         }
         Ok(())
     }
@@ -315,15 +352,18 @@ impl Builder {
         if u.arbitrary()? {
             let ty = *u.choose(&[IntTy::U32, IntTy::S32, IntTy::B32])?;
             let d = self.reg32(u)?;
-            self.out.push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
+            self.out
+                .push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
         } else if u.arbitrary()? {
             let ty = *u.choose(&[IntTy::U64, IntTy::S64, IntTy::B64])?;
             let d = self.reg64(u)?;
-            self.out.push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
+            self.out
+                .push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
         } else {
             let ty = self.float_ty(u)?;
             let d = self.float_reg(u, ty)?;
-            self.out.push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
+            self.out
+                .push_str(&format!("    ld.{space}.{} {d}, [{addr}];\n", ty.name()));
         }
         Ok(())
     }
@@ -334,15 +374,18 @@ impl Builder {
         if u.arbitrary()? {
             let ty = *u.choose(&[IntTy::U32, IntTy::S32, IntTy::B32])?;
             let s = self.reg32(u)?;
-            self.out.push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
+            self.out
+                .push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
         } else if u.arbitrary()? {
             let ty = *u.choose(&[IntTy::U64, IntTy::S64, IntTy::B64])?;
             let s = self.reg64(u)?;
-            self.out.push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
+            self.out
+                .push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
         } else {
             let ty = self.float_ty(u)?;
             let s = self.float_reg(u, ty)?;
-            self.out.push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
+            self.out
+                .push_str(&format!("    st.{space}.{} [{addr}], {s};\n", ty.name()));
         }
         Ok(())
     }
@@ -354,12 +397,14 @@ impl Builder {
             let ty = self.int_ty_arith(u)?;
             let a = self.int_reg(u, ty)?;
             let b = self.int_reg(u, ty)?;
-            self.out.push_str(&format!("    setp.{cmp}.{} {p}, {a}, {b};\n", ty.name()));
+            self.out
+                .push_str(&format!("    setp.{cmp}.{} {p}, {a}, {b};\n", ty.name()));
         } else {
             let ty = self.float_ty(u)?;
             let a = self.float_reg(u, ty)?;
             let b = self.float_reg(u, ty)?;
-            self.out.push_str(&format!("    setp.{cmp}.{} {p}, {a}, {b};\n", ty.name()));
+            self.out
+                .push_str(&format!("    setp.{cmp}.{} {p}, {a}, {b};\n", ty.name()));
         }
         Ok(())
     }
@@ -370,7 +415,8 @@ impl Builder {
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
         let p = self.regp(u)?;
-        self.out.push_str(&format!("    selp.{} {d}, {a}, {b}, {p};\n", ty.name()));
+        self.out
+            .push_str(&format!("    selp.{} {d}, {a}, {b}, {p};\n", ty.name()));
         Ok(())
     }
 
@@ -415,7 +461,8 @@ impl Builder {
                 let st = self.int_ty_arith(u)?;
                 let d = self.int_reg(u, dt)?;
                 let s = self.int_reg(u, st)?;
-                self.out.push_str(&format!("    cvt.{}.{} {d}, {s};\n", dt.name(), st.name()));
+                self.out
+                    .push_str(&format!("    cvt.{}.{} {d}, {s};\n", dt.name(), st.name()));
             }
             1 => {
                 // int -> float: CUDA 13.x ptxas requires a rounding
@@ -428,7 +475,9 @@ impl Builder {
                 let s = self.int_reg(u, st)?;
                 let rnd = u.choose(&["rn", "rz", "rm", "rp"])?;
                 self.out.push_str(&format!(
-                    "    cvt.{rnd}.{}.{} {d}, {s};\n", dt.name(), st.name()
+                    "    cvt.{rnd}.{}.{} {d}, {s};\n",
+                    dt.name(),
+                    st.name()
                 ));
             }
             2 => {
@@ -438,7 +487,9 @@ impl Builder {
                 let d = self.int_reg(u, dt)?;
                 let s = self.float_reg(u, st)?;
                 self.out.push_str(&format!(
-                    "    cvt.{rnd}.{}.{} {d}, {s};\n", dt.name(), st.name()
+                    "    cvt.{rnd}.{}.{} {d}, {s};\n",
+                    dt.name(),
+                    st.name()
                 ));
             }
             3 => {
@@ -448,7 +499,8 @@ impl Builder {
                     let d = self.regf32(u)?;
                     let s = self.regf64(u)?;
                     let rnd = u.choose(&["rn", "rz", "rm", "rp"])?;
-                    self.out.push_str(&format!("    cvt.{rnd}.f32.f64 {d}, {s};\n"));
+                    self.out
+                        .push_str(&format!("    cvt.{rnd}.f32.f64 {d}, {s};\n"));
                 } else {
                     // f32 -> f64 (widening): no rnd
                     let d = self.regf64(u)?;
@@ -467,7 +519,8 @@ impl Builder {
         let d = self.reg64(u)?;
         let a = self.reg32(u)?;
         let b = self.reg32(u)?;
-        self.out.push_str(&format!("    mul.wide.{} {d}, {a}, {b};\n", ty.name()));
+        self.out
+            .push_str(&format!("    mul.wide.{} {d}, {a}, {b};\n", ty.name()));
         Ok(())
     }
 
@@ -478,7 +531,10 @@ impl Builder {
         let a = self.float_reg(u, ty)?;
         let b = self.float_reg(u, ty)?;
         let c = self.float_reg(u, ty)?;
-        self.out.push_str(&format!("    fma.{rnd}.{} {d}, {a}, {b}, {c};\n", ty.name()));
+        self.out.push_str(&format!(
+            "    fma.{rnd}.{} {d}, {a}, {b}, {c};\n",
+            ty.name()
+        ));
         Ok(())
     }
 
@@ -494,7 +550,8 @@ impl Builder {
         let d = self.float_reg(u, ty)?;
         let a = self.float_reg(u, ty)?;
         let b = self.float_reg(u, ty)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
         Ok(())
     }
 
@@ -508,8 +565,7 @@ impl Builder {
         let space = *u.choose(&["global", "shared"])?;
         let op = *u.choose(&["add", "and", "or", "xor", "exch", "min", "max", "cas"])?;
         let ty = match op {
-            "and" | "or" | "xor" | "exch" | "cas" =>
-                *u.choose(&[IntTy::B32, IntTy::B64])?,
+            "and" | "or" | "xor" | "exch" | "cas" => *u.choose(&[IntTy::B32, IntTy::B64])?,
             "add" => *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64])?,
             "min" | "max" => *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64, IntTy::S64])?,
             _ => unreachable!(),
@@ -520,11 +576,13 @@ impl Builder {
         if op == "cas" {
             let b = self.int_reg(u, ty)?;
             self.out.push_str(&format!(
-                "    atom.{space}.cas.{} {d}, [{addr}], {a}, {b};\n", ty.name()
+                "    atom.{space}.cas.{} {d}, [{addr}], {a}, {b};\n",
+                ty.name()
             ));
         } else {
             self.out.push_str(&format!(
-                "    atom.{space}.{op}.{} {d}, [{addr}], {a};\n", ty.name()
+                "    atom.{space}.{op}.{} {d}, [{addr}], {a};\n",
+                ty.name()
             ));
         }
         Ok(())
@@ -536,12 +594,14 @@ impl Builder {
             let ty = *u.choose(&[IntTy::S32, IntTy::S64])?;
             let d = self.int_reg(u, ty)?;
             let a = self.int_reg(u, ty)?;
-            self.out.push_str(&format!("    {op}.{} {d}, {a};\n", ty.name()));
+            self.out
+                .push_str(&format!("    {op}.{} {d}, {a};\n", ty.name()));
         } else {
             let ty = self.float_ty(u)?;
             let d = self.float_reg(u, ty)?;
             let a = self.float_reg(u, ty)?;
-            self.out.push_str(&format!("    {op}.{} {d}, {a};\n", ty.name()));
+            self.out
+                .push_str(&format!("    {op}.{} {d}, {a};\n", ty.name()));
         }
         Ok(())
     }
@@ -552,7 +612,8 @@ impl Builder {
         let d = self.int_reg(u, ty)?;
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {a}, {b};\n", ty.name()));
         Ok(())
     }
 
@@ -564,7 +625,10 @@ impl Builder {
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
         let c = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    mad.{part}.{} {d}, {a}, {b}, {c};\n", ty.name()));
+        self.out.push_str(&format!(
+            "    mad.{part}.{} {d}, {a}, {b}, {c};\n",
+            ty.name()
+        ));
         Ok(())
     }
 
@@ -575,7 +639,8 @@ impl Builder {
         let s = self.int_reg(u, ty)?;
         let pos: u32 = u.int_in_range(0..=63)?;
         let len: u32 = u.int_in_range(1..=32)?;
-        self.out.push_str(&format!("    bfe.{} {d}, {s}, {pos}, {len};\n", ty.name()));
+        self.out
+            .push_str(&format!("    bfe.{} {d}, {s}, {pos}, {len};\n", ty.name()));
         Ok(())
     }
 
@@ -587,7 +652,10 @@ impl Builder {
         let b = self.int_reg(u, ty)?;
         let pos: u32 = u.int_in_range(0..=63)?;
         let len: u32 = u.int_in_range(1..=32)?;
-        self.out.push_str(&format!("    bfi.{} {d}, {a}, {b}, {pos}, {len};\n", ty.name()));
+        self.out.push_str(&format!(
+            "    bfi.{} {d}, {a}, {b}, {pos}, {len};\n",
+            ty.name()
+        ));
         Ok(())
     }
 
@@ -598,12 +666,13 @@ impl Builder {
         let op = *u.choose(&["popc", "clz", "bfind"])?;
         let src_ty = match op {
             "popc" | "clz" => *u.choose(&[IntTy::B32, IntTy::B64])?,
-            "bfind"        => *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64, IntTy::S64])?,
+            "bfind" => *u.choose(&[IntTy::U32, IntTy::S32, IntTy::U64, IntTy::S64])?,
             _ => unreachable!(),
         };
         let d = self.reg32(u)?;
         let s = self.int_reg(u, src_ty)?;
-        self.out.push_str(&format!("    {op}.{} {d}, {s};\n", src_ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{} {d}, {s};\n", src_ty.name()));
         Ok(())
     }
 
@@ -615,7 +684,8 @@ impl Builder {
         let b = self.reg32(u)?;
         // Use an immediate selector — restricts to legal nibbles 0..7.
         let sel: u32 = u.arbitrary()?;
-        self.out.push_str(&format!("    prmt.b32 {d}, {a}, {b}, {sel:#x};\n"));
+        self.out
+            .push_str(&format!("    prmt.b32 {d}, {a}, {b}, {sel:#x};\n"));
         Ok(())
     }
 
@@ -647,7 +717,8 @@ impl Builder {
         let a = self.int_reg(u, ty)?;
         let b = self.int_reg(u, ty)?;
         let c = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    sad.{} {d}, {a}, {b}, {c};\n", ty.name()));
+        self.out
+            .push_str(&format!("    sad.{} {d}, {a}, {b}, {c};\n", ty.name()));
         Ok(())
     }
 
@@ -662,7 +733,9 @@ impl Builder {
         let addr = format!("%rd{}", u.int_in_range(0..=3)?);
         let mut regs = String::new();
         for i in 0..width {
-            if i > 0 { regs.push_str(", "); }
+            if i > 0 {
+                regs.push_str(", ");
+            }
             regs.push_str(&self.reg32(u)?);
         }
         if is_load {
@@ -688,7 +761,9 @@ impl Builder {
         let b = self.reg32(u)?;
         let c = self.reg32(u)?;
         self.out.push_str(&format!(
-            "    dp4a.{}.{} {d}, {a}, {b}, {c};\n", dt.name(), st.name()
+            "    dp4a.{}.{} {d}, {a}, {b}, {c};\n",
+            dt.name(),
+            st.name()
         ));
         Ok(())
     }
@@ -698,7 +773,8 @@ impl Builder {
         let ty = *u.choose(&[IntTy::B32, IntTy::B64])?;
         let d = self.int_reg(u, ty)?;
         let a = self.int_reg(u, ty)?;
-        self.out.push_str(&format!("    brev.{} {d}, {a};\n", ty.name()));
+        self.out
+            .push_str(&format!("    brev.{} {d}, {a};\n", ty.name()));
         Ok(())
     }
 
@@ -708,10 +784,14 @@ impl Builder {
         // ".rn" for f64.
         let op = u.choose(&["rcp", "sqrt"])?;
         let ty = self.float_ty(u)?;
-        let mod_ = match ty { FloatTy::F32 => "approx", FloatTy::F64 => "rn" };
+        let mod_ = match ty {
+            FloatTy::F32 => "approx",
+            FloatTy::F64 => "rn",
+        };
         let d = self.float_reg(u, ty)?;
         let a = self.float_reg(u, ty)?;
-        self.out.push_str(&format!("    {op}.{mod_}.{} {d}, {a};\n", ty.name()));
+        self.out
+            .push_str(&format!("    {op}.{mod_}.{} {d}, {a};\n", ty.name()));
         Ok(())
     }
 }
@@ -739,8 +819,11 @@ mod tests {
             let s = generate_ptx(&bytes);
             assert!(s.contains(".entry kernel"), "missing prelude at n={n}");
             assert!(s.contains("ret;"), "missing ret at n={n}");
-            assert!(s.len() <= MAX_OUTPUT_BYTES * 2,
-                "output too big at n={n}: {} bytes", s.len());
+            assert!(
+                s.len() <= MAX_OUTPUT_BYTES * 2,
+                "output too big at n={n}: {} bytes",
+                s.len()
+            );
         }
     }
 

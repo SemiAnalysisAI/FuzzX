@@ -47,9 +47,7 @@ const N: u32 = 32;
 
 fn input_bytes() -> Vec<u8> {
     // in[i] = i + 1, so expected out[i] = (i+1) + i = 2i + 1.
-    (0..N)
-        .flat_map(|i| (i + 1).to_ne_bytes())
-        .collect()
+    (0..N).flat_map(|i| (i + 1).to_ne_bytes()).collect()
 }
 
 fn run(cubin: &[u8]) -> Vec<u32> {

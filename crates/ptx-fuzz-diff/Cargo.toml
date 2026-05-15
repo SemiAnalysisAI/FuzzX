@@ -25,7 +25,23 @@ path = "src/bin/verify_050f.rs"
 name = "ptx-fuzz-diff-reduce"
 path = "src/bin/reduce.rs"
 
+[[bin]]
+name = "dump_gen"
+path = "src/bin/dump_gen.rs"
+
+[[bin]]
+name = "divtest"
+path = "src/bin/divtest.rs"
+
+[[bin]]
+name = "divsweep"
+path = "src/bin/divsweep.rs"
+
 [dependencies]
 anyhow.workspace = true
 ptx-fuzz-exec = { path = "../ptx-fuzz-exec" }
 ptx-fuzz-execgen = { path = "../ptx-fuzz-execgen" }
+
+[[bin]]
+name = "inspect_outputs"
+path = "src/bin/inspect_outputs.rs"

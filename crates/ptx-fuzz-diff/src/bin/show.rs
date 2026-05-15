@@ -12,7 +12,11 @@ use ptx_fuzz_execgen::{N_OUTPUTS, N_THREADS};
 fn read_u32s(path: &Path) -> Result<Vec<u32>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() % 4 != 0 {
-        bail!("{} length {} is not a multiple of 4", path.display(), bytes.len());
+        bail!(
+            "{} length {} is not a multiple of 4",
+            path.display(),
+            bytes.len()
+        );
     }
     Ok(bytes
         .chunks_exact(4)
@@ -54,9 +58,13 @@ fn main() -> Result<()> {
             let b = &o3[tid * k..tid * k + k];
             let mark = if a == b { " " } else { "!" };
             print!("{mark}t{tid:02} in={i:#010x}  o0=");
-            for v in a { print!("{v:#010x} "); }
+            for v in a {
+                print!("{v:#010x} ");
+            }
             print!(" o3=");
-            for v in b { print!("{v:#010x} "); }
+            for v in b {
+                print!("{v:#010x} ");
+            }
             println!();
         }
         let differing_threads = (0..N_THREADS as usize)

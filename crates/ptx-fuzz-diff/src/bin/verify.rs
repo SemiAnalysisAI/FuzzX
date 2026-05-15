@@ -57,7 +57,11 @@ fn main() -> Result<()> {
         println!(
             "  {label}: {} runs, deterministic={}",
             REPEATS,
-            if all_same { "yes" } else { "NO (this is a real problem)" },
+            if all_same {
+                "yes"
+            } else {
+                "NO (this is a real problem)"
+            },
         );
     }
 
@@ -78,7 +82,11 @@ fn main() -> Result<()> {
         println!(
             "  {label}: {} compile+run cycles, stable={}",
             REPEATS,
-            if all_same { "yes" } else { "NO (ptxas itself is nondeterministic)" },
+            if all_same {
+                "yes"
+            } else {
+                "NO (ptxas itself is nondeterministic)"
+            },
         );
     }
 
@@ -92,7 +100,9 @@ fn main() -> Result<()> {
         let n_threads = N_THREADS as usize;
         let k = output_len() / n_threads / 4;
         let to_u32s = |b: &[u8]| -> Vec<u32> {
-            b.chunks_exact(4).map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect()
+            b.chunks_exact(4)
+                .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()
         };
         let u0 = to_u32s(&r0);
         let u3 = to_u32s(&r3);
