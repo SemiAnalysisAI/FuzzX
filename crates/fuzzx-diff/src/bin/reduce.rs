@@ -119,10 +119,30 @@ fn no_progress_timeout() -> Result<Duration> {
     ))
 }
 
+fn max_batch_size() -> Result<usize> {
+    Ok(env_usize("REDUCE_MAX_BATCH")?.unwrap_or(64).max(1))
+}
+
 fn candidate_without_line(lines: &[String], remove_idx: usize) -> String {
     let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
     for (i, line) in lines.iter().enumerate() {
         if i != remove_idx {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn candidate_without_lines(lines: &[String], remove_indices: &[usize]) -> String {
+    let mut remove = vec![false; lines.len()];
+    for &i in remove_indices {
+        remove[i] = true;
+    }
+
+    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
+    for (i, line) in lines.iter().enumerate() {
+        if !remove[i] {
             out.push_str(line);
             out.push('\n');
         }
@@ -154,6 +174,120 @@ fn diverges_deterministically(
         return None;
     }
     Some((o0a, o3a))
+}
+
+/// Find the first bottom-up chunk whose combined deletion preserves
+/// deterministic divergence. This is less minimal per iteration than the
+/// greedy single-line pass, but much faster through long runs of dead code.
+fn find_chunk_removal(
+    ptx: &str,
+    input: &[u8],
+    candidates: &[usize],
+    chunk_size: usize,
+    gpus: &[i32],
+    workers_per_gpu: usize,
+    no_progress_timeout: Duration,
+) -> Option<(Vec<usize>, String)> {
+    if chunk_size <= 1 || candidates.len() < chunk_size {
+        return None;
+    }
+
+    let ordered: Vec<usize> = candidates.iter().rev().copied().collect();
+    let chunks: Arc<Vec<Vec<usize>>> = Arc::new(
+        ordered
+            .chunks(chunk_size)
+            .filter(|chunk| chunk.len() == chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect(),
+    );
+    if chunks.is_empty() {
+        return None;
+    }
+
+    let lines: Arc<Vec<String>> = Arc::new(ptx.lines().map(str::to_string).collect());
+    let input: Arc<Vec<u8>> = Arc::new(input.to_vec());
+    let next = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel::<(usize, bool)>();
+
+    let mut handles = Vec::new();
+    for &gpu in gpus {
+        for w in 0..workers_per_gpu {
+            let chunks = Arc::clone(&chunks);
+            let lines = Arc::clone(&lines);
+            let input = Arc::clone(&input);
+            let next = Arc::clone(&next);
+            let stop = Arc::clone(&stop);
+            let tx = tx.clone();
+            handles.push(thread::spawn(move || {
+                let cuda = match Cuda::init(gpu) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("reduce batch worker gpu {gpu} #{w}: Cuda::init: {e:#}");
+                        return;
+                    }
+                };
+                let bufs = match cuda.alloc_buffers(input.len(), output_len()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("reduce batch worker gpu {gpu} #{w}: alloc_buffers: {e:#}");
+                        return;
+                    }
+                };
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let pos = next.fetch_add(1, Ordering::Relaxed);
+                    if pos >= chunks.len() {
+                        return;
+                    }
+                    let candidate = candidate_without_lines(&lines, &chunks[pos]);
+                    let ok = diverges_deterministically(&cuda, &bufs, &candidate, &input).is_some();
+                    if tx.send((pos, ok)).is_err() {
+                        return;
+                    }
+                }
+            }));
+        }
+    }
+    drop(tx);
+
+    let mut verdicts = vec![None; chunks.len()];
+    let mut frontier = 0usize;
+    let mut accepted = None;
+    loop {
+        let (pos, ok) = match rx.recv_timeout(no_progress_timeout) {
+            Ok(v) => v,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                eprintln!(
+                    "no reducer batch candidate finished for {:?}; exiting instead of hanging",
+                    no_progress_timeout,
+                );
+                std::process::exit(124);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+        verdicts[pos] = Some(ok);
+        while frontier < verdicts.len() && verdicts[frontier] == Some(false) {
+            frontier += 1;
+        }
+        if frontier < verdicts.len() && verdicts[frontier] == Some(true) {
+            accepted = Some(frontier);
+            stop.store(true, Ordering::Relaxed);
+            break;
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let pos = accepted?;
+    let remove_indices = chunks[pos].clone();
+    let candidate = candidate_without_lines(&lines, &remove_indices);
+    Some((remove_indices, candidate))
 }
 
 /// Find the first removable line, in the same bottom-up order as the old
@@ -325,6 +459,7 @@ fn main() -> Result<()> {
     let gpus = parse_gpus()?;
     let workers_per_gpu = workers_per_gpu(gpus.len())?;
     let no_progress_timeout = no_progress_timeout()?;
+    let max_batch_size = max_batch_size()?;
     let cuda = Cuda::init(gpus[0]).with_context(|| format!("Cuda::init gpu={}", gpus[0]))?;
     let bufs = cuda.alloc_buffers(input.len(), output_len())?;
     let start_lines = ptx.lines().count();
@@ -335,7 +470,7 @@ fn main() -> Result<()> {
     }
     eprintln!(
         "starting at {start_lines} total lines ({start_body} removable candidates); \
-         gpus={gpus:?} workers_per_gpu={workers_per_gpu} total_workers={}",
+         gpus={gpus:?} workers_per_gpu={workers_per_gpu} total_workers={} max_batch_size={max_batch_size}",
         gpus.len() * workers_per_gpu,
     );
 
@@ -344,6 +479,47 @@ fn main() -> Result<()> {
     loop {
         let candidates = removable_indices(&ptx)?;
         let lines: Vec<String> = ptx.lines().map(str::to_string).collect();
+
+        let largest_chunk = max_batch_size.min(candidates.len());
+        let mut chunk_size = 1usize;
+        while chunk_size.saturating_mul(2) <= largest_chunk {
+            chunk_size *= 2;
+        }
+        let mut batch_removed = false;
+        while chunk_size >= 2 {
+            if let Some((remove_indices, candidate)) = find_chunk_removal(
+                &ptx,
+                &input,
+                &candidates,
+                chunk_size,
+                &gpus,
+                workers_per_gpu,
+                no_progress_timeout,
+            ) {
+                let old_len = lines.len();
+                let new_len = old_len - remove_indices.len();
+                let first = remove_indices.iter().min().copied().unwrap_or(0);
+                let last = remove_indices.iter().max().copied().unwrap_or(first);
+                eprintln!(
+                    "  removed batch {} lines ({} → {} lines): old lines {}..{}",
+                    remove_indices.len(),
+                    old_len,
+                    new_len,
+                    first,
+                    last,
+                );
+                ptx = candidate;
+                total_removed += remove_indices.len();
+                std::fs::write(dir.join("reduced.ptx"), &ptx)?;
+                batch_removed = true;
+                break;
+            }
+            chunk_size /= 2;
+        }
+        if batch_removed {
+            continue;
+        }
+
         // Bottom-up: removing later lines is less likely to cascade into
         // use-before-def in code that hasn't run yet. The helper runs those
         // trials in parallel but accepts the same first viable deletion this

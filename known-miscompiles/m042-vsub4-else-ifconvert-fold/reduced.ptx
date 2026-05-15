@@ -1,0 +1,58 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<21>;
+    .reg .b32   %r<22>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r20, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r20, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r20;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r20;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r8, 8;
+    mov.u32         %r9, %r20;
+    mov.u32         %r10, %r2;
+    mov.u32         %r11, %r0;
+    mov.u32         %r12, 12;
+    mov.u32         %r13, %r20;
+    mov.u32         %r14, %r2;
+    mov.u32         %r15, %r0;
+    mov.u32         %r16, 16;
+    mov.u32         %r17, %r20;
+    mov.u32         %r18, %r2;
+    mov.u32         %r19, %r0;
+
+    setp.ne.u32   %p5, 2, %r17;
+    @%p5 bra   structured_if_1_then;
+    bra             structured_if_1_else;
+structured_if_1_then:
+    bra             structured_if_1_done;
+structured_if_1_else:
+    vsub4.u32.u32.u32        %r4, %r15, %r17, %r9;
+    mad.lo.u32    %r1, %r4, %r2, 46474;
+structured_if_1_done:
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r20, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 4], %r1;
+    ret;
+}
