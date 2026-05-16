@@ -486,6 +486,44 @@ bool triggersM019HighBitOrXor(const Instruction &I) {
          isOrWithHighBitConstantOf(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool hasName(const Value *V, StringRef Name) {
+  return V && V->hasName() && V->getName() == Name;
+}
+
+bool validateFixedMemoryShape(Function &Kernel) {
+  unsigned GEPs = 0;
+  unsigned Loads = 0;
+  unsigned Stores = 0;
+  for (BasicBlock &BB : Kernel) {
+    for (Instruction &I : BB) {
+      if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        ++GEPs;
+        if (GEP->getSourceElementType() != Type::getInt32Ty(Kernel.getContext()))
+          return false;
+        if (!hasName(GEP, "in.ptr") && !hasName(GEP, "out.ptr"))
+          return false;
+        if (GEP->getNumIndices() != 1 ||
+            !hasName(GEP->idx_begin()->get(), "idx64"))
+          return false;
+        unsigned ArgNo = hasName(GEP, "in.ptr") ? 0 : 1;
+        if (GEP->getPointerOperand() != Kernel.getArg(ArgNo))
+          return false;
+      } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        ++Loads;
+        if (!Load->getType()->isIntegerTy(32) ||
+            !hasName(Load->getPointerOperand(), "in.ptr"))
+          return false;
+      } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        ++Stores;
+        if (!Store->getValueOperand()->getType()->isIntegerTy(32) ||
+            !hasName(Store->getPointerOperand(), "out.ptr"))
+          return false;
+      }
+    }
+  }
+  return GEPs == 2 && Loads == 1 && Stores == 1;
+}
+
 bool validateIRCorpusModule(Module &M) {
   bool AllowM019 = envFlag("FUZZX_ALLOW_M019_HIGHBIT_OR_XOR", false);
   Function *Kernel = findIRKernel(M);
@@ -497,6 +535,8 @@ bool validateIRCorpusModule(Module &M) {
   for (Function &F : M) {
     if (&F == Kernel) {
       if (F.empty())
+        return false;
+      if (!validateFixedMemoryShape(F))
         return false;
       for (BasicBlock &BB : F)
         for (Instruction &I : BB)
@@ -766,11 +806,20 @@ std::vector<uint8_t> moduleToBitcode(Module &M) {
   return std::vector<uint8_t>(Buffer.begin(), Buffer.end());
 }
 
+bool isCrossOverCloneableInstruction(const Instruction &I) {
+  if (I.isTerminator() || I.mayReadOrWriteMemory() || isa<GetElementPtrInst>(&I))
+    return false;
+  Type *Ty = I.getType();
+  if (!Ty->isIntegerTy(1) && !Ty->isIntegerTy(32))
+    return false;
+  return isAllowedIRInstruction(I);
+}
+
 bool cloneInstructionIntoKernel(Instruction *OtherI, Module &Base,
                                 StoreInst *Store,
                                 DenseMap<const Value *, Value *> &Map,
                                 std::minstd_rand &Gen) {
-  if (!OtherI || OtherI->isTerminator() || OtherI->getType()->isVoidTy())
+  if (!OtherI || !isCrossOverCloneableInstruction(*OtherI))
     return false;
   Function *BaseF = findIRKernel(Base);
   if (!BaseF)
@@ -830,8 +879,7 @@ bool crossOverIRModules(Module &Base, const Module &Other,
   SmallVector<const Instruction *, 64> OtherI32;
   for (const BasicBlock &BB : *OtherF)
     for (const Instruction &I : BB)
-      if (!I.isTerminator() && I.getType()->isIntegerTy(32) &&
-          isAllowedIRInstruction(I))
+      if (I.getType()->isIntegerTy(32) && isCrossOverCloneableInstruction(I))
         OtherI32.push_back(&I);
   if (OtherI32.empty())
     return false;
@@ -841,8 +889,7 @@ bool crossOverIRModules(Module &Base, const Module &Other,
   for (const BasicBlock &BB : *OtherF) {
     for (const Instruction &I : BB) {
       if (&I == Chosen || ToClone.size() < 8) {
-        if (!I.isTerminator() && !I.getType()->isVoidTy() &&
-            isAllowedIRInstruction(I))
+        if (isCrossOverCloneableInstruction(I))
           ToClone.push_back(&I);
       }
       if (&I == Chosen)

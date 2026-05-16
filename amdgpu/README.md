@@ -12,10 +12,11 @@ both kernels through HIP, and compares device output.
 The custom mutator and crossover operate on LLVM IR rather than on raw bytes.
 They currently build a conservative, defined subset of integer IR: no `undef`,
 no explicit poison values, no `nuw` / `nsw` / `exact`, no `inbounds`, no
-integer division, and only masked or constant shift amounts. Coverage includes
-scalar integer arithmetic, bitwise ops, compares/selects, and LLVM bit,
-min/max, saturation, and funnel-shift intrinsics. Corpus files can be inspected
-directly with `opt -S corpus-entry -o -`.
+integer division, only masked or constant shift amounts, and only the fixed
+skeleton input load/output store. Coverage includes scalar integer arithmetic,
+bitwise ops, compares/selects, and LLVM bit, min/max, saturation, and
+funnel-shift intrinsics. Corpus files can be inspected directly with
+`opt -S corpus-entry -o -`.
 
 ## Requirements
 
