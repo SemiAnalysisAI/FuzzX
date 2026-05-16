@@ -360,6 +360,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0xc0u)
+      Kind = 75 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xd0u)
       Kind = 59 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xe0u)
@@ -771,6 +773,68 @@ Value *emitNarrowAbs(IRBuilder<> &B, Module &M, Value *V, unsigned Bits,
   return B.CreateAdd(V, Extended);
 }
 
+Value *emitNarrowMinMax(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                        unsigned Bits, Intrinsic::ID ID, bool SignedExtend) {
+  LLVMContext &Ctx = B.getContext();
+  Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  uint64_t Mask = (1ull << Bits) - 1ull;
+  Value *N = B.CreateTrunc(V, NarrowTy);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {NarrowTy}),
+                   {N, ConstantInt::get(NarrowTy, O.A & Mask)});
+  Value *Extended = SignedExtend ? B.CreateSExt(Mixed, I32)
+                                 : B.CreateZExt(Mixed, I32);
+  return B.CreateXor(B.CreateAdd(V, ci32(Ctx, u32(O.B))), Extended);
+}
+
+Value *emitWideCompareSelect(IRBuilder<> &B, Value *V, const Op &O,
+                             bool SignedCompare) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *W = B.CreateZExt(V, I64);
+  Value *Cmp = SignedCompare ? B.CreateICmpSLT(W, ci64(Ctx, O.A))
+                             : B.CreateICmpULT(W, ci64(Ctx, O.A));
+  Value *T = B.CreateXor(W, ci64(Ctx, O.B));
+  Value *F = B.CreateAdd(W, ci64(Ctx, O.C));
+  Value *Mixed = B.CreateSelect(Cmp, T, F);
+  Value *Lo = B.CreateTrunc(Mixed, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Mixed, ci64(Ctx, 32)), I32);
+  return B.CreateXor(Lo, Hi);
+}
+
+Value *emitWideMinMax(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                      Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *W = B.CreateZExt(V, I64);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I64}),
+                   {W, ci64(Ctx, O.A)});
+  Value *Lo = B.CreateTrunc(Mixed, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Mixed, ci64(Ctx, 32)), I32);
+  return B.CreateAdd(B.CreateXor(Lo, Hi), ci32(Ctx, u32(O.B)));
+}
+
+Value *emitWideFshr(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                    bool DynamicShift) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *W = B.CreateZExt(V, I64);
+  Value *Shift = DynamicShift
+                     ? B.CreateAnd(B.CreateXor(W, ci64(Ctx, O.B)), ci64(Ctx, 63))
+                     : ci64(Ctx, O.B & 63u);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I64}),
+                   {ci64(Ctx, O.A), W, Shift});
+  Value *Lo = B.CreateTrunc(Mixed, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Mixed, ci64(Ctx, 32)), I32);
+  return B.CreateXor(Lo, Hi);
+}
+
 Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
@@ -970,6 +1034,38 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitWideOverflow(B, M, V, O, Intrinsic::ssub_with_overflow);
   case 74:
     return emitWideOverflow(B, M, V, O, Intrinsic::umul_with_overflow);
+  case 75:
+    return emitNarrowMinMax(B, M, V, O, 8, Intrinsic::umin, false);
+  case 76:
+    return emitNarrowMinMax(B, M, V, O, 8, Intrinsic::umax, false);
+  case 77:
+    return emitNarrowMinMax(B, M, V, O, 8, Intrinsic::smin, true);
+  case 78:
+    return emitNarrowMinMax(B, M, V, O, 8, Intrinsic::smax, true);
+  case 79:
+    return emitNarrowMinMax(B, M, V, O, 16, Intrinsic::umin, false);
+  case 80:
+    return emitNarrowMinMax(B, M, V, O, 16, Intrinsic::umax, false);
+  case 81:
+    return emitNarrowMinMax(B, M, V, O, 16, Intrinsic::smin, true);
+  case 82:
+    return emitNarrowMinMax(B, M, V, O, 16, Intrinsic::smax, true);
+  case 83:
+    return emitWideCompareSelect(B, V, O, false);
+  case 84:
+    return emitWideCompareSelect(B, V, O, true);
+  case 85:
+    return emitWideMinMax(B, M, V, O, Intrinsic::umin);
+  case 86:
+    return emitWideMinMax(B, M, V, O, Intrinsic::umax);
+  case 87:
+    return emitWideMinMax(B, M, V, O, Intrinsic::smin);
+  case 88:
+    return emitWideMinMax(B, M, V, O, Intrinsic::smax);
+  case 89:
+    return emitWideFshr(B, M, V, O, false);
+  case 90:
+    return emitWideFshr(B, M, V, O, true);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
