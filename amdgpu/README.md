@@ -19,9 +19,9 @@ integer widths. Packed-vector coverage includes saturating arithmetic, bit
 intrinsics, and masked dynamic shifts. Wider `i32` vectors cover min/max, bit
 intrinsics, masked dynamic shifts, vector `fshr`, and vectors whose lanes are
 all derived from the live input value. Floating-point coverage includes finite
-`float` and `double` arithmetic, comparisons, `fabs`, and `fma`; the generator
-keeps the values bounded and mixes them back through bitcasts to avoid
-FP-to-integer poison.
+`half`, `float`, and `double` arithmetic, comparisons, `fabs`, `sqrt`, `fma`,
+`fdiv`, and `double`-to-`float` rounding; the generator keeps the values
+bounded and mixes them back through bitcasts to avoid FP-to-integer poison.
 
 ## Requirements
 
