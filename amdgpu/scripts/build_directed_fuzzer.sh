@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Build the in-process, GPU-executing AMDGPU differential libFuzzer target.
+#
+# Required unless using the default instrumented build path:
+#   LLVM_DIR=/path/to/llvm-build/lib/cmake/llvm
+#   LLD_DIR=/path/to/llvm-build/lib/cmake/lld
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+ROOT="$(pwd)"
+
+LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$ROOT/build/llvm-fuzzer}"
+LLVM_DIR="${LLVM_DIR:-$LLVM_BUILD_DIR/lib/cmake/llvm}"
+LLD_DIR="${LLD_DIR:-$LLVM_BUILD_DIR/lib/cmake/lld}"
+FUZZER_BUILD_DIR="${FUZZER_BUILD_DIR:-$ROOT/build/directed-fuzzer}"
+ROCM_PATH="${ROCM_PATH:-/opt/rocm-7.1.1}"
+
+if [[ ! -f "$LLVM_DIR/LLVMConfig.cmake" ]]; then
+    echo "LLVMConfig.cmake not found under LLVM_DIR=$LLVM_DIR" >&2
+    echo "Build LLVM first with scripts/build_instrumented_llvm.sh or set LLVM_DIR." >&2
+    exit 2
+fi
+
+if [[ ! -f "$LLD_DIR/LLDConfig.cmake" ]]; then
+    echo "LLDConfig.cmake not found under LLD_DIR=$LLD_DIR" >&2
+    echo "Build LLVM/lld first with scripts/build_instrumented_llvm.sh or set LLD_DIR." >&2
+    exit 2
+fi
+
+cmake -S "$ROOT/fuzzers/llvm-amdgpu-diff" -B "$FUZZER_BUILD_DIR" -G Ninja \
+    -DLLVM_DIR="$LLVM_DIR" \
+    -DLLD_DIR="$LLD_DIR" \
+    -DROCM_PATH="$ROCM_PATH" \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_C_COMPILER="${CC:-$ROCM_PATH/lib/llvm/bin/clang}" \
+    -DCMAKE_CXX_COMPILER="${CXX:-$ROCM_PATH/lib/llvm/bin/clang++}"
+
+cmake --build "$FUZZER_BUILD_DIR" --target llvm_amdgpu_diff_fuzzer --parallel "${NINJAJOBS:-$(nproc)}"
+
+echo "$FUZZER_BUILD_DIR/llvm_amdgpu_diff_fuzzer"

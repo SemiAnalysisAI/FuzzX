@@ -1,6 +1,90 @@
 # FuzzX AMDGPU
 
-This directory is reserved for the AMDGPU fuzzer.
+This directory contains the AMDGPU fuzzer work area.  It is intentionally
+separate from the PTX / `ptxas` fuzzer in [`../ptx/`](../ptx/).
 
-The implementation is intentionally separate from the PTX / `ptxas` fuzzer in
-[`../ptx/`](../ptx/).
+The current fuzzer is the directed C++ libFuzzer target in
+`fuzzers/llvm-amdgpu-diff`. It builds restricted LLVM IR through LLVM's C++ API,
+compiles the IR to AMDGPU code objects through `-O0` and `-O2` LLVM pipelines,
+runs both through HIP, and compares device output.  The generator emits only
+operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
+`nsw` / `exact`, no `inbounds`, no division, and all shift amounts are constants
+below the shifted value's bit width.
+
+## Requirements
+
+| Component | Notes |
+| --- | --- |
+| ROCm LLVM | Defaults to `/opt/rocm-7.1.1/lib/llvm/bin/clang-20`, `lld`, and `llvm-objdump`; override with `CLANG`, `LLD`, and `LLVM_OBJDUMP`. |
+| HIP | `hipcc` is used to build the module runner. |
+| AMDGPU | Defaults to `gfx950`; override with `--mcpu`. |
+
+## Run
+
+Build and run the directed C++ GPU differential fuzzer:
+
+```bash
+scripts/build_directed_fuzzer.sh
+HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=512
+```
+
+Run one directed fuzzer process per GPU:
+
+```bash
+scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
+```
+
+In the current setup the directed fuzzer ran 16,000 executions in 106 seconds
+across 8 GPUs, about 151 exec/s aggregate, while libFuzzer receives coverage
+from the instrumented LLVM codegen path for each input.
+
+Candidate compiler crashes, runner failures, or output mismatches are saved
+under `findings/`.
+
+### Known-Bug Suppression
+
+Known bug patterns are suppressed by default so continued fuzzing does not keep
+rediscovering the same issue.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable the directed C++ fuzzer shape for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `scripts/fetch_llvm.sh` | Shallow LLVM checkout helper. |
+| `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
+| `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
+| `scripts/run_directed_fuzzer.sh` | Runs the C++ directed fuzzer on one GPU. |
+| `scripts/run_directed_multigpu_fuzzer.sh` | Runs one C++ directed fuzzer process per selected GPU. |
+| `fuzzers/llvm-amdgpu-diff/` | LLVM API plus HIP differential libFuzzer target. |
+| `runner/hip_module_runner.cpp` | HIP module loader used to execute generated HSACO files. |
+| `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |
+| `findings/` | Saved candidate bugs. |
+| `corpus/` | Reserved for future coverage-guided corpus inputs. |
+
+## AMDGPU Bugs Found
+
+Except where otherwise noted, these have been tested on `gfx950`.
+
+Version | Description |
+| --- | --- |
+| ROCm 7.1.1 / LLVM 23.0.0git | [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md): `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
+
+## LLVM Source Builds
+
+The fuzzer can use an installed ROCm LLVM today.  For coverage-guided compiler
+fuzzing, point `scripts/build_instrumented_llvm.sh` at an LLVM source checkout
+or fork with `LLVM_PROJECT_DIR=/path/to/llvm-project`; this repo does not
+currently vendor LLVM as a submodule.
+
+Typical directed-fuzzing setup:
+
+```bash
+scripts/fetch_llvm.sh
+LLVM_PROJECT_DIR=$PWD/third_party/llvm-project scripts/build_instrumented_llvm.sh
+scripts/build_directed_fuzzer.sh
+scripts/run_directed_fuzzer.sh
+```

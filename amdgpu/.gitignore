@@ -1,0 +1,11 @@
+/build/
+fuzz-*.log
+__pycache__/
+*.swp
+/third_party/
+
+/findings/*
+!/findings/.gitkeep
+
+/corpus/*
+!/corpus/.gitkeep
