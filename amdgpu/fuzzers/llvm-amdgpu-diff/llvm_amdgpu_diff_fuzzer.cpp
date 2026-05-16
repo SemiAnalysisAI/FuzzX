@@ -337,6 +337,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0xd0u)
+      Kind = 59 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xe0u)
       Kind = 43 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xf0u)
@@ -512,6 +514,23 @@ Value *emitOverflow(IRBuilder<> &B, Module &M, Value *V, const Op &O,
   return B.CreateXor(Wrapped, Shifted);
 }
 
+Value *emitWideOverflow(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                        Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *W = B.CreateZExt(V, I64);
+  Value *Pair =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I64}),
+                   {W, ci64(Ctx, O.A)});
+  Value *Wrapped = B.CreateExtractValue(Pair, {0});
+  Value *Overflow = B.CreateZExt(B.CreateExtractValue(Pair, {1}), I32);
+  Value *Lo = B.CreateTrunc(Wrapped, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Wrapped, ci64(Ctx, 32)), I32);
+  return B.CreateXor(B.CreateAdd(Lo, Hi),
+                     B.CreateShl(Overflow, ci32(Ctx, O.B & 31u)));
+}
+
 Value *emitVector(IRBuilder<> &B, Value *V, unsigned Lanes, const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
@@ -673,6 +692,38 @@ Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
   Value *Shift = B.CreateAnd(B.CreateXor(V, ci32(Ctx, u32(O.B))), ci32(Ctx, 31));
   return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}),
                       {V, ci32(Ctx, u32(O.A)), Shift});
+}
+
+Value *emitNarrowBitIntrinsic(IRBuilder<> &B, Module &M, Value *V,
+                              unsigned Bits, Intrinsic::ID ID,
+                              bool SignedExtend = false) {
+  LLVMContext &Ctx = B.getContext();
+  Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *N = B.CreateTrunc(V, NarrowTy);
+  FunctionCallee Fn = Intrinsic::getOrInsertDeclaration(&M, ID, {NarrowTy});
+  Value *Mixed;
+  if (ID == Intrinsic::ctlz || ID == Intrinsic::cttz)
+    Mixed = B.CreateCall(Fn, {N, ConstantInt::getFalse(Ctx)});
+  else
+    Mixed = B.CreateCall(Fn, {N});
+  Value *Extended = SignedExtend ? B.CreateSExt(Mixed, I32)
+                                 : B.CreateZExt(Mixed, I32);
+  return B.CreateXor(V, Extended);
+}
+
+Value *emitNarrowAbs(IRBuilder<> &B, Module &M, Value *V, unsigned Bits,
+                     bool SignedExtend) {
+  LLVMContext &Ctx = B.getContext();
+  Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *N = B.CreateTrunc(V, NarrowTy);
+  Value *Abs =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs,
+                                                     {NarrowTy}),
+                   {N, ConstantInt::getFalse(Ctx)});
+  Value *Extended = SignedExtend ? B.CreateSExt(Abs, I32) : B.CreateZExt(Abs, I32);
+  return B.CreateAdd(V, Extended);
 }
 
 Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
@@ -840,6 +891,38 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     Value *Loaded = emitPrivateMemory(B, V, Idx, O);
     return emitRotate(B, M, Loaded, O, Intrinsic::fshl);
   }
+  case 59:
+    return emitNarrowBitIntrinsic(B, M, V, 8, Intrinsic::ctlz);
+  case 60:
+    return emitNarrowBitIntrinsic(B, M, V, 8, Intrinsic::cttz);
+  case 61:
+    return emitNarrowBitIntrinsic(B, M, V, 8, Intrinsic::ctpop);
+  case 62:
+    return emitNarrowBitIntrinsic(B, M, V, 8, Intrinsic::bitreverse);
+  case 63:
+    return emitNarrowAbs(B, M, V, 8, false);
+  case 64:
+    return emitNarrowBitIntrinsic(B, M, V, 16, Intrinsic::ctlz);
+  case 65:
+    return emitNarrowBitIntrinsic(B, M, V, 16, Intrinsic::cttz);
+  case 66:
+    return emitNarrowBitIntrinsic(B, M, V, 16, Intrinsic::ctpop);
+  case 67:
+    return emitNarrowBitIntrinsic(B, M, V, 16, Intrinsic::bitreverse);
+  case 68:
+    return emitNarrowBitIntrinsic(B, M, V, 16, Intrinsic::bswap);
+  case 69:
+    return emitNarrowAbs(B, M, V, 16, true);
+  case 70:
+    return emitWideOverflow(B, M, V, O, Intrinsic::uadd_with_overflow);
+  case 71:
+    return emitWideOverflow(B, M, V, O, Intrinsic::usub_with_overflow);
+  case 72:
+    return emitWideOverflow(B, M, V, O, Intrinsic::sadd_with_overflow);
+  case 73:
+    return emitWideOverflow(B, M, V, O, Intrinsic::ssub_with_overflow);
+  case 74:
+    return emitWideOverflow(B, M, V, O, Intrinsic::umul_with_overflow);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));

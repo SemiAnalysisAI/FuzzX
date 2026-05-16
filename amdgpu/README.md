@@ -12,7 +12,7 @@ operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
 below the shifted value's bit width.  Coverage includes scalar integer ops,
 small-width integer ops, packed `i8` / `i16` vectors, selects, structured CFG,
 private-memory load/store sequences, and LLVM overflow, saturation, bit, and
-funnel-shift intrinsics.
+funnel-shift intrinsics across scalar, small-width, and widened integer types.
 
 ## Requirements
 
