@@ -70,6 +70,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M011_I8_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i8` sign-extended identity clear xor shape for [m011](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M012_ADD_SHL_LADDER=1` | unset | Alias to re-enable the broader `add/shl` ladder shape for [m012](known-miscompiles/m012-add-shl-ladder/NOTES.md). |
 | `FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL=1` | unset | Re-enable three-or-more private-memory/funnel-shift ops for [m013](known-miscompiles/m013-private-memory-fshl/NOTES.md). |
+| `FUZZX_ALLOW_M014_SHL_ADD_CTPOP=1` | unset | Re-enable four-step `shl/add` chains feeding `ctpop` for [m014](known-miscompiles/m014-shl-add-ctpop/NOTES.md). |
 
 ## Layout
 
@@ -105,6 +106,7 @@ Version | Description |
 | LLVM 23.0.0git | [m011-i8-sext-clear-xor](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md): `-O0` miscompiles an `i8` sign-extended masked clear xor through the wrong `v_bitop3_b32` result. |
 | LLVM 23.0.0git | [m012-add-shl-ladder](known-miscompiles/m012-add-shl-ladder/NOTES.md): `-O0` scalarizes a divergent `add/shl` ladder through `v_readfirstlane_b32`. |
 | ROCm 7.1.1 / LLVM 23.0.0git | [m013-private-memory-fshl](known-miscompiles/m013-private-memory-fshl/NOTES.md): `-O0` lowers fixed private-memory allocas through a dynamic scratch stack sequence that can return intermittent wrong values. |
+| LLVM 23.0.0git | [m014-shl-add-ctpop](known-miscompiles/m014-shl-add-ctpop/NOTES.md): `-O0` scalarizes a four-step `shl/add` chain feeding `ctpop` through lane 0. |
 
 ## LLVM Source Builds
 
