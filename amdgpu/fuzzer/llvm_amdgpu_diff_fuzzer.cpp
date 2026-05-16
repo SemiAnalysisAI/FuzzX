@@ -336,6 +336,19 @@ bool isIdentityVectorLane0(const Op &O) {
   }
 }
 
+bool isVectorLane0AndXor(const Op &O) {
+  if (!isVectorOp(O))
+    return false;
+  unsigned Lanes = O.Kind == 21 ? 2 : 4;
+  if ((O.B % Lanes) != 0)
+    return false;
+  if (((O.A ^ O.C) % 8) != 4)
+    return false;
+
+  uint32_t C0 = u32(O.A >> 32);
+  return C0 != 0 && C0 != U32Mask;
+}
+
 Program makeProgram(const uint8_t *Data, size_t Size) {
   ByteStream BS{Data, Size};
   Program P;
@@ -353,6 +366,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   bool AllowM014 = envFlag("FUZZX_ALLOW_M014_SHL_ADD_CTPOP", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
                    envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
+  bool AllowM017 =
+      envFlag("FUZZX_ALLOW_M017_VECTOR_AND_LANE0_CLEAR_XOR", false);
   bool AllowM013 = envFlag("FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL", false);
   bool AllowM016 = envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false) ||
                    envFlag("FUZZX_ALLOW_M016_SCALAR_FSHL", false);
@@ -388,6 +403,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     if (!AllowM011 && triggersM011(O))
       breakIdentityNarrow(O);
     if (!AllowM004 && isIdentityVectorLane0(O))
+      ++O.B;
+    if (!AllowM017 && isVectorLane0AndXor(O))
       ++O.B;
     if (!AllowM016 && isFshlOp(O))
       breakFshl(O);
@@ -1529,7 +1546,7 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
 }
 
 std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
-                                    StringRef CPU) {
+                                    StringRef CPU, StringRef KernelName) {
   auto M = std::make_unique<Module>("fuzzx_amdgpu_diff", Ctx);
   M->setTargetTriple(Triple("amdgcn-amd-amdhsa"));
   M->setDataLayout(DataLayout);
@@ -1544,7 +1561,7 @@ std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
   Type *GlobalPtr = PointerType::get(Ctx, 1);
   auto *FTy = FunctionType::get(VoidTy, {GlobalPtr, GlobalPtr, I32}, false);
   Function *F =
-      Function::Create(FTy, GlobalValue::ExternalLinkage, "fuzz_kernel", *M);
+      Function::Create(FTy, GlobalValue::ExternalLinkage, KernelName, *M);
   F->setCallingConv(CallingConv::AMDGPU_KERNEL);
   F->setVisibility(GlobalValue::ProtectedVisibility);
   F->addFnAttr(Attribute::Convergent);
@@ -1675,20 +1692,27 @@ bool writeBytes(StringRef Path, ArrayRef<char> Bytes) {
   return static_cast<bool>(Out);
 }
 
-std::optional<std::string> linkObjectToHsaco(ArrayRef<char> Obj) {
-  std::string ObjPath = tempPath(".o");
+std::optional<std::string> linkObjectsToHsaco(ArrayRef<char> O0Obj,
+                                              ArrayRef<char> O2Obj) {
+  std::string O0ObjPath = tempPath("-o0.o");
+  std::string O2ObjPath = tempPath("-o2.o");
   std::string HsacoPath = tempPath(".hsaco");
-  if (!writeBytes(ObjPath, Obj))
+  if (!writeBytes(O0ObjPath, O0Obj) || !writeBytes(O2ObjPath, O2Obj)) {
+    std::filesystem::remove(O0ObjPath);
+    std::filesystem::remove(O2ObjPath);
     return std::nullopt;
+  }
 
-  std::vector<const char *> Args = {"ld.lld", "-shared", ObjPath.c_str(),
-                                    "-o", HsacoPath.c_str()};
+  std::vector<const char *> Args = {"ld.lld", "-shared", O0ObjPath.c_str(),
+                                    O2ObjPath.c_str(), "-o",
+                                    HsacoPath.c_str()};
   std::string StdoutText;
   std::string StderrText;
   raw_string_ostream StdoutOS(StdoutText);
   raw_string_ostream StderrOS(StderrText);
   bool Ok = lld::elf::link(Args, StdoutOS, StderrOS, false, false);
-  std::filesystem::remove(ObjPath);
+  std::filesystem::remove(O0ObjPath);
+  std::filesystem::remove(O2ObjPath);
   if (!Ok) {
     std::filesystem::remove(HsacoPath);
     return std::nullopt;
@@ -1717,27 +1741,24 @@ std::string moduleToString(Module &M) {
   return Text;
 }
 
-std::optional<std::string> compileProgramToHsaco(const Program &P,
-                                                 StringRef CPU,
-                                                 OptimizationLevel Level,
-                                                 std::string *IR = nullptr) {
+std::optional<SmallVector<char, 0>>
+compileProgramToObject(const Program &P, StringRef CPU, OptimizationLevel Level,
+                       StringRef KernelName, std::string *IR = nullptr) {
   TargetMachine *TM = getTargetMachine(CPU, Level);
   LLVMContext Ctx;
-  std::unique_ptr<Module> M = buildModule(Ctx, P, CPU);
+  std::unique_ptr<Module> M = buildModule(Ctx, P, CPU, KernelName);
   M->setDataLayout(TM->createDataLayout());
   if (IR)
     *IR = moduleToString(*M);
   if (!runOptimizationPipeline(*M, *TM, Level))
     return std::nullopt;
-  auto Obj = emitObject(*M, *TM);
-  if (!Obj)
-    return std::nullopt;
-  return linkObjectToHsaco(*Obj);
+  return emitObject(*M, *TM);
 }
 
 struct HipBuffers {
   uint32_t *In = nullptr;
-  uint32_t *Out = nullptr;
+  uint32_t *O0Out = nullptr;
+  uint32_t *O2Out = nullptr;
   size_t Capacity = 0;
 };
 
@@ -1752,13 +1773,21 @@ bool ensureHipBuffers(size_t Count) {
     return true;
   if (Buffers.In)
     (void)hipFree(Buffers.In);
-  if (Buffers.Out)
-    (void)hipFree(Buffers.Out);
+  if (Buffers.O0Out)
+    (void)hipFree(Buffers.O0Out);
+  if (Buffers.O2Out)
+    (void)hipFree(Buffers.O2Out);
   Buffers = {};
   if (hipMalloc(&Buffers.In, Count * sizeof(uint32_t)) != hipSuccess)
     return false;
-  if (hipMalloc(&Buffers.Out, Count * sizeof(uint32_t)) != hipSuccess) {
+  if (hipMalloc(&Buffers.O0Out, Count * sizeof(uint32_t)) != hipSuccess) {
     (void)hipFree(Buffers.In);
+    Buffers = {};
+    return false;
+  }
+  if (hipMalloc(&Buffers.O2Out, Count * sizeof(uint32_t)) != hipSuccess) {
+    (void)hipFree(Buffers.In);
+    (void)hipFree(Buffers.O0Out);
     Buffers = {};
     return false;
   }
@@ -1766,8 +1795,21 @@ bool ensureHipBuffers(size_t Count) {
   return true;
 }
 
-bool runOnGpu(const std::string &HsacoPath, ArrayRef<uint32_t> Inputs,
-              MutableArrayRef<uint32_t> Outputs) {
+bool launchKernel(hipFunction_t Kernel, uint32_t *Out, size_t Count) {
+  HipBuffers &Buffers = hipBuffers();
+  if (hipMemset(Out, 0, Count * sizeof(uint32_t)) != hipSuccess)
+    return false;
+
+  uint32_t N = static_cast<uint32_t>(Count);
+  void *Args[] = {&Buffers.In, &Out, &N};
+  unsigned Blocks = (N + ThreadsPerBlock - 1) / ThreadsPerBlock;
+  return hipModuleLaunchKernel(Kernel, Blocks, 1, 1, ThreadsPerBlock, 1, 1, 0,
+                               nullptr, Args, nullptr) == hipSuccess;
+}
+
+bool runBothOnGpu(const std::string &HsacoPath, ArrayRef<uint32_t> Inputs,
+                  MutableArrayRef<uint32_t> O0Outputs,
+                  MutableArrayRef<uint32_t> O2Outputs) {
   if (!ensureHipBuffers(Inputs.size()))
     return false;
 
@@ -1775,35 +1817,34 @@ bool runOnGpu(const std::string &HsacoPath, ArrayRef<uint32_t> Inputs,
   if (hipMemcpy(Buffers.In, Inputs.data(), Inputs.size() * sizeof(uint32_t),
                 hipMemcpyHostToDevice) != hipSuccess)
     return false;
-  if (hipMemset(Buffers.Out, 0, Outputs.size() * sizeof(uint32_t)) != hipSuccess)
-    return false;
 
   hipModule_t Module = nullptr;
-  hipFunction_t Kernel = nullptr;
+  hipFunction_t O0Kernel = nullptr;
+  hipFunction_t O2Kernel = nullptr;
   if (hipModuleLoad(&Module, HsacoPath.c_str()) != hipSuccess)
     return false;
-  if (hipModuleGetFunction(&Kernel, Module, "fuzz_kernel") != hipSuccess) {
+  if (hipModuleGetFunction(&O0Kernel, Module, "fuzz_kernel_o0") != hipSuccess ||
+      hipModuleGetFunction(&O2Kernel, Module, "fuzz_kernel_o2") != hipSuccess) {
     (void)hipModuleUnload(Module);
     return false;
   }
 
-  uint32_t N = static_cast<uint32_t>(Outputs.size());
-  void *Args[] = {&Buffers.In, &Buffers.Out, &N};
-  unsigned Blocks = (N + ThreadsPerBlock - 1) / ThreadsPerBlock;
-  bool Ok = hipModuleLaunchKernel(Kernel, Blocks, 1, 1, ThreadsPerBlock, 1, 1,
-                                  0, nullptr, Args, nullptr) == hipSuccess &&
+  bool Ok = launchKernel(O0Kernel, Buffers.O0Out, O0Outputs.size()) &&
+            launchKernel(O2Kernel, Buffers.O2Out, O2Outputs.size()) &&
             hipDeviceSynchronize() == hipSuccess &&
-            hipMemcpy(Outputs.data(), Buffers.Out,
-                      Outputs.size() * sizeof(uint32_t),
+            hipMemcpy(O0Outputs.data(), Buffers.O0Out,
+                      O0Outputs.size() * sizeof(uint32_t),
+                      hipMemcpyDeviceToHost) == hipSuccess &&
+            hipMemcpy(O2Outputs.data(), Buffers.O2Out,
+                      O2Outputs.size() * sizeof(uint32_t),
                       hipMemcpyDeviceToHost) == hipSuccess;
   (void)hipModuleUnload(Module);
   return Ok;
 }
 
 void saveFinding(const uint8_t *Data, size_t Size, StringRef IR,
-                 const std::string &O0HsacoPath,
-                 const std::string &O2HsacoPath, unsigned Index,
-                 uint32_t Input, uint32_t O0Value, uint32_t O2Value) {
+                 const std::string &HsacoPath, unsigned Index, uint32_t Input,
+                 uint32_t O0Value, uint32_t O2Value) {
   const char *RootEnv = std::getenv("FUZZX_FINDINGS_DIR");
   std::filesystem::path Root = RootEnv && *RootEnv ? RootEnv : "findings";
   std::filesystem::create_directories(Root);
@@ -1816,9 +1857,7 @@ void saveFinding(const uint8_t *Data, size_t Size, StringRef IR,
             static_cast<std::streamsize>(Size));
   std::ofstream LL(Dir / "program.ll");
   LL << IR.str();
-  std::filesystem::copy_file(O0HsacoPath, Dir / "program-O0.hsaco",
-                             std::filesystem::copy_options::overwrite_existing);
-  std::filesystem::copy_file(O2HsacoPath, Dir / "program-O2.hsaco",
+  std::filesystem::copy_file(HsacoPath, Dir / "program.hsaco",
                              std::filesystem::copy_options::overwrite_existing);
   std::ofstream Mismatch(Dir / "mismatch.txt");
   Mismatch << "index=" << Index << "\n"
@@ -1849,37 +1888,36 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   auto Inputs = makeInputs(Data, Size);
 
   std::string IR;
-  auto O0HsacoPath =
-      compileProgramToHsaco(P, CPU, OptimizationLevel::O0, &IR);
-  if (!O0HsacoPath)
+  auto O0Obj = compileProgramToObject(P, CPU, OptimizationLevel::O0,
+                                      "fuzz_kernel_o0", &IR);
+  if (!O0Obj)
     return 0;
-  auto O2HsacoPath = compileProgramToHsaco(P, CPU, OptimizationLevel::O2);
-  if (!O2HsacoPath) {
-    std::filesystem::remove(*O0HsacoPath);
+  auto O2Obj =
+      compileProgramToObject(P, CPU, OptimizationLevel::O2, "fuzz_kernel_o2");
+  if (!O2Obj)
     return 0;
-  }
+  auto HsacoPath = linkObjectsToHsaco(*O0Obj, *O2Obj);
+  if (!HsacoPath)
+    return 0;
 
   std::array<uint32_t, InputCount> O0Outputs{};
   std::array<uint32_t, InputCount> O2Outputs{};
-  bool RanO0 =
-      runOnGpu(*O0HsacoPath, Inputs, MutableArrayRef<uint32_t>(O0Outputs));
-  bool RanO2 =
-      runOnGpu(*O2HsacoPath, Inputs, MutableArrayRef<uint32_t>(O2Outputs));
-  if (!RanO0 || !RanO2) {
-    std::filesystem::remove(*O0HsacoPath);
-    std::filesystem::remove(*O2HsacoPath);
+  bool Ran =
+      runBothOnGpu(*HsacoPath, Inputs, MutableArrayRef<uint32_t>(O0Outputs),
+                   MutableArrayRef<uint32_t>(O2Outputs));
+  if (!Ran) {
+    std::filesystem::remove(*HsacoPath);
     return 0;
   }
 
   for (unsigned I = 0; I < InputCount; ++I) {
     if (O0Outputs[I] != O2Outputs[I]) {
-      saveFinding(Data, Size, IR, *O0HsacoPath, *O2HsacoPath, I, Inputs[I],
-                  O0Outputs[I], O2Outputs[I]);
+      saveFinding(Data, Size, IR, *HsacoPath, I, Inputs[I], O0Outputs[I],
+                  O2Outputs[I]);
       std::abort();
     }
   }
-  std::filesystem::remove(*O0HsacoPath);
-  std::filesystem::remove(*O2HsacoPath);
+  std::filesystem::remove(*HsacoPath);
   return 0;
 }
 

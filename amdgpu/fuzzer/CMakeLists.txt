@@ -12,6 +12,8 @@ list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(HandleLLVMOptions)
 
 set(ROCM_PATH "/opt/rocm-7.1.1" CACHE PATH "ROCm installation path")
+set(FUZZER_SANITIZERS "fuzzer" CACHE STRING
+    "Comma-separated sanitizer list for the fuzzer binary")
 
 add_executable(llvm_amdgpu_diff_fuzzer llvm_amdgpu_diff_fuzzer.cpp)
 target_compile_features(llvm_amdgpu_diff_fuzzer PRIVATE cxx_std_17)
@@ -29,10 +31,10 @@ target_link_directories(llvm_amdgpu_diff_fuzzer PRIVATE "${ROCM_PATH}/lib")
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(llvm_amdgpu_diff_fuzzer PRIVATE
         -fno-omit-frame-pointer
-        -fsanitize=fuzzer,address
+        -fsanitize=${FUZZER_SANITIZERS}
     )
     target_link_options(llvm_amdgpu_diff_fuzzer PRIVATE
-        -fsanitize=fuzzer,address
+        -fsanitize=${FUZZER_SANITIZERS}
     )
 endif()
 
