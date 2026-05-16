@@ -104,9 +104,9 @@ Tested toolchains as of 2026-05-16:
 
 | Column | Toolchain |
 | --- | --- |
-| ROCm release | ROCm 7.2.3 `rocm-llvm` package, `f58b06dce1f9c15707c5f808fd002e18c2accf7e`. |
+| ROCm release | [ROCm 7.2.3 `rocm-llvm` package](https://repo.radeon.com/rocm/apt/7.2.3/pool/main/r/rocm-llvm/rocm-llvm_22.0.0.26084.70203-90~22.04_amd64.deb), package SHA256 `4c406e184f88949cea60869949454e5392e1cbd9480c4c87274f7b59e9f810e5`; `clang --version` reports source revision `f58b06dce1f9c15707c5f808fd002e18c2accf7e`. |
 | Upstream LLVM | https://github.com/llvm/llvm-project/commit/10756d32f96154f0889eda159ea9a26bc4188bda (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
-| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/9115c466b3577830455f70c4f492429bf6c64b25 (2025-05-16), built with assertions, ASan, and sanitizer coverage. |
+| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/9115c466b3577830455f70c4f492429bf6c64b25 (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
 
 | Bug | Upstream LLVM | ROCm release | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
