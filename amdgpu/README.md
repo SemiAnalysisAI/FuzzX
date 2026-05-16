@@ -13,8 +13,9 @@ below the shifted value's bit width.  Coverage includes scalar integer ops,
 small-width integer ops, packed `i8` / `i16` vectors, selects, structured CFG,
 private-memory load/store sequences, and LLVM overflow, saturation, bit, and
 funnel-shift intrinsics across scalar, small-width, and widened integer types.
-The generated IR also covers narrow min/max intrinsics and widened compare /
-select and `fshr` paths.
+The generated IR also covers narrow min/max intrinsics, widened compare /
+select and `fshr` paths, and masked dynamic shifts across scalar and narrow
+integer widths.
 
 ## Requirements
 

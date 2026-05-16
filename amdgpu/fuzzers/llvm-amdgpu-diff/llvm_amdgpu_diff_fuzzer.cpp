@@ -360,6 +360,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0xb0u)
+      Kind = 91 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xc0u)
       Kind = 75 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xd0u)
@@ -835,6 +837,88 @@ Value *emitWideFshr(IRBuilder<> &B, Module &M, Value *V, const Op &O,
   return B.CreateXor(Lo, Hi);
 }
 
+Value *nonzeroMaskedShift32(IRBuilder<> &B, Value *Seed, unsigned Mask) {
+  LLVMContext &Ctx = B.getContext();
+  Value *Shift = B.CreateAnd(Seed, ci32(Ctx, Mask));
+  return B.CreateSelect(B.CreateICmpEQ(Shift, ci32(Ctx, 0)), ci32(Ctx, 1),
+                        Shift);
+}
+
+Value *nonzeroMaskedShift64(IRBuilder<> &B, Value *Seed, unsigned Mask) {
+  LLVMContext &Ctx = B.getContext();
+  Value *Shift = B.CreateAnd(Seed, ci64(Ctx, Mask));
+  return B.CreateSelect(B.CreateICmpEQ(Shift, ci64(Ctx, 0)), ci64(Ctx, 1),
+                        Shift);
+}
+
+Value *emitDynamicShift32(IRBuilder<> &B, Value *V, const Op &O, unsigned Which) {
+  LLVMContext &Ctx = B.getContext();
+  Value *Shift = nonzeroMaskedShift32(B, B.CreateXor(V, ci32(Ctx, u32(O.A))), 31);
+  Value *Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = B.CreateShl(V, Shift);
+    break;
+  case 1:
+    Mixed = B.CreateLShr(V, Shift);
+    break;
+  default:
+    Mixed = B.CreateAShr(V, Shift);
+    break;
+  }
+  return B.CreateAdd(Mixed, ci32(Ctx, u32(O.B)));
+}
+
+Value *emitDynamicShift64(IRBuilder<> &B, Value *V, const Op &O, unsigned Which) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *W = B.CreateZExt(V, I64);
+  Value *Shift = nonzeroMaskedShift64(B, B.CreateXor(W, ci64(Ctx, O.A)), 63);
+  Value *Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = B.CreateShl(W, Shift);
+    break;
+  case 1:
+    Mixed = B.CreateLShr(W, Shift);
+    break;
+  default:
+    Mixed = B.CreateAShr(W, Shift);
+    break;
+  }
+  Value *Lo = B.CreateTrunc(Mixed, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Mixed, ci64(Ctx, 32)), I32);
+  return B.CreateXor(Lo, Hi);
+}
+
+Value *emitNarrowDynamicShift(IRBuilder<> &B, Value *V, const Op &O,
+                              unsigned Bits, unsigned Which,
+                              bool SignedExtend) {
+  LLVMContext &Ctx = B.getContext();
+  Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *N = B.CreateTrunc(V, NarrowTy);
+  Value *Shift32 =
+      nonzeroMaskedShift32(B, B.CreateXor(V, ci32(Ctx, u32(O.A))), Bits - 1);
+  Value *Shift = B.CreateTrunc(Shift32, NarrowTy);
+  Value *Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = B.CreateShl(N, Shift);
+    break;
+  case 1:
+    Mixed = B.CreateLShr(N, Shift);
+    break;
+  default:
+    Mixed = B.CreateAShr(N, Shift);
+    break;
+  }
+  Value *Extended = SignedExtend ? B.CreateSExt(Mixed, I32)
+                                 : B.CreateZExt(Mixed, I32);
+  return B.CreateXor(B.CreateAdd(V, ci32(Ctx, u32(O.B))), Extended);
+}
+
 Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
@@ -1066,6 +1150,30 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitWideFshr(B, M, V, O, false);
   case 90:
     return emitWideFshr(B, M, V, O, true);
+  case 91:
+    return emitDynamicShift32(B, V, O, 0);
+  case 92:
+    return emitDynamicShift32(B, V, O, 1);
+  case 93:
+    return emitDynamicShift32(B, V, O, 2);
+  case 94:
+    return emitDynamicShift64(B, V, O, 0);
+  case 95:
+    return emitDynamicShift64(B, V, O, 1);
+  case 96:
+    return emitDynamicShift64(B, V, O, 2);
+  case 97:
+    return emitNarrowDynamicShift(B, V, O, 8, 0, false);
+  case 98:
+    return emitNarrowDynamicShift(B, V, O, 8, 1, false);
+  case 99:
+    return emitNarrowDynamicShift(B, V, O, 8, 2, true);
+  case 100:
+    return emitNarrowDynamicShift(B, V, O, 16, 0, false);
+  case 101:
+    return emitNarrowDynamicShift(B, V, O, 16, 1, false);
+  case 102:
+    return emitNarrowDynamicShift(B, V, O, 16, 2, true);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
