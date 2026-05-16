@@ -396,6 +396,10 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       Kind = 173 + ((RawKind & 15u) % 6);
     if ((RawKind & 0xf0u) == 0x30u)
       Kind = 179 + ((RawKind & 15u) % 6);
+    if ((RawKind & 0xf0u) == 0x20u)
+      Kind = 195 + ((RawKind & 15u) % 10);
+    if ((RawKind & 0xf0u) == 0x10u)
+      Kind = 185 + ((RawKind & 15u) % 10);
     if ((RawKind & 0xf0u) == 0x60u)
       Kind = 159 + ((RawKind & 15u) % 8);
     if ((RawKind & 0xf0u) == 0x70u)
@@ -1315,6 +1319,42 @@ uint32_t evalLocalMemoryPair(uint32_t V, uint32_t Idx, const Op &O) {
   return (First + Second) ^ (V + u32(O.A));
 }
 
+uint32_t atomicOperandValue(uint32_t V, uint32_t Idx, const Op &O) {
+  return (V ^ u32(O.A)) + Idx * (u32(O.B) | 1u);
+}
+
+uint32_t applyAtomicRMW(uint32_t Old, uint32_t Operand, unsigned Which) {
+  switch (Which) {
+  case 0:
+    return Old + Operand;
+  case 1:
+    return Old - Operand;
+  case 2:
+    return Old & Operand;
+  case 3:
+    return Old | Operand;
+  case 4:
+    return Old ^ Operand;
+  case 5:
+    return Operand;
+  case 6:
+    return static_cast<uint32_t>(sminBits(Old, Operand, 32));
+  case 7:
+    return static_cast<uint32_t>(smaxBits(Old, Operand, 32));
+  case 8:
+    return static_cast<uint32_t>(uminBits(Old, Operand, 32));
+  default:
+    return static_cast<uint32_t>(umaxBits(Old, Operand, 32));
+  }
+}
+
+uint32_t evalAtomicRMW(uint32_t V, uint32_t Idx, const Op &O, unsigned Which) {
+  uint32_t Old = localMemoryValue(V, Idx, O);
+  uint32_t Operand = atomicOperandValue(V, Idx, O);
+  uint32_t New = applyAtomicRMW(Old, Operand, Which);
+  return (Old + New) ^ (V + (u32(O.C) | 1u));
+}
+
 uint32_t evalRotate(uint32_t V, const Op &O, bool Left) {
   uint32_t Shift = (V ^ u32(O.B)) & 31u;
   if (Left)
@@ -1841,6 +1881,28 @@ std::optional<uint32_t> evalOp(uint32_t V, uint32_t Idx, const Op &O) {
     return evalLocalMemory(V, Idx, O, 8, true);
   case 184:
     return evalLocalMemoryPair(V, Idx, O);
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 191:
+  case 192:
+  case 193:
+  case 194:
+    return evalAtomicRMW(V, Idx, O, O.Kind - 185);
+  case 195:
+  case 196:
+  case 197:
+  case 198:
+  case 199:
+  case 200:
+  case 201:
+  case 202:
+  case 203:
+  case 204:
+    return evalAtomicRMW(V, Idx, O, O.Kind - 195);
   default:
     return slt32(V, u32(O.A)) ? (V ^ u32(O.B)) : (V - u32(O.C));
   }
@@ -3009,6 +3071,69 @@ Value *emitGlobalMemoryPair(IRBuilder<> &B, Value *Scratch, Value *V,
                      B.CreateAdd(V, ci32(Ctx, u32(O.A))));
 }
 
+AtomicRMWInst::BinOp atomicRMWBinOp(unsigned Which) {
+  switch (Which) {
+  case 0:
+    return AtomicRMWInst::Add;
+  case 1:
+    return AtomicRMWInst::Sub;
+  case 2:
+    return AtomicRMWInst::And;
+  case 3:
+    return AtomicRMWInst::Or;
+  case 4:
+    return AtomicRMWInst::Xor;
+  case 5:
+    return AtomicRMWInst::Xchg;
+  case 6:
+    return AtomicRMWInst::Min;
+  case 7:
+    return AtomicRMWInst::Max;
+  case 8:
+    return AtomicRMWInst::UMin;
+  default:
+    return AtomicRMWInst::UMax;
+  }
+}
+
+Value *atomicOperandValue(IRBuilder<> &B, Value *V, Value *Idx, const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  return B.CreateAdd(B.CreateXor(V, ci32(Ctx, u32(O.A))),
+                     B.CreateMul(Idx, ci32(Ctx, u32(O.B) | 1u)));
+}
+
+Value *emitAtomicRMW(IRBuilder<> &B, Value *Ptr, Value *V, Value *Idx,
+                     const Op &O, unsigned Which, StringRef Scope) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *OldValue = localMemoryValue(B, V, Idx, O);
+  B.CreateStore(OldValue, Ptr);
+  Value *Operand = atomicOperandValue(B, V, Idx, O);
+  Value *Old = B.CreateAtomicRMW(atomicRMWBinOp(Which), Ptr, Operand, Align(4),
+                                 AtomicOrdering::Monotonic,
+                                 Ctx.getOrInsertSyncScopeID(Scope));
+  Value *New = B.CreateLoad(I32, Ptr);
+  return B.CreateXor(B.CreateAdd(Old, New),
+                     B.CreateAdd(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *emitLocalAtomicRMW(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
+                          const Op &O, unsigned Which) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *ArrTy = ArrayType::get(I32, ThreadsPerBlock);
+  GlobalVariable *LDS = getLocalMemoryArray(M, I32, "fuzzx_lds_i32_atomic", 4);
+  Value *Ptr = B.CreateGEP(ArrTy, LDS, {ci32(Ctx, 0), localMemorySlot(B, Idx)});
+  return emitAtomicRMW(B, Ptr, V, Idx, O, Which, "workgroup-one-as");
+}
+
+Value *emitGlobalAtomicRMW(IRBuilder<> &B, Value *Scratch, Value *V, Value *Idx,
+                           const Op &O, unsigned Which) {
+  Type *I32 = Type::getInt32Ty(B.getContext());
+  Value *Ptr = globalScratchPtr(B, Scratch, Idx, I32, 32);
+  return emitAtomicRMW(B, Ptr, V, Idx, O, Which, "agent-one-as");
+}
+
 Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
                   Intrinsic::ID ID) {
   LLVMContext &Ctx = B.getContext();
@@ -3618,6 +3743,28 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, Value *Scratch,
     return emitGlobalMemory(B, Scratch, V, Idx, O, 8, true);
   case 184:
     return emitGlobalMemoryPair(B, Scratch, V, Idx, O);
+  case 185:
+  case 186:
+  case 187:
+  case 188:
+  case 189:
+  case 190:
+  case 191:
+  case 192:
+  case 193:
+  case 194:
+    return emitLocalAtomicRMW(B, M, V, Idx, O, O.Kind - 185);
+  case 195:
+  case 196:
+  case 197:
+  case 198:
+  case 199:
+  case 200:
+  case 201:
+  case 202:
+  case 203:
+  case 204:
+    return emitGlobalAtomicRMW(B, Scratch, V, Idx, O, O.Kind - 195);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
