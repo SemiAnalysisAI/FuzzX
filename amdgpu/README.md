@@ -65,6 +65,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M009_I16_CLEAR_XOR=1` | unset | Re-enable the `i16` identity low-16 clear xor shape for [m009](known-miscompiles/m009-i16-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M010_I16_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i16` sign-extended identity clear xor shape for [m010](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M011_I8_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i8` sign-extended identity clear xor shape for [m011](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md). |
+| `FUZZX_ALLOW_M012_ADD_SHL_LADDER=1` | unset | Alias to re-enable the broader `add/shl` ladder shape for [m012](known-miscompiles/m012-add-shl-ladder/NOTES.md). |
 
 ## Layout
 
@@ -98,6 +99,7 @@ Version | Description |
 | LLVM 23.0.0git | [m009-i16-clear-xor](known-miscompiles/m009-i16-clear-xor/NOTES.md): `-O0` miscompiles an `i16` identity low-16 clear xor through the wrong `v_bitop3_b32` result. |
 | LLVM 23.0.0git | [m010-i16-sext-clear-xor](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md): `-O0` miscompiles an `i16` sign-extended identity clear xor through the wrong `v_bitop3_b32` result. |
 | LLVM 23.0.0git | [m011-i8-sext-clear-xor](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md): `-O0` miscompiles an `i8` sign-extended masked clear xor through the wrong `v_bitop3_b32` result. |
+| LLVM 23.0.0git | [m012-add-shl-ladder](known-miscompiles/m012-add-shl-ladder/NOTES.md): `-O0` scalarizes a divergent `add/shl` ladder through `v_readfirstlane_b32`. |
 
 ## LLVM Source Builds
 

@@ -201,6 +201,8 @@ bool isI32Add(const Op &O) { return O.Kind == 0; }
 
 bool isI32AddZero(const Op &O) { return isI32Add(O) && u32(O.A) == 0; }
 
+bool isI32ShlZero(const Op &O) { return isI32Shl(O) && (O.A & 31u) == 0; }
+
 bool hasFiveShlAddPairs(ArrayRef<Op> Ops) {
   unsigned Pairs = 0;
   bool NeedAdd = false;
@@ -222,6 +224,33 @@ bool hasFiveShlAddPairs(ArrayRef<Op> Ops) {
     if (isI32Shl(O))
       NeedAdd = true;
     else if (!isI32AddZero(O))
+      Pairs = 0;
+  }
+  return false;
+}
+
+bool hasAddShlLadder(ArrayRef<Op> Ops) {
+  unsigned Pairs = 0;
+  bool NeedShl = false;
+  for (const Op &O : Ops) {
+    if (isI32AddZero(O) || isI32ShlZero(O))
+      continue;
+
+    if (NeedShl) {
+      if (isI32Shl(O)) {
+        ++Pairs;
+        NeedShl = false;
+        if (Pairs >= 4)
+          return true;
+        continue;
+      }
+      Pairs = 0;
+      NeedShl = false;
+    }
+
+    if (isI32Add(O))
+      NeedShl = true;
+    else
       Pairs = 0;
   }
   return false;
@@ -280,7 +309,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   bool AllowM010 = envFlag("FUZZX_ALLOW_M010_I16_SEXT_CLEAR_XOR", false);
   bool AllowM011 = envFlag("FUZZX_ALLOW_M011_I8_SEXT_CLEAR_XOR", false);
   bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false) ||
-                   envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false);
+                   envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false) ||
+                   envFlag("FUZZX_ALLOW_M012_ADD_SHL_LADDER", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
                    envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
   P.Ops.reserve(OpCount);
@@ -307,6 +337,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       if (hasFiveShlAddPairs(P.Ops)) {
         P.Ops.back().Kind = 3;
         ++P.Ops.back().A;
+      } else if (hasAddShlLadder(P.Ops)) {
+        P.Ops.back().Kind = 11;
       }
       continue;
     }
