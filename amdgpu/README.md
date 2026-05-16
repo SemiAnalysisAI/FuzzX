@@ -34,6 +34,12 @@ Run one directed fuzzer process per GPU:
 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
 ```
 
+Run multiple independent directed fuzzer workers on each selected GPU:
+
+```bash
+WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
+```
+
 In the current setup the directed fuzzer ran 16,000 executions in 106 seconds
 across 8 GPUs, about 151 exec/s aggregate, while libFuzzer receives coverage
 from the instrumented LLVM codegen path for each input.
@@ -68,7 +74,7 @@ rediscovering the same issue.
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/run_directed_fuzzer.sh` | Runs the C++ directed fuzzer on one GPU. |
-| `scripts/run_directed_multigpu_fuzzer.sh` | Runs one C++ directed fuzzer process per selected GPU. |
+| `scripts/run_directed_multigpu_fuzzer.sh` | Runs one or more C++ directed fuzzer processes per selected GPU. |
 | `fuzzers/llvm-amdgpu-diff/` | LLVM API plus HIP differential libFuzzer target. |
 | `runner/hip_module_runner.cpp` | HIP module loader used to execute generated HSACO files. |
 | `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |
