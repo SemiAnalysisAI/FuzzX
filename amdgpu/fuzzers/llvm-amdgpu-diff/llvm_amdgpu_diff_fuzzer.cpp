@@ -130,8 +130,7 @@ bool isIdentityNarrow8(const Op &O) {
 }
 
 bool triggersM002(ArrayRef<Op> Ops, const Op &O) {
-  return !Ops.empty() && Ops.back().Kind == 18 &&
-         narrowVariant(Ops.back()) == 0 && isIdentityNarrow8(O);
+  return !Ops.empty() && Ops.back().Kind == 18 && isIdentityNarrow8(O);
 }
 
 void breakIdentityNarrow8(Op &O) {
@@ -219,7 +218,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   Program P;
   unsigned OpCount = 1 + (BS.next8() % 48);
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
-  bool AllowM002 = envFlag("FUZZX_ALLOW_M002_I8_CLEAR_XOR", false);
+  bool AllowM002 = envFlag("FUZZX_ALLOW_M002_I8_CLEAR_XOR", false) ||
+                   envFlag("FUZZX_ALLOW_M006_I8_CLEAR_XOR", false);
   bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false) ||
                    envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false);

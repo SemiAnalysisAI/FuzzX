@@ -53,6 +53,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M003_SHL3_ADD_CHAIN=1` | unset | Re-enable the five-step `shl/add` chain shape found by [m003](known-miscompiles/m003-shl3-add-chain/NOTES.md). |
 | `FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR=1` | unset | Re-enable the vector lane-0 identity xor shape for [m004](known-miscompiles/m004-vector-identity-xor/NOTES.md). |
 | `FUZZX_ALLOW_M005_SHL_ADD_CHAIN=1` | unset | Alias to re-enable the broader five-step `shl/add` chain shape for [m005](known-miscompiles/m005-shl1-add-chain/NOTES.md). |
+| `FUZZX_ALLOW_M006_I8_CLEAR_XOR=1` | unset | Alias to re-enable the broader adjacent `i8` narrow/xor shape for [m006](known-miscompiles/m006-i8-xor-clear/NOTES.md). |
 
 ## Layout
 
@@ -80,6 +81,7 @@ Version | Description |
 | LLVM 23.0.0git | [m003-shl3-add-chain](known-miscompiles/m003-shl3-add-chain/NOTES.md): `-O0` scalarizes a divergent `shl3/add` chain through `v_readfirstlane_b32`. |
 | LLVM 23.0.0git | [m004-vector-identity-xor](known-miscompiles/m004-vector-identity-xor/NOTES.md): `-O0` loses a lane-0 vector identity before `xor`. |
 | LLVM 23.0.0git | [m005-shl1-add-chain](known-miscompiles/m005-shl1-add-chain/NOTES.md): `-O0` scalarizes a divergent `shl1/add` chain through the same class of bug as m003. |
+| LLVM 23.0.0git | [m006-i8-xor-clear](known-miscompiles/m006-i8-xor-clear/NOTES.md): `-O0` lowers another adjacent `i8` narrow byte-clear xor through the wrong `v_bitop3_b32` result. |
 
 ## LLVM Source Builds
 
