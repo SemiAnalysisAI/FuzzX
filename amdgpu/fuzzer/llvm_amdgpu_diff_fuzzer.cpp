@@ -99,6 +99,15 @@ uint64_t randomInteresting64(std::minstd_rand &Gen) {
   }
 }
 
+bool envFlag(const char *Name, bool Default) {
+  const char *Value = std::getenv(Name);
+  if (!Value || !*Value)
+    return Default;
+  return std::strcmp(Value, "0") != 0 && std::strcmp(Value, "false") != 0 &&
+         std::strcmp(Value, "False") != 0 && std::strcmp(Value, "no") != 0 &&
+         std::strcmp(Value, "off") != 0;
+}
+
 std::array<uint32_t, InputCount> makeInputs(const uint8_t *Data, size_t Size) {
   std::array<uint32_t, InputCount> Inputs{};
   std::array<uint32_t, 8> Edges = {0,          1,          0x7fffffffu,
@@ -454,7 +463,33 @@ void scrubPoisonAnnotations(Module &M) {
   }
 }
 
+bool isHighBitI32Constant(const Value *V) {
+  const auto *CI = dyn_cast<ConstantInt>(V);
+  return CI && CI->getType()->isIntegerTy(32) &&
+         (CI->getZExtValue() & 0x80000000ull) != 0;
+}
+
+bool isOrWithHighBitConstantOf(const Value *MaybeOr, const Value *Other) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
+  if (!BO || BO->getOpcode() != Instruction::Or)
+    return false;
+  return (BO->getOperand(0) == Other &&
+          isHighBitI32Constant(BO->getOperand(1))) ||
+         (BO->getOperand(1) == Other &&
+          isHighBitI32Constant(BO->getOperand(0)));
+}
+
+bool triggersM019HighBitOrXor(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isOrWithHighBitConstantOf(BO->getOperand(0), BO->getOperand(1)) ||
+         isOrWithHighBitConstantOf(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool validateIRCorpusModule(Module &M) {
+  bool AllowM019 = envFlag("FUZZX_ALLOW_M019_HIGHBIT_OR_XOR", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -467,7 +502,8 @@ bool validateIRCorpusModule(Module &M) {
         return false;
       for (BasicBlock &BB : F)
         for (Instruction &I : BB)
-          if (!isAllowedIRInstruction(I))
+          if (!isAllowedIRInstruction(I) ||
+              (!AllowM019 && triggersM019HighBitOrXor(I)))
             return false;
       continue;
     }
