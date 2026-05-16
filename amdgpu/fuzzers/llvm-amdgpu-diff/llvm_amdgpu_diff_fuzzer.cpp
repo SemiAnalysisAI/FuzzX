@@ -288,7 +288,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
     if ((RawKind & 0xf0u) == 0xf0u)
-      Kind = 27 + (RawKind & 7u);
+      Kind = 27 + (RawKind & 15u);
     Op O{Kind, BS.next64(), BS.next64(), BS.next64()};
     if (!AllowM001 && O.Kind == 19 && O.C % 7 == 6)
       ++O.C;
@@ -443,6 +443,19 @@ Value *emitWide(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
   return B.CreateAdd(V, B.CreateTrunc(Mixed, Type::getInt32Ty(Ctx)));
 }
 
+Value *emitOverflow(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                    Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Pair =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}),
+                   {V, ci32(Ctx, u32(O.A))});
+  Value *Wrapped = B.CreateExtractValue(Pair, {0});
+  Value *Overflow = B.CreateZExt(B.CreateExtractValue(Pair, {1}), I32);
+  Value *Shifted = B.CreateShl(Overflow, ci32(Ctx, O.B & 31u));
+  return B.CreateXor(Wrapped, Shifted);
+}
+
 Value *emitVector(IRBuilder<> &B, Value *V, unsigned Lanes, const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
@@ -595,6 +608,26 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
   case 34:
     return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {I32}),
                         {V, ci32(Ctx, u32(O.A))});
+  case 35:
+    return emitOverflow(B, M, V, O, Intrinsic::uadd_with_overflow);
+  case 36:
+    return emitOverflow(B, M, V, O, Intrinsic::usub_with_overflow);
+  case 37:
+    return emitOverflow(B, M, V, O, Intrinsic::sadd_with_overflow);
+  case 38:
+    return emitOverflow(B, M, V, O, Intrinsic::ssub_with_overflow);
+  case 39:
+    return emitOverflow(B, M, V, O, Intrinsic::umul_with_overflow);
+  case 40:
+    return emitOverflow(B, M, V, O, Intrinsic::smul_with_overflow);
+  case 41:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I32}),
+                        {V, ConstantInt::getFalse(Ctx)});
+  case 42: {
+    Value *Shift = B.CreateAnd(V, ci32(Ctx, 31));
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
+                        {V, ci32(Ctx, u32(O.A)), Shift});
+  }
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
