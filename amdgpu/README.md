@@ -69,7 +69,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M010_I16_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i16` sign-extended identity clear xor shape for [m010](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M011_I8_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i8` sign-extended identity clear xor shape for [m011](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M012_ADD_SHL_LADDER=1` | unset | Alias to re-enable the broader `add/shl` ladder shape for [m012](known-miscompiles/m012-add-shl-ladder/NOTES.md). |
-| `FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL=1` | unset | Re-enable five-or-more private-memory/funnel-shift ops for [m013](known-miscompiles/m013-private-memory-fshl/NOTES.md). |
+| `FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL=1` | unset | Re-enable three-or-more private-memory/funnel-shift ops for [m013](known-miscompiles/m013-private-memory-fshl/NOTES.md). |
 
 ## Layout
 

@@ -88,6 +88,12 @@ ad 12 ef 8a
 
 ## Fuzzer Suppression
 
-The directed C++ fuzzer now caps generated private-memory ops at four by
+The directed C++ fuzzer now caps generated private-memory ops at two by
 default. Set `FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL=1` to re-enable the
-five-or-more private-memory/funnel-shift shape when replaying this fuzzer input.
+three-or-more private-memory/funnel-shift shape when replaying this fuzzer
+input.
+
+A later structured-CFG variant with original fuzzer input SHA-1
+`ea7a9d7c7d69ca16f1a670c154a71ed4f71f6e56` showed that three private-memory
+ops are enough to hit the same scratch-stack issue, so the suppression is
+intentionally broader than the five-copy linear reduced testcase.

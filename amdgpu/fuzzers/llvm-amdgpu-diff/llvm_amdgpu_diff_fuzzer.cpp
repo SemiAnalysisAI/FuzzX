@@ -274,10 +274,10 @@ bool isVectorOp(const Op &O) { return O.Kind == 21 || O.Kind == 22; }
 
 bool isPrivateMemoryOp(const Op &O) { return O.Kind == 53 || O.Kind == 58; }
 
-bool hasFivePrivateMemoryOps(ArrayRef<Op> Ops) {
+bool hasThreePrivateMemoryOps(ArrayRef<Op> Ops) {
   unsigned Count = 0;
   for (const Op &O : Ops) {
-    if (isPrivateMemoryOp(O) && ++Count >= 5)
+    if (isPrivateMemoryOp(O) && ++Count >= 3)
       return true;
   }
   return false;
@@ -355,7 +355,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
         P.Ops.back().Kind = 11;
       }
     }
-    if (!AllowM013 && hasFivePrivateMemoryOps(P.Ops))
+    if (!AllowM013 && hasThreePrivateMemoryOps(P.Ops))
       P.Ops.back().Kind = 54;
   }
   P.UseStructuredCFG = P.Ops.size() >= 4 && (BS.next8() & 1);
