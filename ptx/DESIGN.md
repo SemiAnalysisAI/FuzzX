@@ -1,4 +1,4 @@
-# FuzzX Design
+# FuzzX PTX Design
 
 ## Goal
 

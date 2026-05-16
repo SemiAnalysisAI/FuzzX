@@ -1,7 +1,7 @@
 # Known ptxas Miscompiles
 
 Each subdirectory is a self-contained record for one confirmed `ptxas`
-miscompile or optimizer crash. The root `README.md` has the bug table.
+miscompile or optimizer crash. The PTX `README.md` has the bug table.
 
 ## Standard Files
 

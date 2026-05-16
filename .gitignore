@@ -1,4 +1,4 @@
-/target
+target/
 **/*.rs.bk
 /.claude/
 
@@ -6,5 +6,5 @@
 ._*
 
 # In-progress fuzzer scratch (long-running differential runs)
-/divergences/
-/divergences-b300/
+divergences/
+divergences-b300/

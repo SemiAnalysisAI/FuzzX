@@ -399,12 +399,10 @@ fn find_greedy_removal(
 /// `ret;`, braces.
 fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
     let lines: Vec<&str> = ptx.lines().collect();
-    let prologue_end = if let Some(i) = lines
-        .iter()
-        .position(|l| {
-            let t = l.trim();
-            t.starts_with("bra") && t.contains("block_0;")
-        }) {
+    let prologue_end = if let Some(i) = lines.iter().position(|l| {
+        let t = l.trim();
+        t.starts_with("bra") && t.contains("block_0;")
+    }) {
         i
     } else {
         lines
