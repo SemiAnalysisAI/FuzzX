@@ -54,6 +54,17 @@ Scaling from 64 to 256 workers did not reach 1k exec/s; CPU remained mostly
 idle, so the current bottleneck appears to be HIP/module execution rather than
 host compilation.
 
+For ROCm 7.2.3 release fuzzing, use the release wrapper:
+
+```bash
+scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
+```
+
+That wrapper keeps the release-reproducing bugs suppressed (`m001`, `m013`, and
+`m017`), but explicitly re-enables the idioms that only failed on LLVM HEAD /
+ROCm HEAD in the checked matrix (`m002` through `m012`, plus `m014` through
+`m016`).
+
 Candidate compiler crashes, runner failures, or output mismatches are saved
 under `findings/`. Generated corpora and findings are local artifacts and are
 ignored by git.
@@ -92,6 +103,7 @@ rediscovering the same issue.
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/run_directed_fuzzer.sh` | Runs the C++ directed fuzzer on one GPU. |
 | `scripts/run_directed_multigpu_fuzzer.sh` | Runs one or more C++ directed fuzzer processes per selected GPU. |
+| `scripts/run_rocm_7_2_3_release_fuzzer.sh` | Runs the C++ directed fuzzer with the ROCm 7.2.3 release suppression policy. |
 | `fuzzer/` | LLVM API plus HIP differential libFuzzer target. |
 | `runner/hip_module_runner.cpp` | HIP module loader used to execute generated HSACO files. |
 | `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |
