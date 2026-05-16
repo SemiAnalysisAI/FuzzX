@@ -287,8 +287,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
-    if ((RawKind & 0xf8u) == 0xf8u)
-      Kind = 27 + (RawKind & 1u);
+    if ((RawKind & 0xf0u) == 0xf0u)
+      Kind = 27 + (RawKind & 7u);
     Op O{Kind, BS.next64(), BS.next64(), BS.next64()};
     if (!AllowM001 && O.Kind == 19 && O.C % 7 == 6)
       ++O.C;
@@ -575,6 +575,26 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
     return emitNarrow(B, V, 8, O, true);
   case 28:
     return emitNarrow(B, V, 16, O, true);
+  case 29:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
+                        {V, ci32(Ctx, u32(O.A)),
+                         ci32(Ctx, static_cast<uint32_t>(O.B & 31u))});
+  case 30:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
+                        {ci32(Ctx, u32(O.A)), V,
+                         ci32(Ctx, static_cast<uint32_t>(O.B & 31u))});
+  case 31:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::uadd_sat, {I32}),
+                        {V, ci32(Ctx, u32(O.A))});
+  case 32:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::usub_sat, {I32}),
+                        {V, ci32(Ctx, u32(O.A))});
+  case 33:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {I32}),
+                        {V, ci32(Ctx, u32(O.A))});
+  case 34:
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {I32}),
+                        {V, ci32(Ctx, u32(O.A))});
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
