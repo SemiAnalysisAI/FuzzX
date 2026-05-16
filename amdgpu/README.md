@@ -100,15 +100,15 @@ columns report the generic `known-miscompiles/run_ll_reproducer.sh`
 differential test: `FAIL` means the toolchain reproduces the `-O0` / `-O2`
 mismatch, and `PASS` means no mismatch was observed for that reproducer.
 
-Tested toolchains on 2026-05-16:
+Tested toolchains as of 2026-05-16:
 
 | Column | Toolchain |
 | --- | --- |
-| Upstream LLVM main | `llvm/llvm-project` `10756d32f96154f0889eda159ea9a26bc4188bda`, built with assertions, ASan, and sanitizer coverage. |
 | ROCm release | ROCm 7.2.3 `rocm-llvm` package, `f58b06dce1f9c15707c5f808fd002e18c2accf7e`. |
-| ROCm amd-staging | `RadeonOpenCompute/llvm-project` `amd-staging` `9115c466b3577830455f70c4f492429bf6c64b25`, built with assertions, ASan, and sanitizer coverage. |
+| Upstream LLVM | https://github.com/llvm/llvm-project/commit/10756d32f96154f0889eda159ea9a26bc4188bda (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
+| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/9115c466b3577830455f70c4f492429bf6c64b25 (2025-05-16), built with assertions, ASan, and sanitizer coverage. |
 
-| Bug | Upstream LLVM main | ROCm release | ROCm amd-staging | Description |
+| Bug | Upstream LLVM | ROCm release | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
 | [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md) | FAIL | FAIL | FAIL | `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
 | [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md) | FAIL | PASS | FAIL | `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result. |
