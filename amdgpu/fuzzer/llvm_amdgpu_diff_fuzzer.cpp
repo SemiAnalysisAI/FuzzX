@@ -394,6 +394,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       Kind = 167 + ((RawKind & 15u) % 6);
     if ((RawKind & 0xf0u) == 0x40u)
       Kind = 173 + ((RawKind & 15u) % 6);
+    if ((RawKind & 0xf0u) == 0x30u)
+      Kind = 179 + ((RawKind & 15u) % 6);
     if ((RawKind & 0xf0u) == 0x60u)
       Kind = 159 + ((RawKind & 15u) % 8);
     if ((RawKind & 0xf0u) == 0x70u)
@@ -1827,6 +1829,18 @@ std::optional<uint32_t> evalOp(uint32_t V, uint32_t Idx, const Op &O) {
     return evalLocalMemory(V, Idx, O, 8, true);
   case 178:
     return evalLocalMemoryPair(V, Idx, O);
+  case 179:
+    return evalLocalMemory(V, Idx, O, 32);
+  case 180:
+    return evalLocalMemory(V, Idx, O, 16);
+  case 181:
+    return evalLocalMemory(V, Idx, O, 16, true);
+  case 182:
+    return evalLocalMemory(V, Idx, O, 8);
+  case 183:
+    return evalLocalMemory(V, Idx, O, 8, true);
+  case 184:
+    return evalLocalMemoryPair(V, Idx, O);
   default:
     return slt32(V, u32(O.A)) ? (V ^ u32(O.B)) : (V - u32(O.C));
   }
@@ -2950,6 +2964,51 @@ Value *emitLocalMemoryPair(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
                      B.CreateAdd(V, ci32(Ctx, u32(O.A))));
 }
 
+Value *globalScratchPtr(IRBuilder<> &B, Value *Scratch, Value *Idx,
+                        Type *ElemTy, unsigned Bits) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *Idx64 = B.CreateZExt(Idx, I64);
+  Value *ElementIndex = Idx64;
+  if (Bits < 32)
+    ElementIndex = B.CreateMul(Idx64, ci64(Ctx, 32 / Bits));
+  return B.CreateGEP(ElemTy, Scratch, ElementIndex);
+}
+
+Value *emitGlobalMemory(IRBuilder<> &B, Value *Scratch, Value *V, Value *Idx,
+                        const Op &O, unsigned Bits,
+                        bool SignedExtend = false) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *ElemTy = Type::getIntNTy(Ctx, Bits);
+  Value *Ptr = globalScratchPtr(B, Scratch, Idx, ElemTy, Bits);
+  Value *Stored = localMemoryValue(B, V, Idx, O);
+  if (Bits < 32)
+    Stored = B.CreateTrunc(Stored, ElemTy);
+  B.CreateStore(Stored, Ptr);
+  Value *Loaded = B.CreateLoad(ElemTy, Ptr);
+  if (Bits < 32)
+    Loaded =
+        SignedExtend ? B.CreateSExt(Loaded, I32) : B.CreateZExt(Loaded, I32);
+  return B.CreateXor(Loaded, B.CreateAdd(V, ci32(Ctx, u32(O.B) | 1u)));
+}
+
+Value *emitGlobalMemoryPair(IRBuilder<> &B, Value *Scratch, Value *V,
+                            Value *Idx, const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Ptr = globalScratchPtr(B, Scratch, Idx, I32, 32);
+  Value *First = localMemoryValue(B, V, Idx, O);
+  B.CreateStore(First, Ptr);
+  Value *FirstLoaded = B.CreateLoad(I32, Ptr);
+  Value *Second = B.CreateXor(B.CreateAdd(FirstLoaded, ci32(Ctx, u32(O.B))),
+                              B.CreateMul(V, ci32(Ctx, u32(O.C) | 1u)));
+  B.CreateStore(Second, Ptr);
+  Value *SecondLoaded = B.CreateLoad(I32, Ptr);
+  return B.CreateXor(B.CreateAdd(FirstLoaded, SecondLoaded),
+                     B.CreateAdd(V, ci32(Ctx, u32(O.A))));
+}
+
 Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
                   Intrinsic::ID ID) {
   LLVMContext &Ctx = B.getContext();
@@ -3137,7 +3196,8 @@ Value *emitNarrowDynamicShift(IRBuilder<> &B, Value *V, const Op &O,
   return B.CreateXor(B.CreateAdd(V, ci32(Ctx, u32(O.B))), Extended);
 }
 
-Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
+Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, Value *Scratch,
+              const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   switch (O.Kind) {
@@ -3546,6 +3606,18 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitLocalMemory(B, M, V, Idx, O, 8, true);
   case 178:
     return emitLocalMemoryPair(B, M, V, Idx, O);
+  case 179:
+    return emitGlobalMemory(B, Scratch, V, Idx, O, 32);
+  case 180:
+    return emitGlobalMemory(B, Scratch, V, Idx, O, 16);
+  case 181:
+    return emitGlobalMemory(B, Scratch, V, Idx, O, 16, true);
+  case 182:
+    return emitGlobalMemory(B, Scratch, V, Idx, O, 8);
+  case 183:
+    return emitGlobalMemory(B, Scratch, V, Idx, O, 8, true);
+  case 184:
+    return emitGlobalMemoryPair(B, Scratch, V, Idx, O);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
@@ -3555,17 +3627,18 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
   }
 }
 
-Value *emitOps(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
+Value *emitOps(IRBuilder<> &B, Module &M, Value *V, Value *Idx, Value *Scratch,
                ArrayRef<Op> Ops) {
   for (const Op &O : Ops)
-    V = emitOp(B, M, V, Idx, O);
+    V = emitOp(B, M, V, Idx, Scratch, O);
   return V;
 }
 
 Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
-                         const Program &P, Value *V, Value *Idx) {
+                         const Program &P, Value *V, Value *Idx,
+                         Value *Scratch) {
   if (!P.UseStructuredCFG || P.Ops.size() < 4)
-    return emitOps(B, M, V, Idx, P.Ops);
+    return emitOps(B, M, V, Idx, Scratch, P.Ops);
 
   LLVMContext &Ctx = B.getContext();
   size_t Prefix = 0;
@@ -3574,7 +3647,7 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
   size_t SuffixStart = 0;
   chooseStructuredSlices(P, Prefix, ThenLen, ElseLen, SuffixStart);
 
-  V = emitOps(B, M, V, Idx, ArrayRef<Op>(P.Ops).take_front(Prefix));
+  V = emitOps(B, M, V, Idx, Scratch, ArrayRef<Op>(P.Ops).take_front(Prefix));
   Value *PredBase = B.CreateXor(V, Idx);
   uint32_t PredicateConst = u32(P.CFGPredicate);
   Value *Cond = nullptr;
@@ -3606,12 +3679,14 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
 
   ArrayRef<Op> Ops(P.Ops);
   B.SetInsertPoint(ThenBB);
-  Value *ThenV = emitOps(B, M, V, Idx, Ops.slice(Prefix, ThenLen));
+  Value *ThenV =
+      emitOps(B, M, V, Idx, Scratch, Ops.slice(Prefix, ThenLen));
   B.CreateBr(MergeBB);
   ThenBB = B.GetInsertBlock();
 
   B.SetInsertPoint(ElseBB);
-  Value *ElseV = emitOps(B, M, V, Idx, Ops.slice(Prefix + ThenLen, ElseLen));
+  Value *ElseV =
+      emitOps(B, M, V, Idx, Scratch, Ops.slice(Prefix + ThenLen, ElseLen));
   B.CreateBr(MergeBB);
   ElseBB = B.GetInsertBlock();
 
@@ -3619,7 +3694,7 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
   PHINode *Phi = B.CreatePHI(Type::getInt32Ty(Ctx), 2);
   Phi->addIncoming(ThenV, ThenBB);
   Phi->addIncoming(ElseV, ElseBB);
-  return emitOps(B, M, Phi, Idx, Ops.drop_front(SuffixStart));
+  return emitOps(B, M, Phi, Idx, Scratch, Ops.drop_front(SuffixStart));
 }
 
 std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
@@ -3674,7 +3749,7 @@ std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
   Value *Idx64 = B.CreateZExt(Idx, I64);
   Value *InPtr = B.CreateGEP(I32, In, Idx64);
   Value *V = B.CreateLoad(I32, InPtr);
-  V = emitStructuredOps(B, *M, F, P, V, Idx);
+  V = emitStructuredOps(B, *M, F, P, V, Idx, Out);
   Value *OutPtr = B.CreateGEP(I32, Out, Idx64);
   B.CreateStore(V, OutPtr);
   B.CreateBr(Exit);
