@@ -3,6 +3,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsAMDGPU.h"
@@ -12,6 +13,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Alignment.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/TargetSelect.h"
@@ -390,6 +392,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       Kind = 135 + ((RawKind & 15u) % 8);
     if ((RawKind & 0xf0u) == 0x50u)
       Kind = 167 + ((RawKind & 15u) % 6);
+    if ((RawKind & 0xf0u) == 0x40u)
+      Kind = 173 + ((RawKind & 15u) % 6);
     if ((RawKind & 0xf0u) == 0x60u)
       Kind = 159 + ((RawKind & 15u) % 8);
     if ((RawKind & 0xf0u) == 0x70u)
@@ -1280,6 +1284,35 @@ uint32_t evalPrivateMemory(uint32_t V, uint32_t Idx, const Op &O) {
   return Values[O.C & 3u];
 }
 
+uint32_t localMemoryValue(uint32_t V, uint32_t Idx, const Op &O) {
+  switch (O.C % 5) {
+  case 0:
+    return V + u32(O.A);
+  case 1:
+    return V ^ u32(O.B);
+  case 2:
+    return Idx * (u32(O.C) | 1u) + V;
+  case 3:
+    return V - u32(O.A);
+  default:
+    return (V & u32(O.A)) | (u32(O.B) & ~u32(O.A));
+  }
+}
+
+uint32_t evalLocalMemory(uint32_t V, uint32_t Idx, const Op &O, unsigned Bits,
+                         bool SignedExtend = false) {
+  uint32_t Loaded = localMemoryValue(V, Idx, O);
+  if (Bits < 32)
+    Loaded = SignedExtend ? sextBits(Loaded, Bits) : zextBits(Loaded, Bits);
+  return Loaded ^ (V + (u32(O.B) | 1u));
+}
+
+uint32_t evalLocalMemoryPair(uint32_t V, uint32_t Idx, const Op &O) {
+  uint32_t First = localMemoryValue(V, Idx, O);
+  uint32_t Second = (First + u32(O.B)) ^ (V * (u32(O.C) | 1u));
+  return (First + Second) ^ (V + u32(O.A));
+}
+
 uint32_t evalRotate(uint32_t V, const Op &O, bool Left) {
   uint32_t Shift = (V ^ u32(O.B)) & 31u;
   if (Left)
@@ -1782,6 +1815,18 @@ std::optional<uint32_t> evalOp(uint32_t V, uint32_t Idx, const Op &O) {
   case 171:
   case 172:
     return std::nullopt;
+  case 173:
+    return evalLocalMemory(V, Idx, O, 32);
+  case 174:
+    return evalLocalMemory(V, Idx, O, 16);
+  case 175:
+    return evalLocalMemory(V, Idx, O, 16, true);
+  case 176:
+    return evalLocalMemory(V, Idx, O, 8);
+  case 177:
+    return evalLocalMemory(V, Idx, O, 8, true);
+  case 178:
+    return evalLocalMemoryPair(V, Idx, O);
   default:
     return slt32(V, u32(O.A)) ? (V ^ u32(O.B)) : (V - u32(O.C));
   }
@@ -2833,6 +2878,78 @@ Value *emitPrivateMemory(IRBuilder<> &B, Value *V, Value *Idx, const Op &O) {
   return B.CreateLoad(I32, LoadPtr);
 }
 
+GlobalVariable *getLocalMemoryArray(Module &M, Type *ElemTy, StringRef Name,
+                                    unsigned AlignBytes) {
+  auto *ArrTy = ArrayType::get(ElemTy, ThreadsPerBlock);
+  if (auto *GV = M.getGlobalVariable(Name, true))
+    return GV;
+  auto *GV = new GlobalVariable(M, ArrTy, false, GlobalValue::InternalLinkage,
+                                UndefValue::get(ArrTy), Name, nullptr,
+                                GlobalValue::NotThreadLocal, 3);
+  GV->setAlignment(Align(AlignBytes));
+  return GV;
+}
+
+Value *localMemoryValue(IRBuilder<> &B, Value *V, Value *Idx, const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  switch (O.C % 5) {
+  case 0:
+    return B.CreateAdd(V, ci32(Ctx, u32(O.A)));
+  case 1:
+    return B.CreateXor(V, ci32(Ctx, u32(O.B)));
+  case 2:
+    return B.CreateAdd(B.CreateMul(Idx, ci32(Ctx, u32(O.C) | 1u)), V);
+  case 3:
+    return B.CreateSub(V, ci32(Ctx, u32(O.A)));
+  default:
+    return B.CreateOr(B.CreateAnd(V, ci32(Ctx, u32(O.A))),
+                      ci32(Ctx, u32(O.B) & ~u32(O.A)));
+  }
+}
+
+Value *localMemorySlot(IRBuilder<> &B, Value *Idx) {
+  return B.CreateAnd(Idx, ci32(B.getContext(), ThreadsPerBlock - 1));
+}
+
+Value *emitLocalMemory(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
+                       const Op &O, unsigned Bits, bool SignedExtend = false) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *ElemTy = Type::getIntNTy(Ctx, Bits);
+  auto *ArrTy = ArrayType::get(ElemTy, ThreadsPerBlock);
+  GlobalVariable *LDS = getLocalMemoryArray(M, ElemTy,
+                                            ("fuzzx_lds_i" + Twine(Bits)).str(),
+                                            std::max(1u, Bits / 8));
+  Value *Ptr = B.CreateGEP(ArrTy, LDS, {ci32(Ctx, 0), localMemorySlot(B, Idx)});
+  Value *Stored = localMemoryValue(B, V, Idx, O);
+  if (Bits < 32)
+    Stored = B.CreateTrunc(Stored, ElemTy);
+  B.CreateStore(Stored, Ptr);
+  Value *Loaded = B.CreateLoad(ElemTy, Ptr);
+  if (Bits < 32)
+    Loaded =
+        SignedExtend ? B.CreateSExt(Loaded, I32) : B.CreateZExt(Loaded, I32);
+  return B.CreateXor(Loaded, B.CreateAdd(V, ci32(Ctx, u32(O.B) | 1u)));
+}
+
+Value *emitLocalMemoryPair(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
+                           const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *ArrTy = ArrayType::get(I32, ThreadsPerBlock);
+  GlobalVariable *LDS = getLocalMemoryArray(M, I32, "fuzzx_lds_i32_pair", 4);
+  Value *Ptr = B.CreateGEP(ArrTy, LDS, {ci32(Ctx, 0), localMemorySlot(B, Idx)});
+  Value *First = localMemoryValue(B, V, Idx, O);
+  B.CreateStore(First, Ptr);
+  Value *FirstLoaded = B.CreateLoad(I32, Ptr);
+  Value *Second = B.CreateXor(B.CreateAdd(FirstLoaded, ci32(Ctx, u32(O.B))),
+                              B.CreateMul(V, ci32(Ctx, u32(O.C) | 1u)));
+  B.CreateStore(Second, Ptr);
+  Value *SecondLoaded = B.CreateLoad(I32, Ptr);
+  return B.CreateXor(B.CreateAdd(FirstLoaded, SecondLoaded),
+                     B.CreateAdd(V, ci32(Ctx, u32(O.A))));
+}
+
 Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
                   Intrinsic::ID ID) {
   LLVMContext &Ctx = B.getContext();
@@ -3417,6 +3534,18 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitF16VectorMix(B, M, V, 2, O, true);
   case 172:
     return emitF16VectorMix(B, M, V, 4, O, true);
+  case 173:
+    return emitLocalMemory(B, M, V, Idx, O, 32);
+  case 174:
+    return emitLocalMemory(B, M, V, Idx, O, 16);
+  case 175:
+    return emitLocalMemory(B, M, V, Idx, O, 16, true);
+  case 176:
+    return emitLocalMemory(B, M, V, Idx, O, 8);
+  case 177:
+    return emitLocalMemory(B, M, V, Idx, O, 8, true);
+  case 178:
+    return emitLocalMemoryPair(B, M, V, Idx, O);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));

@@ -11,7 +11,8 @@ operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
 `nsw` / `exact`, no `inbounds`, no division, and all shift amounts are constants
 below the shifted value's bit width.  Coverage includes scalar integer ops,
 small-width integer ops, packed `i8` / `i16` vectors, selects, structured CFG,
-private-memory load/store sequences, and LLVM overflow, saturation, bit, and
+private-memory and LDS/local-memory load/store sequences, and LLVM overflow,
+saturation, bit, and
 funnel-shift intrinsics across scalar, small-width, and widened integer types.
 The generated IR also covers narrow min/max intrinsics, widened compare /
 select and `fshr` paths, and masked dynamic shifts across scalar and narrow
@@ -23,7 +24,7 @@ all derived from the live input value. Floating-point coverage includes finite
 `fdiv`, and `double`-to-`float` rounding; the generator keeps the values
 bounded and mixes them back through bitcasts to avoid FP-to-integer poison.
 Set `FUZZX_ENABLE_ORACLE=1` to also compare GPU output against the fuzzer's
-integer/bit/vector/private-memory semantic oracle.  FP operations currently
+integer/bit/vector/private-memory/LDS semantic oracle. FP operations currently
 remain differential-only in oracle mode.
 
 ## Requirements
