@@ -54,9 +54,12 @@ WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=51
 
 With an optimized ROCm 7.2.3 LLVM build using sanitizer coverage and no ASan,
 the directed fuzzer currently reaches about 500 exec/s aggregate across 8 GPUs.
-Scaling from 64 to 256 workers did not reach 1k exec/s; CPU remained mostly
-idle, so the current bottleneck appears to be HIP/module execution rather than
-host compilation.
+Keep the corpus, logs, artifacts, findings, and `TMPDIR` on a local filesystem;
+the run scripts default these hot paths to `/tmp/fuzzx-amdgpu-$USER` through
+`FUZZX_RUNTIME_ROOT`. Avoid putting them on WekaFS or another shared filesystem,
+because libFuzzer produces a high rate of tiny metadata and log writes. The run
+scripts also copy the fuzzer binary into the local runtime root by default
+before spawning workers; set `FUZZX_LOCALIZE_FUZZER=0` to disable that.
 
 For ROCm 7.2.3 release fuzzing, use the release wrapper:
 
@@ -70,8 +73,10 @@ LLVM HEAD / ROCm HEAD in the checked matrix (`m002` through `m012`, plus `m014`
 through `m016`).
 
 Candidate compiler crashes, runner failures, or output mismatches are saved
-under `findings/`. Generated corpora and findings are local artifacts and are
-ignored by git.
+under `$FUZZX_RUNTIME_ROOT/findings` by default. Generated corpora and findings
+are local artifacts and are ignored by git; set `FUZZX_RUNTIME_ROOT`,
+`CORPUS_ROOT`, `LOG_DIR`, `ARTIFACT_ROOT`, or `FUZZX_FINDINGS_DIR` to override
+the default local runtime paths.
 
 ### Known-Bug Suppression
 
