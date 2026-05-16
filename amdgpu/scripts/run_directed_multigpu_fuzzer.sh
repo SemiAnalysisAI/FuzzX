@@ -17,7 +17,58 @@ LOG_DIR="${LOG_DIR:-$RUNTIME_ROOT/logs/directed-gpu/$(date +%Y%m%d-%H%M%S)}"
 FUZZX_FINDINGS_DIR="${FUZZX_FINDINGS_DIR:-$RUNTIME_ROOT/findings}"
 TMPDIR="${FUZZX_TMPDIR:-$RUNTIME_ROOT/tmp}"
 FUZZX_LOCALIZE_FUZZER="${FUZZX_LOCALIZE_FUZZER:-1}"
+FUZZX_CPUSET="${FUZZX_CPUSET:-auto}"
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
+
+resolve_cpuset() {
+    case "$FUZZX_CPUSET" in
+        "" | none | off | false | 0)
+            return 0
+            ;;
+        auto)
+            if ! command -v taskset >/dev/null || ! command -v python3 >/dev/null; then
+                return 0
+            fi
+            python3 - <<'PY'
+import pathlib
+import re
+
+total = None
+try:
+    total = len(open("/proc/self/status").read().split("Cpus_allowed_list:\t", 1)[1].splitlines()[0].replace(",", " ").replace("-", " ").split())
+except Exception:
+    pass
+try:
+    import os
+    total = os.cpu_count() or total
+except Exception:
+    pass
+if not total:
+    raise SystemExit
+
+exclude = set()
+for status in pathlib.Path("/proc").glob("[0-9]*/status"):
+    proc = status.parent
+    try:
+        cmdline = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="ignore")
+        if "wekanode" not in cmdline:
+            continue
+        text = status.read_text(errors="ignore")
+        match = re.search(r"^Cpus_allowed_list:\s*([0-9]+)\s*$", text, re.M)
+        if match:
+            exclude.add(int(match.group(1)))
+    except OSError:
+        continue
+cpus = [str(cpu) for cpu in range(total) if cpu not in exclude]
+if cpus and len(cpus) < total:
+    print(",".join(cpus))
+PY
+            ;;
+        *)
+            printf '%s\n' "$FUZZX_CPUSET"
+            ;;
+    esac
+}
 
 if [[ ! -x "$FUZZER_BIN" ]]; then
     echo "fuzzer binary not found: $FUZZER_BIN" >&2
@@ -51,6 +102,11 @@ if ! [[ "$WORKERS_PER_GPU" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 mkdir -p "$CORPUS_ROOT" "$ARTIFACT_ROOT" "$LOG_DIR" "$FUZZX_FINDINGS_DIR" "$TMPDIR"
+RESOLVED_CPUSET="$(resolve_cpuset)"
+CPUSET_CMD=()
+if [[ -n "$RESOLVED_CPUSET" ]]; then
+    CPUSET_CMD=(taskset -c "$RESOLVED_CPUSET")
+fi
 export TMPDIR
 export FUZZX_FINDINGS_DIR
 export ASAN_OPTIONS
@@ -70,7 +126,7 @@ for device in "${GPU_LIST[@]}"; do
         if ! compgen -G "$corpus/*" >/dev/null; then
             printf '\001\002\003\004\005\006\007\010' >"$corpus/seed"
         fi
-        HIP_DEVICE="$device" "$FUZZER_BIN" "$corpus" \
+        HIP_DEVICE="$device" "${CPUSET_CMD[@]}" "$FUZZER_BIN" "$corpus" \
             -artifact_prefix="$artifacts/" \
             "$@" >"$LOG_DIR/$name.log" 2>&1 &
     done
@@ -87,6 +143,7 @@ echo "artifacts: $ARTIFACT_ROOT"
 echo "findings: $FUZZX_FINDINGS_DIR"
 echo "tmp: $TMPDIR"
 echo "fuzzer: $FUZZER_BIN"
+echo "cpuset: ${RESOLVED_CPUSET:-<default>}"
 echo "devices: ${#GPU_LIST[@]}"
 echo "workers_per_gpu: $WORKERS_PER_GPU"
 echo "workers: $(("${#GPU_LIST[@]}" * WORKERS_PER_GPU))"

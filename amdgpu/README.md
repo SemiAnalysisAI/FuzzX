@@ -22,6 +22,9 @@ all derived from the live input value. Floating-point coverage includes finite
 `half`, `float`, and `double` arithmetic, comparisons, `fabs`, `sqrt`, `fma`,
 `fdiv`, and `double`-to-`float` rounding; the generator keeps the values
 bounded and mixes them back through bitcasts to avoid FP-to-integer poison.
+Set `FUZZX_ENABLE_ORACLE=1` to also compare GPU output against the fuzzer's
+integer/bit/vector/private-memory semantic oracle.  FP operations currently
+remain differential-only in oracle mode.
 
 ## Requirements
 
@@ -59,12 +62,24 @@ the run scripts default these hot paths to `/tmp/fuzzx-amdgpu-$USER` through
 `FUZZX_RUNTIME_ROOT`. Avoid putting them on WekaFS or another shared filesystem,
 because libFuzzer produces a high rate of tiny metadata and log writes. The run
 scripts also copy the fuzzer binary into the local runtime root by default
-before spawning workers; set `FUZZX_LOCALIZE_FUZZER=0` to disable that.
+before spawning workers; set `FUZZX_LOCALIZE_FUZZER=0` to disable that. When
+Weka client frontend processes reserve dedicated CPU cores, the run scripts
+default `FUZZX_CPUSET=auto`, detect single-core-pinned `wekanode` processes, and
+run fuzzer workers through `taskset` on the remaining CPUs. Set
+`FUZZX_CPUSET=none` to disable this or `FUZZX_CPUSET=0-63` to use an explicit
+CPU set.
 
 For ROCm 7.2.3 release fuzzing, use the release wrapper:
 
 ```bash
 scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
+```
+
+To look for lowering bugs shared by both optimization levels, enable the
+expected-output oracle:
+
+```bash
+FUZZX_ENABLE_ORACLE=1 scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
 ```
 
 That wrapper keeps the release-reproducing bugs suppressed (`m001`, `m013`,

@@ -465,6 +465,1395 @@ std::array<uint32_t, InputCount> makeInputs(const uint8_t *Data, size_t Size) {
   return Inputs;
 }
 
+bool allowM015ScalarFshlZero();
+
+bool oracleEnabled() {
+  static const bool Enabled = envFlag("FUZZX_ENABLE_ORACLE", false);
+  return Enabled;
+}
+
+uint64_t maskBits(unsigned Bits) {
+  return Bits == 64 ? ~0ull : ((1ull << Bits) - 1ull);
+}
+
+uint64_t truncBits(uint64_t V, unsigned Bits) { return V & maskBits(Bits); }
+
+int64_t signedBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  if (Bits == 64)
+    return static_cast<int64_t>(V);
+  uint64_t Sign = 1ull << (Bits - 1);
+  return static_cast<int64_t>((V ^ Sign) - Sign);
+}
+
+uint32_t zextBits(uint64_t V, unsigned Bits) {
+  return static_cast<uint32_t>(truncBits(V, Bits));
+}
+
+uint32_t sextBits(uint64_t V, unsigned Bits) {
+  return static_cast<uint32_t>(signedBits(V, Bits));
+}
+
+bool slt32(uint32_t A, uint32_t B) {
+  return static_cast<int32_t>(A) < static_cast<int32_t>(B);
+}
+
+uint64_t ashrBits(uint64_t V, unsigned Bits, unsigned Shift) {
+  return truncBits(static_cast<uint64_t>(signedBits(V, Bits) >> Shift), Bits);
+}
+
+uint64_t ctlzBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  if (V == 0)
+    return Bits;
+  unsigned Count = 0;
+  for (int I = static_cast<int>(Bits) - 1; I >= 0; --I) {
+    if ((V >> I) & 1ull)
+      break;
+    ++Count;
+  }
+  return Count;
+}
+
+uint64_t cttzBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  if (V == 0)
+    return Bits;
+  unsigned Count = 0;
+  while (((V >> Count) & 1ull) == 0)
+    ++Count;
+  return Count;
+}
+
+uint64_t ctpopBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  unsigned Count = 0;
+  for (unsigned I = 0; I < Bits; ++I)
+    Count += (V >> I) & 1ull;
+  return Count;
+}
+
+uint64_t bitreverseBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  uint64_t R = 0;
+  for (unsigned I = 0; I < Bits; ++I)
+    R |= ((V >> I) & 1ull) << (Bits - 1 - I);
+  return R;
+}
+
+uint64_t bswapBits(uint64_t V, unsigned Bits) {
+  V = truncBits(V, Bits);
+  uint64_t R = 0;
+  for (unsigned I = 0; I < Bits; I += 8)
+    R |= ((V >> I) & 0xffull) << (Bits - 8 - I);
+  return R;
+}
+
+uint64_t absBits(uint64_t V, unsigned Bits) {
+  int64_t S = signedBits(V, Bits);
+  if (S >= 0)
+    return truncBits(V, Bits);
+  if (Bits < 64 && S == -(1ll << (Bits - 1)))
+    return truncBits(V, Bits);
+  return truncBits(static_cast<uint64_t>(-S), Bits);
+}
+
+uint64_t uminBits(uint64_t A, uint64_t B, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  return A < B ? A : B;
+}
+
+uint64_t umaxBits(uint64_t A, uint64_t B, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  return A > B ? A : B;
+}
+
+uint64_t sminBits(uint64_t A, uint64_t B, unsigned Bits) {
+  return signedBits(A, Bits) < signedBits(B, Bits) ? truncBits(A, Bits)
+                                                   : truncBits(B, Bits);
+}
+
+uint64_t smaxBits(uint64_t A, uint64_t B, unsigned Bits) {
+  return signedBits(A, Bits) > signedBits(B, Bits) ? truncBits(A, Bits)
+                                                   : truncBits(B, Bits);
+}
+
+uint64_t fshlBits(uint64_t A, uint64_t B, uint64_t Shift, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  Shift %= Bits;
+  if (Shift == 0)
+    return A;
+  return truncBits((A << Shift) | (B >> (Bits - Shift)), Bits);
+}
+
+uint64_t fshrBits(uint64_t A, uint64_t B, uint64_t Shift, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  Shift %= Bits;
+  if (Shift == 0)
+    return B;
+  return truncBits((A << (Bits - Shift)) | (B >> Shift), Bits);
+}
+
+uint32_t adjustFshlShift(uint32_t Shift) {
+  if (allowM015ScalarFshlZero())
+    return Shift;
+  return Shift == 0 ? 1 : Shift;
+}
+
+uint64_t uaddSat(uint64_t A, uint64_t B, unsigned Bits) {
+  uint64_t Mask = maskBits(Bits);
+  A &= Mask;
+  B &= Mask;
+  uint64_t R = A + B;
+  return (R > Mask || R < A) ? Mask : R;
+}
+
+uint64_t usubSat(uint64_t A, uint64_t B, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  return A < B ? 0 : A - B;
+}
+
+uint64_t saddSat(uint64_t A, uint64_t B, unsigned Bits) {
+  int64_t SA = signedBits(A, Bits);
+  int64_t SB = signedBits(B, Bits);
+  int64_t Min = Bits == 64 ? INT64_MIN : -(1ll << (Bits - 1));
+  int64_t Max = Bits == 64 ? INT64_MAX : ((1ll << (Bits - 1)) - 1);
+  __int128 R = static_cast<__int128>(SA) + static_cast<__int128>(SB);
+  if (R > Max)
+    return truncBits(static_cast<uint64_t>(Max), Bits);
+  if (R < Min)
+    return truncBits(static_cast<uint64_t>(Min), Bits);
+  return truncBits(static_cast<uint64_t>(static_cast<int64_t>(R)), Bits);
+}
+
+uint64_t ssubSat(uint64_t A, uint64_t B, unsigned Bits) {
+  int64_t SA = signedBits(A, Bits);
+  int64_t SB = signedBits(B, Bits);
+  int64_t Min = Bits == 64 ? INT64_MIN : -(1ll << (Bits - 1));
+  int64_t Max = Bits == 64 ? INT64_MAX : ((1ll << (Bits - 1)) - 1);
+  __int128 R = static_cast<__int128>(SA) - static_cast<__int128>(SB);
+  if (R > Max)
+    return truncBits(static_cast<uint64_t>(Max), Bits);
+  if (R < Min)
+    return truncBits(static_cast<uint64_t>(Min), Bits);
+  return truncBits(static_cast<uint64_t>(static_cast<int64_t>(R)), Bits);
+}
+
+struct OverflowResult {
+  uint64_t Wrapped;
+  bool Overflow;
+};
+
+OverflowResult uaddOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  unsigned __int128 Sum = static_cast<unsigned __int128>(truncBits(A, Bits)) +
+                          static_cast<unsigned __int128>(truncBits(B, Bits));
+  return {truncBits(static_cast<uint64_t>(Sum), Bits), (Sum >> Bits) != 0};
+}
+
+OverflowResult usubOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  A = truncBits(A, Bits);
+  B = truncBits(B, Bits);
+  return {truncBits(A - B, Bits), A < B};
+}
+
+OverflowResult umulOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  unsigned __int128 Product =
+      static_cast<unsigned __int128>(truncBits(A, Bits)) *
+      static_cast<unsigned __int128>(truncBits(B, Bits));
+  return {truncBits(static_cast<uint64_t>(Product), Bits),
+          (Product >> Bits) != 0};
+}
+
+OverflowResult saddOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  int64_t SA = signedBits(A, Bits);
+  int64_t SB = signedBits(B, Bits);
+  __int128 Sum = static_cast<__int128>(SA) + static_cast<__int128>(SB);
+  __int128 Min = Bits == 64 ? static_cast<__int128>(INT64_MIN)
+                            : -((__int128)1 << (Bits - 1));
+  __int128 Max = Bits == 64 ? static_cast<__int128>(INT64_MAX)
+                            : (((__int128)1 << (Bits - 1)) - 1);
+  return {truncBits(static_cast<uint64_t>(static_cast<int64_t>(Sum)), Bits),
+          Sum < Min || Sum > Max};
+}
+
+OverflowResult ssubOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  int64_t SA = signedBits(A, Bits);
+  int64_t SB = signedBits(B, Bits);
+  __int128 Diff = static_cast<__int128>(SA) - static_cast<__int128>(SB);
+  __int128 Min = Bits == 64 ? static_cast<__int128>(INT64_MIN)
+                            : -((__int128)1 << (Bits - 1));
+  __int128 Max = Bits == 64 ? static_cast<__int128>(INT64_MAX)
+                            : (((__int128)1 << (Bits - 1)) - 1);
+  return {truncBits(static_cast<uint64_t>(static_cast<int64_t>(Diff)), Bits),
+          Diff < Min || Diff > Max};
+}
+
+OverflowResult smulOverflow(uint64_t A, uint64_t B, unsigned Bits) {
+  int64_t SA = signedBits(A, Bits);
+  int64_t SB = signedBits(B, Bits);
+  __int128 Product = static_cast<__int128>(SA) * static_cast<__int128>(SB);
+  __int128 Min = Bits == 64 ? static_cast<__int128>(INT64_MIN)
+                            : -((__int128)1 << (Bits - 1));
+  __int128 Max = Bits == 64 ? static_cast<__int128>(INT64_MAX)
+                            : (((__int128)1 << (Bits - 1)) - 1);
+  return {truncBits(static_cast<uint64_t>(static_cast<int64_t>(Product)), Bits),
+          Product < Min || Product > Max};
+}
+
+uint32_t evalNarrow(uint32_t V, unsigned Bits, const Op &O,
+                    bool SignedExtend = false) {
+  uint64_t Mask = maskBits(Bits);
+  uint64_t N = truncBits(V, Bits);
+  unsigned Shift = static_cast<unsigned>(O.B) & (Bits - 1);
+  uint64_t Mixed;
+  switch (O.C % 7) {
+  case 0:
+    Mixed = N + (O.A & Mask);
+    break;
+  case 1:
+    Mixed = N - (O.A & Mask);
+    break;
+  case 2:
+    Mixed = N * (O.A & Mask);
+    break;
+  case 3:
+    Mixed = N ^ (O.A & Mask);
+    break;
+  case 4:
+    Mixed = N << Shift;
+    break;
+  case 5:
+    Mixed = N >> Shift;
+    break;
+  default:
+    Mixed = ashrBits(N, Bits, Shift);
+    break;
+  }
+  uint32_t Extended =
+      SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return V ^ Extended;
+}
+
+uint32_t evalWide(uint32_t V, const Op &O) {
+  uint64_t W = V;
+  unsigned Shift = static_cast<unsigned>(O.B) & 63u;
+  uint64_t Mixed;
+  switch (O.C % 13) {
+  case 0:
+    Mixed = W + O.A;
+    break;
+  case 1:
+    Mixed = W - O.A;
+    break;
+  case 2:
+    Mixed = W * O.A;
+    break;
+  case 3:
+    Mixed = W ^ O.A;
+    break;
+  case 4:
+    Mixed = W & O.A;
+    break;
+  case 5:
+    Mixed = W | O.A;
+    break;
+  case 6:
+    Mixed = W << Shift;
+    break;
+  case 7:
+    Mixed = W >> Shift;
+    break;
+  case 8:
+    Mixed = ashrBits(W, 64, Shift);
+    break;
+  case 9:
+    Mixed = ctlzBits(W, 64);
+    break;
+  case 10:
+    Mixed = cttzBits(W, 64);
+    break;
+  case 11:
+    Mixed = ctpopBits(W, 64);
+    break;
+  default:
+    Mixed = bswapBits(W, 64);
+    break;
+  }
+  return V + static_cast<uint32_t>(Mixed);
+}
+
+uint32_t evalOverflow(uint32_t V, const Op &O, unsigned Which) {
+  OverflowResult R;
+  switch (Which) {
+  case 0:
+    R = uaddOverflow(V, u32(O.A), 32);
+    break;
+  case 1:
+    R = usubOverflow(V, u32(O.A), 32);
+    break;
+  case 2:
+    R = saddOverflow(V, u32(O.A), 32);
+    break;
+  case 3:
+    R = ssubOverflow(V, u32(O.A), 32);
+    break;
+  case 4:
+    R = umulOverflow(V, u32(O.A), 32);
+    break;
+  default:
+    R = smulOverflow(V, u32(O.A), 32);
+    break;
+  }
+  return static_cast<uint32_t>(R.Wrapped) ^
+         (static_cast<uint32_t>(R.Overflow) << (O.B & 31u));
+}
+
+uint32_t evalWideOverflow(uint32_t V, const Op &O, unsigned Which) {
+  uint64_t W = V;
+  OverflowResult R;
+  switch (Which) {
+  case 0:
+    R = uaddOverflow(W, O.A, 64);
+    break;
+  case 1:
+    R = usubOverflow(W, O.A, 64);
+    break;
+  case 2:
+    R = saddOverflow(W, O.A, 64);
+    break;
+  case 3:
+    R = ssubOverflow(W, O.A, 64);
+    break;
+  default:
+    R = umulOverflow(W, O.A, 64);
+    break;
+  }
+  uint32_t Lo = static_cast<uint32_t>(R.Wrapped);
+  uint32_t Hi = static_cast<uint32_t>(R.Wrapped >> 32);
+  return (Lo + Hi) ^ (static_cast<uint32_t>(R.Overflow) << (O.B & 31u));
+}
+
+std::array<uint32_t, 4> makeI32VectorValue(uint32_t V, unsigned Lanes,
+                                           const Op &O) {
+  std::array<uint32_t, 4> Cur = {};
+  std::array<uint32_t, 4> Init = {u32(O.A), u32(O.B), u32(O.C),
+                                  u32(O.A + O.B + O.C)};
+  for (unsigned I = 0; I < Lanes; ++I)
+    Cur[I] = I == 0 ? V : Init[I - 1];
+  return Cur;
+}
+
+std::array<uint32_t, 4> makeDerivedI32VectorValue(uint32_t V, unsigned Lanes,
+                                                  const Op &O) {
+  std::array<uint32_t, 4> Cur = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (I) {
+    case 1:
+      Cur[I] = V ^ u32(O.A);
+      break;
+    case 2:
+      Cur[I] = V + u32(O.B);
+      break;
+    default:
+      Cur[I] = (V >> (O.C & 31u)) | u32(O.A >> 32);
+      break;
+    }
+  }
+  return Cur;
+}
+
+uint32_t evalVector(uint32_t V, unsigned Lanes, const Op &O) {
+  std::array<uint32_t, 4> Cur = {};
+  std::array<uint32_t, 4> Init = {u32(O.A), u32(O.B), u32(O.C),
+                                  u32(O.A + O.B)};
+  for (unsigned I = 0; I < Lanes; ++I)
+    Cur[I] = I == 0 ? V : Init[I - 1];
+  std::array<uint32_t, 4> C = {u32(O.A >> 32), u32(O.B >> 32),
+                               u32(O.C >> 32), u32(O.A ^ O.C)};
+  std::array<uint32_t, 4> Alts = {u32(~O.A), u32(~O.B), u32(~O.C),
+                                  u32(O.A + O.B + O.C)};
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch ((O.A ^ O.C) % 8) {
+    case 0:
+      Mixed[I] = Cur[I] + C[I];
+      break;
+    case 1:
+      Mixed[I] = Cur[I] - C[I];
+      break;
+    case 2:
+      Mixed[I] = Cur[I] * C[I];
+      break;
+    case 3:
+      Mixed[I] = Cur[I] ^ C[I];
+      break;
+    case 4:
+      Mixed[I] = Cur[I] & C[I];
+      break;
+    case 5:
+      Mixed[I] = Cur[I] | C[I];
+      break;
+    case 6:
+      Mixed[I] = Cur[I] << (C[I] & 31u);
+      break;
+    default:
+      Mixed[I] = Cur[I] < C[I] ? (Cur[I] ^ Alts[I]) : Cur[I];
+      break;
+    }
+  }
+  return V ^ Mixed[O.B % Lanes];
+}
+
+uint32_t evalI32VectorMinMax(uint32_t V, unsigned Lanes, const Op &O,
+                             unsigned Which) {
+  auto Cur = makeI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> C = {u32(O.A >> 32), u32(O.B >> 32),
+                               u32(O.C >> 32), u32(O.A ^ O.C)};
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = static_cast<uint32_t>(uminBits(Cur[I], C[I], 32));
+      break;
+    case 1:
+      Mixed[I] = static_cast<uint32_t>(umaxBits(Cur[I], C[I], 32));
+      break;
+    case 2:
+      Mixed[I] = static_cast<uint32_t>(sminBits(Cur[I], C[I], 32));
+      break;
+    default:
+      Mixed[I] = static_cast<uint32_t>(smaxBits(Cur[I], C[I], 32));
+      break;
+    }
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted + (V ^ (u32(O.C) | 1u));
+}
+
+uint32_t evalI32VectorBitIntrinsic(uint32_t V, unsigned Lanes, const Op &O,
+                                   unsigned Which) {
+  auto Cur = makeI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = static_cast<uint32_t>(ctlzBits(Cur[I], 32));
+      break;
+    case 1:
+      Mixed[I] = static_cast<uint32_t>(cttzBits(Cur[I], 32));
+      break;
+    default:
+      Mixed[I] = static_cast<uint32_t>(ctpopBits(Cur[I], 32));
+      break;
+    }
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted ^ (V + (u32(O.A) | 1u));
+}
+
+uint32_t evalI32VectorDynamicShift(uint32_t V, unsigned Lanes, const Op &O) {
+  auto Cur = makeI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    uint32_t Shift = Cur[I] & 31u;
+    if (Shift == 0)
+      Shift = 1;
+    switch (O.C % 3) {
+    case 0:
+      Mixed[I] = Cur[I] << Shift;
+      break;
+    case 1:
+      Mixed[I] = Cur[I] >> Shift;
+      break;
+    default:
+      Mixed[I] = static_cast<uint32_t>(ashrBits(Cur[I], 32, Shift));
+      break;
+    }
+  }
+  return Mixed[O.B % Lanes] + u32(O.A);
+}
+
+uint32_t evalI32VectorFshr(uint32_t V, unsigned Lanes, const Op &O,
+                           bool DynamicShift) {
+  auto Cur = makeI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> Other = {u32(O.A), u32(O.B), u32(O.C),
+                                   u32(O.A ^ O.C)};
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    uint32_t Shift = DynamicShift ? (Cur[I] & 31u) : (Other[I] & 31u);
+    Mixed[I] = static_cast<uint32_t>(fshrBits(Other[I], Cur[I], Shift, 32));
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted ^ (V + (u32(O.C) | 1u));
+}
+
+uint32_t evalDerivedI32VectorMix(uint32_t V, unsigned Lanes, const Op &O) {
+  auto Cur = makeDerivedI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> C = {u32(O.A >> 32), u32(O.B >> 32),
+                               u32(O.C >> 32), u32(O.A ^ O.C)};
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (O.C % 9) {
+    case 0:
+      Mixed[I] = Cur[I] + C[I];
+      break;
+    case 1:
+      Mixed[I] = Cur[I] - C[I];
+      break;
+    case 2:
+      Mixed[I] = Cur[I] * C[I];
+      break;
+    case 3:
+      Mixed[I] = Cur[I] ^ C[I];
+      break;
+    case 4:
+      Mixed[I] = Cur[I] & C[I];
+      break;
+    case 5:
+      Mixed[I] = Cur[I] | C[I];
+      break;
+    case 6:
+      Mixed[I] = Cur[I] << (C[I] & 31u);
+      break;
+    case 7:
+      Mixed[I] = Cur[I] >> (C[I] & 31u);
+      break;
+    default: {
+      uint32_t Shift = Cur[I] & 31u;
+      if (Shift == 0)
+        Shift = 1;
+      Mixed[I] = static_cast<uint32_t>(ashrBits(Cur[I], 32, Shift));
+      break;
+    }
+    }
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted ^ (V + (u32(O.A) | 1u));
+}
+
+uint32_t evalDerivedI32VectorMinMax(uint32_t V, unsigned Lanes, const Op &O,
+                                    unsigned Which) {
+  auto Cur = makeDerivedI32VectorValue(V, Lanes, O);
+  auto Other = makeDerivedI32VectorValue(V ^ u32(O.C), Lanes, O);
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = static_cast<uint32_t>(uminBits(Cur[I], Other[I], 32));
+      break;
+    case 1:
+      Mixed[I] = static_cast<uint32_t>(umaxBits(Cur[I], Other[I], 32));
+      break;
+    case 2:
+      Mixed[I] = static_cast<uint32_t>(sminBits(Cur[I], Other[I], 32));
+      break;
+    default:
+      Mixed[I] = static_cast<uint32_t>(smaxBits(Cur[I], Other[I], 32));
+      break;
+    }
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted + (V ^ (u32(O.B) | 1u));
+}
+
+uint32_t evalDerivedI32VectorUnary(uint32_t V, unsigned Lanes, const Op &O,
+                                   unsigned Which) {
+  auto Cur = makeDerivedI32VectorValue(V, Lanes, O);
+  std::array<uint32_t, 4> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = static_cast<uint32_t>(bitreverseBits(Cur[I], 32));
+      break;
+    case 1:
+      Mixed[I] = static_cast<uint32_t>(bswapBits(Cur[I], 32));
+      break;
+    default:
+      Mixed[I] = static_cast<uint32_t>(absBits(Cur[I], 32));
+      break;
+    }
+  }
+  uint32_t Extracted = Mixed[O.B % Lanes];
+  return Extracted ^ (V + (u32(O.C) | 1u));
+}
+
+std::array<uint64_t, 8> unpackLanes(uint32_t V, unsigned LaneBits) {
+  std::array<uint64_t, 8> Lanes = {};
+  uint64_t Mask = maskBits(LaneBits);
+  for (unsigned I = 0; I < 32 / LaneBits; ++I)
+    Lanes[I] = (V >> (I * LaneBits)) & Mask;
+  return Lanes;
+}
+
+uint32_t packLanes(const std::array<uint64_t, 8> &Lanes, unsigned LaneBits) {
+  uint32_t Packed = 0;
+  uint64_t Mask = maskBits(LaneBits);
+  for (unsigned I = 0; I < 32 / LaneBits; ++I)
+    Packed |= static_cast<uint32_t>(Lanes[I] & Mask) << (I * LaneBits);
+  return Packed;
+}
+
+std::array<uint64_t, 8> packedConstantLanes(unsigned LaneBits, uint64_t Bits,
+                                            bool ShiftAmounts = false) {
+  std::array<uint64_t, 8> Lanes = {};
+  uint64_t Mask = maskBits(LaneBits);
+  for (unsigned I = 0; I < 32 / LaneBits; ++I) {
+    uint64_t Lane = (Bits >> (I * LaneBits)) & Mask;
+    Lanes[I] = ShiftAmounts ? (Lane & (LaneBits - 1)) : Lane;
+  }
+  return Lanes;
+}
+
+uint32_t evalPackedVector(uint32_t V, unsigned LaneBits, const Op &O) {
+  unsigned Lanes = 32 / LaneBits;
+  auto Cur = unpackLanes(V, LaneBits);
+  auto C0 = packedConstantLanes(LaneBits, O.A);
+  auto C1 = packedConstantLanes(LaneBits, O.B);
+  auto Shift = packedConstantLanes(LaneBits, O.B, true);
+  std::array<uint64_t, 8> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (O.C % 11) {
+    case 0:
+      Mixed[I] = Cur[I] + C0[I];
+      break;
+    case 1:
+      Mixed[I] = Cur[I] - C0[I];
+      break;
+    case 2:
+      Mixed[I] = Cur[I] * C0[I];
+      break;
+    case 3:
+      Mixed[I] = Cur[I] ^ C0[I];
+      break;
+    case 4:
+      Mixed[I] = Cur[I] & C0[I];
+      break;
+    case 5:
+      Mixed[I] = Cur[I] | C0[I];
+      break;
+    case 6:
+      Mixed[I] = Cur[I] << Shift[I];
+      break;
+    case 7:
+      Mixed[I] = Cur[I] >> Shift[I];
+      break;
+    case 8:
+      Mixed[I] = ashrBits(Cur[I], LaneBits, Shift[I]);
+      break;
+    case 9:
+      Mixed[I] = Cur[I] < C0[I] ? (Cur[I] ^ C1[I]) : (Cur[I] + C0[I]);
+      break;
+    default:
+      Mixed[I] = signedBits(Cur[I], LaneBits) < signedBits(C0[I], LaneBits)
+                     ? (Cur[I] - C1[I])
+                     : (Cur[I] | C0[I]);
+      break;
+    }
+  }
+  return packLanes(Mixed, LaneBits) + (V ^ (u32(O.C) | 1u));
+}
+
+uint32_t evalPackedVectorSat(uint32_t V, unsigned LaneBits, const Op &O,
+                             unsigned Which) {
+  unsigned Lanes = 32 / LaneBits;
+  auto Cur = unpackLanes(V, LaneBits);
+  auto C = packedConstantLanes(LaneBits, O.A);
+  std::array<uint64_t, 8> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = uaddSat(Cur[I], C[I], LaneBits);
+      break;
+    case 1:
+      Mixed[I] = usubSat(Cur[I], C[I], LaneBits);
+      break;
+    case 2:
+      Mixed[I] = saddSat(Cur[I], C[I], LaneBits);
+      break;
+    default:
+      Mixed[I] = ssubSat(Cur[I], C[I], LaneBits);
+      break;
+    }
+  }
+  return packLanes(Mixed, LaneBits) ^ (V + (u32(O.B) | 1u));
+}
+
+uint32_t evalPackedVectorBitIntrinsic(uint32_t V, unsigned LaneBits,
+                                      unsigned Which) {
+  unsigned Lanes = 32 / LaneBits;
+  auto Cur = unpackLanes(V, LaneBits);
+  std::array<uint64_t, 8> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    switch (Which) {
+    case 0:
+      Mixed[I] = ctlzBits(Cur[I], LaneBits);
+      break;
+    case 1:
+      Mixed[I] = cttzBits(Cur[I], LaneBits);
+      break;
+    case 2:
+      Mixed[I] = ctpopBits(Cur[I], LaneBits);
+      break;
+    default:
+      Mixed[I] = bitreverseBits(Cur[I], LaneBits);
+      break;
+    }
+  }
+  return V ^ packLanes(Mixed, LaneBits);
+}
+
+uint32_t evalPackedDynamicShift(uint32_t V, unsigned LaneBits, const Op &O) {
+  unsigned Lanes = 32 / LaneBits;
+  auto Cur = unpackLanes(V, LaneBits);
+  auto Shift = unpackLanes(V ^ u32(O.A), LaneBits);
+  std::array<uint64_t, 8> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    Shift[I] &= LaneBits - 1;
+    if (Shift[I] == 0)
+      Shift[I] = 1;
+    switch (O.C % 3) {
+    case 0:
+      Mixed[I] = Cur[I] << Shift[I];
+      break;
+    case 1:
+      Mixed[I] = Cur[I] >> Shift[I];
+      break;
+    default:
+      Mixed[I] = ashrBits(Cur[I], LaneBits, Shift[I]);
+      break;
+    }
+  }
+  return packLanes(Mixed, LaneBits) + u32(O.B);
+}
+
+uint32_t evalPackedFshr(uint32_t V, unsigned LaneBits, const Op &O,
+                        bool DynamicShift) {
+  unsigned Lanes = 32 / LaneBits;
+  auto Cur = unpackLanes(V, LaneBits);
+  auto Other = packedConstantLanes(LaneBits, O.A);
+  auto Shift = DynamicShift ? unpackLanes(V ^ u32(O.B), LaneBits)
+                            : packedConstantLanes(LaneBits, O.C, true);
+  std::array<uint64_t, 8> Mixed = {};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    if (DynamicShift)
+      Shift[I] &= LaneBits - 1;
+    Mixed[I] = fshrBits(Other[I], Cur[I], Shift[I], LaneBits);
+  }
+  return packLanes(Mixed, LaneBits) + (V ^ (u32(O.C) | 1u));
+}
+
+uint32_t evalSmallSat(uint32_t V, const Op &O, unsigned Bits, unsigned Which,
+                      bool SignedExtend) {
+  uint64_t N = truncBits(V, Bits);
+  uint64_t C = truncBits(O.A, Bits);
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = uaddSat(N, C, Bits);
+    break;
+  case 1:
+    Mixed = usubSat(N, C, Bits);
+    break;
+  case 2:
+    Mixed = saddSat(N, C, Bits);
+    break;
+  default:
+    Mixed = ssubSat(N, C, Bits);
+    break;
+  }
+  uint32_t Extended = SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return (V ^ (u32(O.B) | 1u)) + Extended;
+}
+
+uint32_t evalPrivateMemory(uint32_t V, uint32_t Idx, const Op &O) {
+  std::array<uint32_t, 4> Values = {
+      V,
+      V + u32(O.A),
+      V ^ u32(O.B),
+      Idx * (u32(O.C) | 1u) + V,
+  };
+  return Values[O.C & 3u];
+}
+
+uint32_t evalRotate(uint32_t V, const Op &O, bool Left) {
+  uint32_t Shift = (V ^ u32(O.B)) & 31u;
+  if (Left)
+    Shift = adjustFshlShift(Shift);
+  return static_cast<uint32_t>(
+      Left ? fshlBits(V, u32(O.A), Shift, 32)
+           : fshrBits(V, u32(O.A), Shift, 32));
+}
+
+uint32_t evalNarrowBitIntrinsic(uint32_t V, unsigned Bits, unsigned Which,
+                                bool SignedExtend = false) {
+  uint64_t N = truncBits(V, Bits);
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = ctlzBits(N, Bits);
+    break;
+  case 1:
+    Mixed = cttzBits(N, Bits);
+    break;
+  case 2:
+    Mixed = ctpopBits(N, Bits);
+    break;
+  case 3:
+    Mixed = bitreverseBits(N, Bits);
+    break;
+  default:
+    Mixed = bswapBits(N, Bits);
+    break;
+  }
+  uint32_t Extended = SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return V ^ Extended;
+}
+
+uint32_t evalNarrowAbs(uint32_t V, unsigned Bits, bool SignedExtend) {
+  uint64_t Mixed = absBits(V, Bits);
+  uint32_t Extended = SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return V + Extended;
+}
+
+uint32_t evalNarrowMinMax(uint32_t V, const Op &O, unsigned Bits,
+                          unsigned Which, bool SignedExtend) {
+  uint64_t N = truncBits(V, Bits);
+  uint64_t C = truncBits(O.A, Bits);
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = uminBits(N, C, Bits);
+    break;
+  case 1:
+    Mixed = umaxBits(N, C, Bits);
+    break;
+  case 2:
+    Mixed = sminBits(N, C, Bits);
+    break;
+  default:
+    Mixed = smaxBits(N, C, Bits);
+    break;
+  }
+  uint32_t Extended = SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return (V + u32(O.B)) ^ Extended;
+}
+
+uint32_t evalWideCompareSelect(uint32_t V, const Op &O, bool SignedCompare) {
+  uint64_t W = V;
+  bool Cmp = SignedCompare ? (signedBits(W, 64) < signedBits(O.A, 64))
+                           : (W < O.A);
+  uint64_t Mixed = Cmp ? (W ^ O.B) : (W + O.C);
+  return static_cast<uint32_t>(Mixed) ^ static_cast<uint32_t>(Mixed >> 32);
+}
+
+uint32_t evalWideMinMax(uint32_t V, const Op &O, unsigned Which) {
+  uint64_t W = V;
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = uminBits(W, O.A, 64);
+    break;
+  case 1:
+    Mixed = umaxBits(W, O.A, 64);
+    break;
+  case 2:
+    Mixed = sminBits(W, O.A, 64);
+    break;
+  default:
+    Mixed = smaxBits(W, O.A, 64);
+    break;
+  }
+  return (static_cast<uint32_t>(Mixed) ^ static_cast<uint32_t>(Mixed >> 32)) +
+         u32(O.B);
+}
+
+uint32_t evalWideFshr(uint32_t V, const Op &O, bool DynamicShift) {
+  uint64_t W = V;
+  uint64_t Shift = DynamicShift ? ((W ^ O.B) & 63u) : (O.B & 63u);
+  uint64_t Mixed = fshrBits(O.A, W, Shift, 64);
+  return static_cast<uint32_t>(Mixed) ^ static_cast<uint32_t>(Mixed >> 32);
+}
+
+uint32_t nonzeroShift32(uint32_t Seed, unsigned Mask) {
+  uint32_t Shift = Seed & Mask;
+  return Shift == 0 ? 1 : Shift;
+}
+
+uint64_t nonzeroShift64(uint64_t Seed, unsigned Mask) {
+  uint64_t Shift = Seed & Mask;
+  return Shift == 0 ? 1 : Shift;
+}
+
+uint32_t evalDynamicShift32(uint32_t V, const Op &O, unsigned Which) {
+  uint32_t Shift = nonzeroShift32(V ^ u32(O.A), 31);
+  uint32_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = V << Shift;
+    break;
+  case 1:
+    Mixed = V >> Shift;
+    break;
+  default:
+    Mixed = static_cast<uint32_t>(ashrBits(V, 32, Shift));
+    break;
+  }
+  return Mixed + u32(O.B);
+}
+
+uint32_t evalDynamicShift64(uint32_t V, const Op &O, unsigned Which) {
+  uint64_t W = V;
+  uint64_t Shift = nonzeroShift64(W ^ O.A, 63);
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = W << Shift;
+    break;
+  case 1:
+    Mixed = W >> Shift;
+    break;
+  default:
+    Mixed = ashrBits(W, 64, Shift);
+    break;
+  }
+  return static_cast<uint32_t>(Mixed) ^ static_cast<uint32_t>(Mixed >> 32);
+}
+
+uint32_t evalNarrowDynamicShift(uint32_t V, const Op &O, unsigned Bits,
+                                unsigned Which, bool SignedExtend) {
+  uint64_t N = truncBits(V, Bits);
+  uint64_t Shift = nonzeroShift32(V ^ u32(O.A), Bits - 1);
+  uint64_t Mixed;
+  switch (Which) {
+  case 0:
+    Mixed = N << Shift;
+    break;
+  case 1:
+    Mixed = N >> Shift;
+    break;
+  default:
+    Mixed = ashrBits(N, Bits, Shift);
+    break;
+  }
+  uint32_t Extended = SignedExtend ? sextBits(Mixed, Bits) : zextBits(Mixed, Bits);
+  return (V + u32(O.B)) ^ Extended;
+}
+
+std::optional<uint32_t> evalOp(uint32_t V, uint32_t Idx, const Op &O) {
+  switch (O.Kind) {
+  case 0:
+    return V + u32(O.A);
+  case 1:
+    return V - u32(O.A);
+  case 2:
+    return V * u32(O.A & 0xffffu);
+  case 3:
+    return V ^ u32(O.A);
+  case 4:
+    return V & u32(O.A);
+  case 5:
+    return V | u32(O.A);
+  case 6:
+    return V << (O.A & 31u);
+  case 7:
+    return V >> (O.A & 31u);
+  case 8:
+    return static_cast<uint32_t>(ashrBits(V, 32, O.A & 31u));
+  case 9:
+    return static_cast<uint32_t>(ctlzBits(V, 32));
+  case 10:
+    return static_cast<uint32_t>(cttzBits(V, 32));
+  case 11:
+    return static_cast<uint32_t>(ctpopBits(V, 32));
+  case 12:
+    return static_cast<uint32_t>(bswapBits(V, 32));
+  case 13:
+    return static_cast<uint32_t>(bitreverseBits(V, 32));
+  case 14:
+    return static_cast<uint32_t>(uminBits(V, u32(O.A), 32));
+  case 15:
+    return static_cast<uint32_t>(umaxBits(V, u32(O.A), 32));
+  case 16:
+    return static_cast<uint32_t>(sminBits(V, u32(O.A), 32));
+  case 17:
+    return static_cast<uint32_t>(smaxBits(V, u32(O.A), 32));
+  case 18:
+    return evalNarrow(V, 8, O);
+  case 19:
+    return evalNarrow(V, 16, O);
+  case 20:
+    return evalWide(V, O);
+  case 21:
+    return evalVector(V, 2, O);
+  case 22:
+    return evalVector(V, 4, O);
+  case 23:
+    return V < u32(O.A) ? (V ^ u32(O.B)) : (V + u32(O.C));
+  case 24:
+    return slt32(V, u32(O.A)) ? (V + u32(O.B)) : (V ^ u32(O.C));
+  case 25:
+    return V < u32(O.A) ? (V + u32(O.B)) : (V ^ u32(O.C));
+  case 27:
+    return evalNarrow(V, 8, O, true);
+  case 28:
+    return evalNarrow(V, 16, O, true);
+  case 29:
+    return static_cast<uint32_t>(
+        fshlBits(V, u32(O.A), adjustFshlShift(O.B & 31u), 32));
+  case 30:
+    return static_cast<uint32_t>(fshrBits(u32(O.A), V, O.B & 31u, 32));
+  case 31:
+    return static_cast<uint32_t>(uaddSat(V, u32(O.A), 32));
+  case 32:
+    return static_cast<uint32_t>(usubSat(V, u32(O.A), 32));
+  case 33:
+    return static_cast<uint32_t>(saddSat(V, u32(O.A), 32));
+  case 34:
+    return static_cast<uint32_t>(ssubSat(V, u32(O.A), 32));
+  case 35:
+    return evalOverflow(V, O, 0);
+  case 36:
+    return evalOverflow(V, O, 1);
+  case 37:
+    return evalOverflow(V, O, 2);
+  case 38:
+    return evalOverflow(V, O, 3);
+  case 39:
+    return evalOverflow(V, O, 4);
+  case 40:
+    return evalOverflow(V, O, 5);
+  case 41:
+    return static_cast<uint32_t>(absBits(V, 32));
+  case 42:
+    return static_cast<uint32_t>(
+        fshlBits(V, u32(O.A), adjustFshlShift(V & 31u), 32));
+  case 43:
+    return evalPackedVector(V, 8, O);
+  case 44:
+    return evalPackedVector(V, 16, O);
+  case 45:
+    return evalSmallSat(V, O, 8, 0, false);
+  case 46:
+    return evalSmallSat(V, O, 8, 1, false);
+  case 47:
+    return evalSmallSat(V, O, 8, 2, true);
+  case 48:
+    return evalSmallSat(V, O, 8, 3, true);
+  case 49:
+    return evalSmallSat(V, O, 16, 0, false);
+  case 50:
+    return evalSmallSat(V, O, 16, 1, false);
+  case 51:
+    return evalSmallSat(V, O, 16, 2, true);
+  case 52:
+    return evalSmallSat(V, O, 16, 3, true);
+  case 53:
+    return evalPrivateMemory(V, Idx, O);
+  case 54:
+    return evalRotate(V, O, true);
+  case 55:
+    return evalRotate(V, O, false);
+  case 56: {
+    bool Cmp = ((V & (u32(O.A) | 1u)) == (u32(O.B) & (u32(O.A) | 1u)));
+    return Cmp ? evalPackedVector(V, 8, O) : evalSmallSat(V, O, 16, 0, false);
+  }
+  case 57:
+    return slt32(V ^ u32(O.A), u32(O.B)) ? evalPackedVector(V, 16, O)
+                                         : evalSmallSat(V, O, 8, 3, true);
+  case 58:
+    return evalRotate(evalPrivateMemory(V, Idx, O), O, true);
+  case 59:
+    return evalNarrowBitIntrinsic(V, 8, 0);
+  case 60:
+    return evalNarrowBitIntrinsic(V, 8, 1);
+  case 61:
+    return evalNarrowBitIntrinsic(V, 8, 2);
+  case 62:
+    return evalNarrowBitIntrinsic(V, 8, 3);
+  case 63:
+    return evalNarrowAbs(V, 8, false);
+  case 64:
+    return evalNarrowBitIntrinsic(V, 16, 0);
+  case 65:
+    return evalNarrowBitIntrinsic(V, 16, 1);
+  case 66:
+    return evalNarrowBitIntrinsic(V, 16, 2);
+  case 67:
+    return evalNarrowBitIntrinsic(V, 16, 3);
+  case 68:
+    return evalNarrowBitIntrinsic(V, 16, 4);
+  case 69:
+    return evalNarrowAbs(V, 16, true);
+  case 70:
+    return evalWideOverflow(V, O, 0);
+  case 71:
+    return evalWideOverflow(V, O, 1);
+  case 72:
+    return evalWideOverflow(V, O, 2);
+  case 73:
+    return evalWideOverflow(V, O, 3);
+  case 74:
+    return evalWideOverflow(V, O, 4);
+  case 75:
+    return evalNarrowMinMax(V, O, 8, 0, false);
+  case 76:
+    return evalNarrowMinMax(V, O, 8, 1, false);
+  case 77:
+    return evalNarrowMinMax(V, O, 8, 2, true);
+  case 78:
+    return evalNarrowMinMax(V, O, 8, 3, true);
+  case 79:
+    return evalNarrowMinMax(V, O, 16, 0, false);
+  case 80:
+    return evalNarrowMinMax(V, O, 16, 1, false);
+  case 81:
+    return evalNarrowMinMax(V, O, 16, 2, true);
+  case 82:
+    return evalNarrowMinMax(V, O, 16, 3, true);
+  case 83:
+    return evalWideCompareSelect(V, O, false);
+  case 84:
+    return evalWideCompareSelect(V, O, true);
+  case 85:
+    return evalWideMinMax(V, O, 0);
+  case 86:
+    return evalWideMinMax(V, O, 1);
+  case 87:
+    return evalWideMinMax(V, O, 2);
+  case 88:
+    return evalWideMinMax(V, O, 3);
+  case 89:
+    return evalWideFshr(V, O, false);
+  case 90:
+    return evalWideFshr(V, O, true);
+  case 91:
+    return evalDynamicShift32(V, O, 0);
+  case 92:
+    return evalDynamicShift32(V, O, 1);
+  case 93:
+    return evalDynamicShift32(V, O, 2);
+  case 94:
+    return evalDynamicShift64(V, O, 0);
+  case 95:
+    return evalDynamicShift64(V, O, 1);
+  case 96:
+    return evalDynamicShift64(V, O, 2);
+  case 97:
+    return evalNarrowDynamicShift(V, O, 8, 0, false);
+  case 98:
+    return evalNarrowDynamicShift(V, O, 8, 1, false);
+  case 99:
+    return evalNarrowDynamicShift(V, O, 8, 2, true);
+  case 100:
+    return evalNarrowDynamicShift(V, O, 16, 0, false);
+  case 101:
+    return evalNarrowDynamicShift(V, O, 16, 1, false);
+  case 102:
+    return evalNarrowDynamicShift(V, O, 16, 2, true);
+  case 103:
+    return evalPackedVectorSat(V, 8, O, 0);
+  case 104:
+    return evalPackedVectorSat(V, 8, O, 1);
+  case 105:
+    return evalPackedVectorSat(V, 8, O, 2);
+  case 106:
+    return evalPackedVectorSat(V, 8, O, 3);
+  case 107:
+    return evalPackedVectorSat(V, 16, O, 0);
+  case 108:
+    return evalPackedVectorSat(V, 16, O, 1);
+  case 109:
+    return evalPackedVectorSat(V, 16, O, 2);
+  case 110:
+    return evalPackedVectorSat(V, 16, O, 3);
+  case 111:
+    return evalPackedVectorBitIntrinsic(V, 8, 0);
+  case 112:
+    return evalPackedVectorBitIntrinsic(V, 8, 1);
+  case 113:
+    return evalPackedVectorBitIntrinsic(V, 8, 2);
+  case 114:
+    return evalPackedVectorBitIntrinsic(V, 8, 3);
+  case 115:
+    return evalPackedVectorBitIntrinsic(V, 16, 2);
+  case 116:
+    return evalPackedVectorBitIntrinsic(V, 16, 3);
+  case 117:
+    return evalPackedDynamicShift(V, 8, O);
+  case 118:
+    return evalPackedDynamicShift(V, 16, O);
+  case 119:
+    return evalI32VectorMinMax(V, 2, O, 0);
+  case 120:
+    return evalI32VectorMinMax(V, 2, O, 1);
+  case 121:
+    return evalI32VectorMinMax(V, 2, O, 2);
+  case 122:
+    return evalI32VectorMinMax(V, 2, O, 3);
+  case 123:
+    return evalI32VectorMinMax(V, 4, O, 0);
+  case 124:
+    return evalI32VectorMinMax(V, 4, O, 1);
+  case 125:
+    return evalI32VectorMinMax(V, 4, O, 2);
+  case 126:
+    return evalI32VectorMinMax(V, 4, O, 3);
+  case 127:
+    return evalI32VectorBitIntrinsic(V, 2, O, 0);
+  case 128:
+    return evalI32VectorBitIntrinsic(V, 4, O, 0);
+  case 129:
+    return evalI32VectorBitIntrinsic(V, 2, O, 1);
+  case 130:
+    return evalI32VectorBitIntrinsic(V, 4, O, 1);
+  case 131:
+    return evalI32VectorBitIntrinsic(V, 2, O, 2);
+  case 132:
+    return evalI32VectorBitIntrinsic(V, 4, O, 2);
+  case 133:
+    return evalI32VectorDynamicShift(V, 2, O);
+  case 134:
+    return evalI32VectorDynamicShift(V, 4, O);
+  case 135:
+    return evalPackedFshr(V, 8, O, false);
+  case 136:
+    return evalPackedFshr(V, 16, O, false);
+  case 137:
+    return evalPackedFshr(V, 8, O, true);
+  case 138:
+    return evalPackedFshr(V, 16, O, true);
+  case 139:
+    return evalI32VectorFshr(V, 2, O, false);
+  case 140:
+    return evalI32VectorFshr(V, 4, O, false);
+  case 141:
+    return evalI32VectorFshr(V, 2, O, true);
+  case 142:
+    return evalI32VectorFshr(V, 4, O, true);
+  case 143:
+    return evalDerivedI32VectorMix(V, 2, O);
+  case 144:
+    return evalDerivedI32VectorMix(V, 4, O);
+  case 145:
+    return evalDerivedI32VectorMinMax(V, 2, O, 0);
+  case 146:
+    return evalDerivedI32VectorMinMax(V, 2, O, 1);
+  case 147:
+    return evalDerivedI32VectorMinMax(V, 2, O, 2);
+  case 148:
+    return evalDerivedI32VectorMinMax(V, 2, O, 3);
+  case 149:
+    return evalDerivedI32VectorMinMax(V, 4, O, 0);
+  case 150:
+    return evalDerivedI32VectorMinMax(V, 4, O, 1);
+  case 151:
+    return evalDerivedI32VectorMinMax(V, 4, O, 2);
+  case 152:
+    return evalDerivedI32VectorMinMax(V, 4, O, 3);
+  case 153:
+    return evalDerivedI32VectorUnary(V, 2, O, 0);
+  case 154:
+    return evalDerivedI32VectorUnary(V, 4, O, 0);
+  case 155:
+    return evalDerivedI32VectorUnary(V, 2, O, 1);
+  case 156:
+    return evalDerivedI32VectorUnary(V, 4, O, 1);
+  case 157:
+    return evalDerivedI32VectorUnary(V, 2, O, 2);
+  case 158:
+    return evalDerivedI32VectorUnary(V, 4, O, 2);
+  case 159:
+  case 160:
+  case 161:
+  case 162:
+  case 163:
+  case 164:
+  case 165:
+  case 166:
+  case 167:
+  case 168:
+  case 169:
+  case 170:
+  case 171:
+  case 172:
+    return std::nullopt;
+  default:
+    return slt32(V, u32(O.A)) ? (V ^ u32(O.B)) : (V - u32(O.C));
+  }
+}
+
+std::optional<uint32_t> evalOps(uint32_t V, uint32_t Idx, ArrayRef<Op> Ops) {
+  for (const Op &O : Ops) {
+    auto Next = evalOp(V, Idx, O);
+    if (!Next)
+      return std::nullopt;
+    V = *Next;
+  }
+  return V;
+}
+
+std::optional<uint32_t> evalProgramForInput(const Program &P, uint32_t Input,
+                                            uint32_t Idx) {
+  if (!P.UseStructuredCFG || P.Ops.size() < 4)
+    return evalOps(Input, Idx, P.Ops);
+
+  size_t Prefix = 0;
+  size_t ThenLen = 0;
+  size_t ElseLen = 0;
+  size_t SuffixStart = 0;
+  chooseStructuredSlices(P, Prefix, ThenLen, ElseLen, SuffixStart);
+
+  auto PrefixValue = evalOps(Input, Idx, ArrayRef<Op>(P.Ops).take_front(Prefix));
+  if (!PrefixValue)
+    return std::nullopt;
+  uint32_t PredBase = *PrefixValue ^ Idx;
+  uint32_t PredicateConst = u32(P.CFGPredicate);
+  bool Cond = false;
+  switch ((P.CFGPredicate >> 32) & 3u) {
+  case 0:
+    Cond = PredBase < PredicateConst;
+    break;
+  case 1:
+    Cond = slt32(PredBase, PredicateConst);
+    break;
+  case 2: {
+    uint32_t Mask = u32(P.CFGPredicate >> 8) | 1u;
+    Cond = ((PredBase & Mask) == (PredicateConst & Mask));
+    break;
+  }
+  default: {
+    uint32_t Mask = u32(P.CFGPredicate >> 16) | 1u;
+    Cond = ((PredBase & Mask) != (PredicateConst & Mask));
+    break;
+  }
+  }
+
+  ArrayRef<Op> Ops(P.Ops);
+  auto BranchValue =
+      Cond ? evalOps(*PrefixValue, Idx, Ops.slice(Prefix, ThenLen))
+           : evalOps(*PrefixValue, Idx, Ops.slice(Prefix + ThenLen, ElseLen));
+  if (!BranchValue)
+    return std::nullopt;
+  return evalOps(*BranchValue, Idx, Ops.drop_front(SuffixStart));
+}
+
+std::optional<std::array<uint32_t, InputCount>>
+evalProgramForInputs(const Program &P, ArrayRef<uint32_t> Inputs) {
+  std::array<uint32_t, InputCount> Expected{};
+  for (unsigned I = 0; I < InputCount; ++I) {
+    auto Value = evalProgramForInput(P, Inputs[I], I);
+    if (!Value)
+      return std::nullopt;
+    Expected[I] = *Value;
+  }
+  return Expected;
+}
+
 ConstantInt *ci32(LLVMContext &Ctx, uint32_t V) {
   return ConstantInt::get(Type::getInt32Ty(Ctx), V);
 }
@@ -2402,8 +3791,9 @@ bool runBothOnGpu(const std::string &HsacoPath, ArrayRef<uint32_t> Inputs,
 }
 
 void saveFinding(const uint8_t *Data, size_t Size, StringRef IR,
-                 const std::string &HsacoPath, unsigned Index, uint32_t Input,
-                 uint32_t O0Value, uint32_t O2Value) {
+                 const std::string &HsacoPath, StringRef Kind, unsigned Index,
+                 uint32_t Input, uint32_t O0Value, uint32_t O2Value,
+                 std::optional<uint32_t> Expected = std::nullopt) {
   const char *RootEnv = std::getenv("FUZZX_FINDINGS_DIR");
   std::filesystem::path Root = RootEnv && *RootEnv ? RootEnv : "findings";
   std::filesystem::create_directories(Root);
@@ -2419,10 +3809,13 @@ void saveFinding(const uint8_t *Data, size_t Size, StringRef IR,
   std::filesystem::copy_file(HsacoPath, Dir / "program.hsaco",
                              std::filesystem::copy_options::overwrite_existing);
   std::ofstream Mismatch(Dir / "mismatch.txt");
-  Mismatch << "index=" << Index << "\n"
+  Mismatch << "kind=" << Kind.str() << "\n"
+           << "index=" << Index << "\n"
            << "input=0x" << utohexstr(Input) << "\n"
            << "o0=0x" << utohexstr(O0Value) << "\n"
            << "o2=0x" << utohexstr(O2Value) << "\n";
+  if (Expected)
+    Mismatch << "expected=0x" << utohexstr(*Expected) << "\n";
   errs() << "candidate saved: " << Dir.string() << "\n";
 }
 
@@ -2469,10 +3862,24 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
     return 0;
   }
 
+  std::optional<std::array<uint32_t, InputCount>> Expected;
+  if (oracleEnabled())
+    Expected = evalProgramForInputs(P, ArrayRef<uint32_t>(Inputs));
+
   for (unsigned I = 0; I < InputCount; ++I) {
+    if (Expected &&
+        (O0Outputs[I] != (*Expected)[I] || O2Outputs[I] != (*Expected)[I])) {
+      StringRef Kind = O0Outputs[I] == O2Outputs[I] ? "oracle-shared"
+                       : O0Outputs[I] == (*Expected)[I] ? "oracle-o2"
+                       : O2Outputs[I] == (*Expected)[I] ? "oracle-o0"
+                                                        : "oracle-both";
+      saveFinding(Data, Size, IR, *HsacoPath, Kind, I, Inputs[I],
+                  O0Outputs[I], O2Outputs[I], (*Expected)[I]);
+      std::abort();
+    }
     if (O0Outputs[I] != O2Outputs[I]) {
-      saveFinding(Data, Size, IR, *HsacoPath, I, Inputs[I], O0Outputs[I],
-                  O2Outputs[I]);
+      saveFinding(Data, Size, IR, *HsacoPath, "differential", I, Inputs[I],
+                  O0Outputs[I], O2Outputs[I]);
       std::abort();
     }
   }
