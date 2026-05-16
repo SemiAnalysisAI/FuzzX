@@ -9,7 +9,10 @@ compiles the IR to AMDGPU code objects through `-O0` and `-O2` LLVM pipelines,
 runs both through HIP, and compares device output.  The generator emits only
 operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
 `nsw` / `exact`, no `inbounds`, no division, and all shift amounts are constants
-below the shifted value's bit width.
+below the shifted value's bit width.  Coverage includes scalar integer ops,
+small-width integer ops, packed `i8` / `i16` vectors, selects, structured CFG,
+private-memory load/store sequences, and LLVM overflow, saturation, bit, and
+funnel-shift intrinsics.
 
 ## Requirements
 

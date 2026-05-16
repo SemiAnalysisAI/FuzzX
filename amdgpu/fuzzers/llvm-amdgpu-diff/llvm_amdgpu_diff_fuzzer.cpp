@@ -317,6 +317,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0xe0u)
+      Kind = 43 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xf0u)
       Kind = 27 + (RawKind & 15u);
     Op O{Kind, BS.next64(), BS.next64(), BS.next64()};
@@ -539,7 +541,119 @@ Value *emitVector(IRBuilder<> &B, Value *V, unsigned Lanes, const Op &O) {
   return B.CreateXor(V, Extracted);
 }
 
-Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
+Constant *packedVectorConstant(LLVMContext &Ctx, unsigned LaneBits,
+                               unsigned Lanes, uint64_t Bits,
+                               bool ShiftAmounts = false) {
+  Type *LaneTy = Type::getIntNTy(Ctx, LaneBits);
+  uint64_t Mask = (1ull << LaneBits) - 1ull;
+  SmallVector<Constant *, 8> Constants;
+  for (unsigned I = 0; I < Lanes; ++I) {
+    uint64_t Lane = (Bits >> (I * LaneBits)) & Mask;
+    if (ShiftAmounts)
+      Lane &= LaneBits - 1;
+    Constants.push_back(ConstantInt::get(LaneTy, Lane));
+  }
+  return ConstantVector::get(Constants);
+}
+
+Value *emitPackedVector(IRBuilder<> &B, Value *V, unsigned LaneBits,
+                        const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  unsigned Lanes = 32 / LaneBits;
+  auto *VecTy = FixedVectorType::get(Type::getIntNTy(Ctx, LaneBits), Lanes);
+  Value *Cur = B.CreateBitCast(V, VecTy);
+  Value *C0 = packedVectorConstant(Ctx, LaneBits, Lanes, O.A);
+  Value *C1 = packedVectorConstant(Ctx, LaneBits, Lanes, O.B);
+  Value *Shift = packedVectorConstant(Ctx, LaneBits, Lanes, O.B, true);
+  Value *Mixed;
+  switch (O.C % 11) {
+  case 0:
+    Mixed = B.CreateAdd(Cur, C0);
+    break;
+  case 1:
+    Mixed = B.CreateSub(Cur, C0);
+    break;
+  case 2:
+    Mixed = B.CreateMul(Cur, C0);
+    break;
+  case 3:
+    Mixed = B.CreateXor(Cur, C0);
+    break;
+  case 4:
+    Mixed = B.CreateAnd(Cur, C0);
+    break;
+  case 5:
+    Mixed = B.CreateOr(Cur, C0);
+    break;
+  case 6:
+    Mixed = B.CreateShl(Cur, Shift);
+    break;
+  case 7:
+    Mixed = B.CreateLShr(Cur, Shift);
+    break;
+  case 8:
+    Mixed = B.CreateAShr(Cur, Shift);
+    break;
+  case 9: {
+    Value *Cmp = B.CreateICmpULT(Cur, C0);
+    Mixed = B.CreateSelect(Cmp, B.CreateXor(Cur, C1), B.CreateAdd(Cur, C0));
+    break;
+  }
+  default: {
+    Value *Cmp = B.CreateICmpSLT(Cur, C0);
+    Mixed = B.CreateSelect(Cmp, B.CreateSub(Cur, C1), B.CreateOr(Cur, C0));
+    break;
+  }
+  }
+  Value *Packed = B.CreateBitCast(Mixed, I32);
+  return B.CreateAdd(Packed, B.CreateXor(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *emitSmallSat(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                    unsigned Bits, Intrinsic::ID ID, bool SignedExtend) {
+  LLVMContext &Ctx = B.getContext();
+  Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  uint64_t Mask = (1ull << Bits) - 1ull;
+  Value *N = B.CreateTrunc(V, NarrowTy);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {NarrowTy}),
+                   {N, ConstantInt::get(NarrowTy, O.A & Mask)});
+  Value *Extended = SignedExtend ? B.CreateSExt(Mixed, I32)
+                                 : B.CreateZExt(Mixed, I32);
+  return B.CreateAdd(B.CreateXor(V, ci32(Ctx, u32(O.B) | 1u)), Extended);
+}
+
+Value *emitPrivateMemory(IRBuilder<> &B, Value *V, Value *Idx, const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *ArrTy = ArrayType::get(I32, 4);
+  AllocaInst *Slot = B.CreateAlloca(ArrTy);
+  std::array<Value *, 4> Values = {
+      V,
+      B.CreateAdd(V, ci32(Ctx, u32(O.A))),
+      B.CreateXor(V, ci32(Ctx, u32(O.B))),
+      B.CreateAdd(B.CreateMul(Idx, ci32(Ctx, u32(O.C) | 1u)), V),
+  };
+  for (unsigned I = 0; I < Values.size(); ++I) {
+    Value *Ptr = B.CreateGEP(ArrTy, Slot, {ci32(Ctx, 0), ci32(Ctx, I)});
+    B.CreateStore(Values[I], Ptr);
+  }
+  Value *LoadPtr = B.CreateGEP(ArrTy, Slot, {ci32(Ctx, 0), ci32(Ctx, O.C & 3u)});
+  return B.CreateLoad(I32, LoadPtr);
+}
+
+Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                  Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Shift = B.CreateAnd(B.CreateXor(V, ci32(Ctx, u32(O.B))), ci32(Ctx, 31));
+  return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}),
+                      {V, ci32(Ctx, u32(O.A)), Shift});
+}
+
+Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   switch (O.Kind) {
@@ -660,6 +774,50 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
     return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
                         {V, ci32(Ctx, u32(O.A)), Shift});
   }
+  case 43:
+    return emitPackedVector(B, V, 8, O);
+  case 44:
+    return emitPackedVector(B, V, 16, O);
+  case 45:
+    return emitSmallSat(B, M, V, O, 8, Intrinsic::uadd_sat, false);
+  case 46:
+    return emitSmallSat(B, M, V, O, 8, Intrinsic::usub_sat, false);
+  case 47:
+    return emitSmallSat(B, M, V, O, 8, Intrinsic::sadd_sat, true);
+  case 48:
+    return emitSmallSat(B, M, V, O, 8, Intrinsic::ssub_sat, true);
+  case 49:
+    return emitSmallSat(B, M, V, O, 16, Intrinsic::uadd_sat, false);
+  case 50:
+    return emitSmallSat(B, M, V, O, 16, Intrinsic::usub_sat, false);
+  case 51:
+    return emitSmallSat(B, M, V, O, 16, Intrinsic::sadd_sat, true);
+  case 52:
+    return emitSmallSat(B, M, V, O, 16, Intrinsic::ssub_sat, true);
+  case 53:
+    return emitPrivateMemory(B, V, Idx, O);
+  case 54:
+    return emitRotate(B, M, V, O, Intrinsic::fshl);
+  case 55:
+    return emitRotate(B, M, V, O, Intrinsic::fshr);
+  case 56: {
+    Value *Cmp = B.CreateICmpEQ(B.CreateAnd(V, ci32(Ctx, u32(O.A) | 1u)),
+                                ci32(Ctx, u32(O.B) & (u32(O.A) | 1u)));
+    Value *T = emitPackedVector(B, V, 8, O);
+    Value *F = emitSmallSat(B, M, V, O, 16, Intrinsic::uadd_sat, false);
+    return B.CreateSelect(Cmp, T, F);
+  }
+  case 57: {
+    Value *Cmp = B.CreateICmpSLT(B.CreateXor(V, ci32(Ctx, u32(O.A))),
+                                 ci32(Ctx, u32(O.B)));
+    Value *T = emitPackedVector(B, V, 16, O);
+    Value *F = emitSmallSat(B, M, V, O, 8, Intrinsic::ssub_sat, true);
+    return B.CreateSelect(Cmp, T, F);
+  }
+  case 58: {
+    Value *Loaded = emitPrivateMemory(B, V, Idx, O);
+    return emitRotate(B, M, Loaded, O, Intrinsic::fshl);
+  }
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
@@ -669,16 +827,17 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
   }
 }
 
-Value *emitOps(IRBuilder<> &B, Module &M, Value *V, ArrayRef<Op> Ops) {
+Value *emitOps(IRBuilder<> &B, Module &M, Value *V, Value *Idx,
+               ArrayRef<Op> Ops) {
   for (const Op &O : Ops)
-    V = emitOp(B, M, V, O);
+    V = emitOp(B, M, V, Idx, O);
   return V;
 }
 
 Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
                          const Program &P, Value *V, Value *Idx) {
   if (!P.UseStructuredCFG || P.Ops.size() < 4)
-    return emitOps(B, M, V, P.Ops);
+    return emitOps(B, M, V, Idx, P.Ops);
 
   LLVMContext &Ctx = B.getContext();
   size_t Prefix = 0;
@@ -687,7 +846,7 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
   size_t SuffixStart = 0;
   chooseStructuredSlices(P, Prefix, ThenLen, ElseLen, SuffixStart);
 
-  V = emitOps(B, M, V, ArrayRef<Op>(P.Ops).take_front(Prefix));
+  V = emitOps(B, M, V, Idx, ArrayRef<Op>(P.Ops).take_front(Prefix));
   Value *PredBase = B.CreateXor(V, Idx);
   uint32_t PredicateConst = u32(P.CFGPredicate);
   Value *Cond = nullptr;
@@ -719,12 +878,12 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
 
   ArrayRef<Op> Ops(P.Ops);
   B.SetInsertPoint(ThenBB);
-  Value *ThenV = emitOps(B, M, V, Ops.slice(Prefix, ThenLen));
+  Value *ThenV = emitOps(B, M, V, Idx, Ops.slice(Prefix, ThenLen));
   B.CreateBr(MergeBB);
   ThenBB = B.GetInsertBlock();
 
   B.SetInsertPoint(ElseBB);
-  Value *ElseV = emitOps(B, M, V, Ops.slice(Prefix + ThenLen, ElseLen));
+  Value *ElseV = emitOps(B, M, V, Idx, Ops.slice(Prefix + ThenLen, ElseLen));
   B.CreateBr(MergeBB);
   ElseBB = B.GetInsertBlock();
 
@@ -732,7 +891,7 @@ Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
   PHINode *Phi = B.CreatePHI(Type::getInt32Ty(Ctx), 2);
   Phi->addIncoming(ThenV, ThenBB);
   Phi->addIncoming(ElseV, ElseBB);
-  return emitOps(B, M, Phi, Ops.drop_front(SuffixStart));
+  return emitOps(B, M, Phi, Idx, Ops.drop_front(SuffixStart));
 }
 
 std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
