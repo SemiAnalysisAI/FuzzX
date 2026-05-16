@@ -402,6 +402,24 @@ ConstantInt *ci64(LLVMContext &Ctx, uint64_t V) {
   return ConstantInt::get(Type::getInt64Ty(Ctx), V);
 }
 
+bool allowM015ScalarFshlZero() {
+  static const bool Allow =
+      envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false);
+  return Allow;
+}
+
+Value *suppressM015FshlZeroShift(IRBuilder<> &B, Value *Shift) {
+  if (allowM015ScalarFshlZero())
+    return Shift;
+
+  LLVMContext &Ctx = B.getContext();
+  if (auto *CI = dyn_cast<ConstantInt>(Shift))
+    return CI->isZero() ? ci32(Ctx, 1) : Shift;
+
+  Value *IsZero = B.CreateICmpEQ(Shift, ci32(Ctx, 0));
+  return B.CreateSelect(IsZero, ci32(Ctx, 1), Shift);
+}
+
 Constant *vectorConstant(LLVMContext &Ctx, ArrayRef<uint32_t> Values,
                          bool ShiftAmounts = false) {
   SmallVector<Constant *, 4> Constants;
@@ -690,6 +708,8 @@ Value *emitRotate(IRBuilder<> &B, Module &M, Value *V, const Op &O,
   LLVMContext &Ctx = B.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Shift = B.CreateAnd(B.CreateXor(V, ci32(Ctx, u32(O.B))), ci32(Ctx, 31));
+  if (ID == Intrinsic::fshl)
+    Shift = suppressM015FshlZeroShift(B, Shift);
   return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}),
                       {V, ci32(Ctx, u32(O.A)), Shift});
 }
@@ -810,7 +830,8 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
   case 29:
     return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
                         {V, ci32(Ctx, u32(O.A)),
-                         ci32(Ctx, static_cast<uint32_t>(O.B & 31u))});
+                         suppressM015FshlZeroShift(
+                             B, ci32(Ctx, static_cast<uint32_t>(O.B & 31u)))});
   case 30:
     return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
                         {ci32(Ctx, u32(O.A)), V,
@@ -844,6 +865,7 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
                         {V, ConstantInt::getFalse(Ctx)});
   case 42: {
     Value *Shift = B.CreateAnd(V, ci32(Ctx, 31));
+    Shift = suppressM015FshlZeroShift(B, Shift);
     return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
                         {V, ci32(Ctx, u32(O.A)), Shift});
   }
