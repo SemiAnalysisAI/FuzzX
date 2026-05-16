@@ -360,6 +360,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0x90u)
+      Kind = 119 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xa0u)
       Kind = 103 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xb0u)
@@ -629,6 +631,85 @@ Value *emitVector(IRBuilder<> &B, Value *V, unsigned Lanes, const Op &O) {
   }
   Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
   return B.CreateXor(V, Extracted);
+}
+
+Value *makeI32Vector(IRBuilder<> &B, Value *V, unsigned Lanes, const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = ConstantAggregateZero::get(VecTy);
+  std::array<uint32_t, 4> Init = {u32(O.A), u32(O.B), u32(O.C),
+                                  u32(O.A + O.B + O.C)};
+  for (unsigned I = 0; I < Lanes; ++I) {
+    Value *LaneValue = I == 0 ? V : ci32(Ctx, Init[I - 1]);
+    Cur = B.CreateInsertElement(Cur, LaneValue, ci32(Ctx, I));
+  }
+  return Cur;
+}
+
+Value *emitI32VectorMinMax(IRBuilder<> &B, Module &M, Value *V, unsigned Lanes,
+                           const Op &O, Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeI32Vector(B, V, Lanes, O);
+  std::array<uint32_t, 4> Consts = {u32(O.A >> 32), u32(O.B >> 32),
+                                    u32(O.C >> 32), u32(O.A ^ O.C)};
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                   {Cur, vectorConstant(Ctx, ArrayRef<uint32_t>(Consts.data(),
+                                                                Lanes))});
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateAdd(Extracted, B.CreateXor(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *emitI32VectorBitIntrinsic(IRBuilder<> &B, Module &M, Value *V,
+                                 unsigned Lanes, const Op &O,
+                                 Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeI32Vector(B, V, Lanes, O);
+  FunctionCallee Fn = Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy});
+  Value *Mixed;
+  if (ID == Intrinsic::ctlz || ID == Intrinsic::cttz)
+    Mixed = B.CreateCall(Fn, {Cur, ConstantInt::getFalse(Ctx)});
+  else
+    Mixed = B.CreateCall(Fn, {Cur});
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateXor(Extracted, B.CreateAdd(V, ci32(Ctx, u32(O.A) | 1u)));
+}
+
+Value *emitI32VectorDynamicShift(IRBuilder<> &B, Value *V, unsigned Lanes,
+                                 const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeI32Vector(B, V, Lanes, O);
+  std::array<uint32_t, 4> ShiftMasks = {31, 31, 31, 31};
+  Value *Shift =
+      B.CreateAnd(Cur, vectorConstant(Ctx, ArrayRef<uint32_t>(ShiftMasks.data(),
+                                                              Lanes)));
+  Value *IsZero =
+      B.CreateICmpEQ(Shift, ConstantAggregateZero::get(VecTy));
+  Shift = B.CreateSelect(IsZero,
+                         ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                                  ci32(Ctx, 1)),
+                         Shift);
+  Value *Mixed;
+  switch (O.C % 3) {
+  case 0:
+    Mixed = B.CreateShl(Cur, Shift);
+    break;
+  case 1:
+    Mixed = B.CreateLShr(Cur, Shift);
+    break;
+  default:
+    Mixed = B.CreateAShr(Cur, Shift);
+    break;
+  }
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateAdd(Extracted, ci32(Ctx, u32(O.A)));
 }
 
 Constant *packedVectorConstant(LLVMContext &Ctx, unsigned LaneBits,
@@ -1271,6 +1352,38 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitPackedDynamicShift(B, V, 8, O);
   case 118:
     return emitPackedDynamicShift(B, V, 16, O);
+  case 119:
+    return emitI32VectorMinMax(B, M, V, 2, O, Intrinsic::umin);
+  case 120:
+    return emitI32VectorMinMax(B, M, V, 2, O, Intrinsic::umax);
+  case 121:
+    return emitI32VectorMinMax(B, M, V, 2, O, Intrinsic::smin);
+  case 122:
+    return emitI32VectorMinMax(B, M, V, 2, O, Intrinsic::smax);
+  case 123:
+    return emitI32VectorMinMax(B, M, V, 4, O, Intrinsic::umin);
+  case 124:
+    return emitI32VectorMinMax(B, M, V, 4, O, Intrinsic::umax);
+  case 125:
+    return emitI32VectorMinMax(B, M, V, 4, O, Intrinsic::smin);
+  case 126:
+    return emitI32VectorMinMax(B, M, V, 4, O, Intrinsic::smax);
+  case 127:
+    return emitI32VectorBitIntrinsic(B, M, V, 2, O, Intrinsic::ctlz);
+  case 128:
+    return emitI32VectorBitIntrinsic(B, M, V, 4, O, Intrinsic::ctlz);
+  case 129:
+    return emitI32VectorBitIntrinsic(B, M, V, 2, O, Intrinsic::cttz);
+  case 130:
+    return emitI32VectorBitIntrinsic(B, M, V, 4, O, Intrinsic::cttz);
+  case 131:
+    return emitI32VectorBitIntrinsic(B, M, V, 2, O, Intrinsic::ctpop);
+  case 132:
+    return emitI32VectorBitIntrinsic(B, M, V, 4, O, Intrinsic::ctpop);
+  case 133:
+    return emitI32VectorDynamicShift(B, V, 2, O);
+  case 134:
+    return emitI32VectorDynamicShift(B, V, 4, O);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));

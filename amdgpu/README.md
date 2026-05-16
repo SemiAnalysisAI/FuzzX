@@ -16,6 +16,7 @@ funnel-shift intrinsics across scalar, small-width, and widened integer types.
 The generated IR also covers narrow min/max intrinsics, widened compare /
 select and `fshr` paths, and masked dynamic shifts across scalar and narrow
 integer widths. Packed-vector coverage includes saturating arithmetic, bit
+intrinsics, and masked dynamic shifts. Wider `i32` vectors cover min/max, bit
 intrinsics, and masked dynamic shifts.
 
 ## Requirements
