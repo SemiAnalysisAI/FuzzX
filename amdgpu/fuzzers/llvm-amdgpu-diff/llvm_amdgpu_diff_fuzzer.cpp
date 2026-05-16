@@ -208,11 +208,6 @@ bool isIdentityVectorLane0(const Op &O) {
   }
 }
 
-unsigned priorVectorOps(ArrayRef<Op> Ops) {
-  return static_cast<unsigned>(
-      std::count_if(Ops.begin(), Ops.end(), isVectorOp));
-}
-
 Program makeProgram(const uint8_t *Data, size_t Size) {
   ByteStream BS{Data, Size};
   Program P;
@@ -222,7 +217,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
                    envFlag("FUZZX_ALLOW_M006_I8_CLEAR_XOR", false);
   bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false) ||
                    envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false);
-  bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false);
+  bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
+                   envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
     Op O{static_cast<uint8_t>(BS.next8() % 27), BS.next64(), BS.next64(),
@@ -231,7 +227,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       ++O.C;
     if (!AllowM002 && triggersM002(P.Ops, O))
       breakIdentityNarrow8(O);
-    if (!AllowM004 && priorVectorOps(P.Ops) >= 2 && isIdentityVectorLane0(O))
+    if (!AllowM004 && isIdentityVectorLane0(O))
       ++O.B;
     if (!AllowM003) {
       P.Ops.push_back(O);
