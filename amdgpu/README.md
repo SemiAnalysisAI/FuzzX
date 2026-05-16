@@ -56,6 +56,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M006_I8_CLEAR_XOR=1` | unset | Alias to re-enable the broader adjacent `i8` narrow/xor shape for [m006](known-miscompiles/m006-i8-xor-clear/NOTES.md). |
 | `FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR=1` | unset | Alias to re-enable the broader vector lane-0 identity xor shape for [m007](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md). |
 | `FUZZX_ALLOW_M008_I8_CLEAR_XOR=1` | unset | Alias to re-enable the broader `i8` identity byte-clear xor shape for [m008](known-miscompiles/m008-i8-separated-clear/NOTES.md). |
+| `FUZZX_ALLOW_M009_I16_CLEAR_XOR=1` | unset | Re-enable the `i16` identity low-16 clear xor shape for [m009](known-miscompiles/m009-i16-clear-xor/NOTES.md). |
 
 ## Layout
 
@@ -86,6 +87,7 @@ Version | Description |
 | LLVM 23.0.0git | [m006-i8-xor-clear](known-miscompiles/m006-i8-xor-clear/NOTES.md): `-O0` lowers another adjacent `i8` narrow byte-clear xor through the wrong `v_bitop3_b32` result. |
 | LLVM 23.0.0git | [m007-vector-shl-identity-xor](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md): `-O0` loses a vector shift-by-zero lane-0 identity before `xor`. |
 | LLVM 23.0.0git | [m008-i8-separated-clear](known-miscompiles/m008-i8-separated-clear/NOTES.md): `-O0` miscompiles an `i8` identity byte-clear xor when prior narrow ops are separated by no-op adds. |
+| LLVM 23.0.0git | [m009-i16-clear-xor](known-miscompiles/m009-i16-clear-xor/NOTES.md): `-O0` miscompiles an `i16` identity low-16 clear xor through the wrong `v_bitop3_b32` result. |
 
 ## LLVM Source Builds
 
