@@ -51,6 +51,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable the directed C++ fuzzer shape for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
 | `FUZZX_ALLOW_M002_I8_CLEAR_XOR=1` | unset | Re-enable the adjacent `i8` narrow/xor shape for [m002](known-miscompiles/m002-i8-clear-xor/NOTES.md). |
 | `FUZZX_ALLOW_M003_SHL3_ADD_CHAIN=1` | unset | Re-enable the five-step `shl3/add` chain shape for [m003](known-miscompiles/m003-shl3-add-chain/NOTES.md). |
+| `FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR=1` | unset | Re-enable the vector lane-0 identity xor shape for [m004](known-miscompiles/m004-vector-identity-xor/NOTES.md). |
 
 ## Layout
 
@@ -76,6 +77,7 @@ Version | Description |
 | ROCm 7.1.1 / LLVM 23.0.0git | [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md): `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
 | LLVM 23.0.0git | [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md): `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result. |
 | LLVM 23.0.0git | [m003-shl3-add-chain](known-miscompiles/m003-shl3-add-chain/NOTES.md): `-O0` scalarizes a divergent `shl3/add` chain through `v_readfirstlane_b32`. |
+| LLVM 23.0.0git | [m004-vector-identity-xor](known-miscompiles/m004-vector-identity-xor/NOTES.md): `-O0` loses a lane-0 vector identity before `xor`. |
 
 ## LLVM Source Builds
 

@@ -182,6 +182,38 @@ bool hasFiveShl3AddPairs(ArrayRef<Op> Ops) {
   return false;
 }
 
+bool isVectorOp(const Op &O) { return O.Kind == 21 || O.Kind == 22; }
+
+bool isIdentityVectorLane0(const Op &O) {
+  if (!isVectorOp(O))
+    return false;
+  unsigned Lanes = O.Kind == 21 ? 2 : 4;
+  if ((O.B % Lanes) != 0)
+    return false;
+
+  uint32_t C0 = u32(O.A >> 32);
+  switch ((O.A ^ O.C) % 8) {
+  case 0:
+  case 1:
+  case 3:
+  case 5:
+    return C0 == 0;
+  case 2:
+    return C0 == 1;
+  case 4:
+    return C0 == U32Mask;
+  case 6:
+    return (C0 & 31u) == 0;
+  default:
+    return false;
+  }
+}
+
+unsigned priorVectorOps(ArrayRef<Op> Ops) {
+  return static_cast<unsigned>(
+      std::count_if(Ops.begin(), Ops.end(), isVectorOp));
+}
+
 Program makeProgram(const uint8_t *Data, size_t Size) {
   ByteStream BS{Data, Size};
   Program P;
@@ -189,6 +221,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
   bool AllowM002 = envFlag("FUZZX_ALLOW_M002_I8_CLEAR_XOR", false);
   bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false);
+  bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
     Op O{static_cast<uint8_t>(BS.next8() % 27), BS.next64(), BS.next64(),
@@ -197,6 +230,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       ++O.C;
     if (!AllowM002 && triggersM002(P.Ops, O))
       breakIdentityNarrow8(O);
+    if (!AllowM004 && priorVectorOps(P.Ops) >= 2 && isIdentityVectorLane0(O))
+      ++O.B;
     if (!AllowM003) {
       P.Ops.push_back(O);
       if (hasFiveShl3AddPairs(P.Ops)) {
