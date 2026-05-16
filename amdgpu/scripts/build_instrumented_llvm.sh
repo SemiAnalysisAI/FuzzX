@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # Configure and build an LLVM tree suitable for coverage-guided AMDGPU fuzzing.
 #
-# Required:
-#   LLVM_PROJECT_DIR=/path/to/llvm-project
-#
 # Optional:
+#   LLVM_PROJECT_DIR=/path/to/llvm-project
 #   LLVM_BUILD_DIR=$PWD/build/llvm-fuzzer
 #   LLVM_INSTALL_DIR=$PWD/build/llvm-fuzzer-install
 #   LLVM_TARGETS_TO_BUILD='AMDGPU;X86'
@@ -14,8 +12,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-if [[ -z "${LLVM_PROJECT_DIR:-}" ]]; then
-    echo "set LLVM_PROJECT_DIR=/path/to/llvm-project" >&2
+LLVM_PROJECT_DIR="${LLVM_PROJECT_DIR:-$ROOT/third_party/llvm-project}"
+
+if [[ ! -d "$LLVM_PROJECT_DIR/llvm" ]]; then
+    echo "LLVM source checkout not found under LLVM_PROJECT_DIR=$LLVM_PROJECT_DIR" >&2
+    echo "Run: git submodule update --init --depth 1 third_party/llvm-project" >&2
     exit 2
 fi
 

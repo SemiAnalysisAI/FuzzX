@@ -4,7 +4,7 @@ This directory contains the AMDGPU fuzzer work area.  It is intentionally
 separate from the PTX / `ptxas` fuzzer in [`../ptx/`](../ptx/).
 
 The current fuzzer is the directed C++ libFuzzer target in
-`fuzzers/llvm-amdgpu-diff`. It builds restricted LLVM IR through LLVM's C++ API,
+`fuzzer/`. It builds restricted LLVM IR through LLVM's C++ API,
 compiles the IR to AMDGPU code objects through `-O0` and `-O2` LLVM pipelines,
 runs both through HIP, and compares device output.  The generator emits only
 operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
@@ -53,7 +53,8 @@ across 8 GPUs, about 151 exec/s aggregate, while libFuzzer receives coverage
 from the instrumented LLVM codegen path for each input.
 
 Candidate compiler crashes, runner failures, or output mismatches are saved
-under `findings/`.
+under `findings/`. Generated corpora and findings are local artifacts and are
+ignored by git.
 
 ### Known-Bug Suppression
 
@@ -83,16 +84,14 @@ rediscovering the same issue.
 
 | Path | Purpose |
 | --- | --- |
-| `scripts/fetch_llvm.sh` | Shallow LLVM checkout helper. |
+| `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/run_directed_fuzzer.sh` | Runs the C++ directed fuzzer on one GPU. |
 | `scripts/run_directed_multigpu_fuzzer.sh` | Runs one or more C++ directed fuzzer processes per selected GPU. |
-| `fuzzers/llvm-amdgpu-diff/` | LLVM API plus HIP differential libFuzzer target. |
+| `fuzzer/` | LLVM API plus HIP differential libFuzzer target. |
 | `runner/hip_module_runner.cpp` | HIP module loader used to execute generated HSACO files. |
 | `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |
-| `findings/` | Saved candidate bugs. |
-| `corpus/` | Reserved for future coverage-guided corpus inputs. |
 
 ## AMDGPU Bugs Found
 
@@ -120,15 +119,14 @@ Version | Description |
 ## LLVM Source Builds
 
 The fuzzer can use an installed ROCm LLVM today.  For coverage-guided compiler
-fuzzing, point `scripts/build_instrumented_llvm.sh` at an LLVM source checkout
-or fork with `LLVM_PROJECT_DIR=/path/to/llvm-project`; this repo does not
-currently vendor LLVM as a submodule.
+fuzzing, initialize the LLVM submodule and build an instrumented LLVM.  To use a
+different LLVM checkout or fork, set `LLVM_PROJECT_DIR=/path/to/llvm-project`.
 
 Typical directed-fuzzing setup:
 
 ```bash
-scripts/fetch_llvm.sh
-LLVM_PROJECT_DIR=$PWD/third_party/llvm-project scripts/build_instrumented_llvm.sh
+git submodule update --init --depth 1 third_party/llvm-project
+scripts/build_instrumented_llvm.sh
 scripts/build_directed_fuzzer.sh
 scripts/run_directed_fuzzer.sh
 ```

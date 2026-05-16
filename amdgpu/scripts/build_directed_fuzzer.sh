@@ -13,7 +13,7 @@ ROOT="$(pwd)"
 LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$ROOT/build/llvm-fuzzer}"
 LLVM_DIR="${LLVM_DIR:-$LLVM_BUILD_DIR/lib/cmake/llvm}"
 LLD_DIR="${LLD_DIR:-$LLVM_BUILD_DIR/lib/cmake/lld}"
-FUZZER_BUILD_DIR="${FUZZER_BUILD_DIR:-$ROOT/build/directed-fuzzer}"
+FUZZER_BUILD_DIR="${FUZZER_BUILD_DIR:-$ROOT/build/fuzzer}"
 ROCM_PATH="${ROCM_PATH:-/opt/rocm-7.1.1}"
 
 if [[ ! -f "$LLVM_DIR/LLVMConfig.cmake" ]]; then
@@ -28,7 +28,7 @@ if [[ ! -f "$LLD_DIR/LLDConfig.cmake" ]]; then
     exit 2
 fi
 
-cmake -S "$ROOT/fuzzers/llvm-amdgpu-diff" -B "$FUZZER_BUILD_DIR" -G Ninja \
+cmake -S "$ROOT/fuzzer" -B "$FUZZER_BUILD_DIR" -G Ninja \
     -DLLVM_DIR="$LLVM_DIR" \
     -DLLD_DIR="$LLD_DIR" \
     -DROCM_PATH="$ROCM_PATH" \

@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
-FUZZER_BIN="${FUZZER_BIN:-$ROOT/build/directed-fuzzer/llvm_amdgpu_diff_fuzzer}"
+FUZZER_BIN="${FUZZER_BIN:-$ROOT/build/fuzzer/llvm_amdgpu_diff_fuzzer}"
 CORPUS_DIR="${CORPUS_DIR:-$ROOT/corpus/directed}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$ROOT/findings/directed-artifacts}"
 FUZZX_FINDINGS_DIR="${FUZZX_FINDINGS_DIR:-$ROOT/findings}"
