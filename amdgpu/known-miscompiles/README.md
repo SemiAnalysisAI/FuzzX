@@ -37,6 +37,10 @@ Repeated input values can be written as `value*count`, for example
 count as the fourth argument; in repeat mode the runner stops at the first
 observed O0/O2 mismatch.
 
+Some testcases add `; RUN-COMBINED: 1`. For those, the runner compiles the same
+IR into separate `fuzz_kernel_o0` and `fuzz_kernel_o2` objects, links both into
+one code object, and runs both kernels from that combined object.
+
 The runner defaults to `/opt/rocm-7.1.1`, `gfx950`, and device `0`. Override
 those with `ROCM_PATH`, `MCPU`, and the script's third argument respectively.
 If a testcase has a `; RUN-LLVM-BUILD:` comment and `CLANG` / `LLD` are not set,

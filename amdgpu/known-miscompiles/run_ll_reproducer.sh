@@ -59,7 +59,7 @@ if [[ ! -x "$LLD" ]]; then
     exit 2
 fi
 
-if [[ ! -x "$RUNNER" ]]; then
+if [[ ! -x "$RUNNER" || "$ROOT/runner/hip_module_runner.cpp" -nt "$RUNNER" ]]; then
     mkdir -p "$ROOT/build"
     "$HIPCC" -O2 "$ROOT/runner/hip_module_runner.cpp" -o "$RUNNER"
 fi
@@ -70,6 +70,12 @@ fi
 
 if [[ -z "$REPEAT_TEXT" ]]; then
     REPEAT_TEXT="$(sed -n -E 's/^[[:space:]]*;[[:space:]]*RUN-REPEAT:[[:space:]]*//p' "$LL_FILE" | head -n 1)"
+fi
+
+RUN_COMBINED_TEXT="$(sed -n -E 's/^[[:space:]]*;[[:space:]]*RUN-COMBINED:[[:space:]]*//p' "$LL_FILE" | head -n 1)"
+RUN_COMBINED=0
+if [[ "$RUN_COMBINED_TEXT" =~ ^(1|true|TRUE|yes|YES|on|ON)$ ]]; then
+    RUN_COMBINED=1
 fi
 
 REPEAT="${REPEAT_TEXT:-1}"
@@ -114,17 +120,41 @@ print(len(values))
 PY
 )"
 
-for opt in O0 O2; do
-    "$CLANG" "-$opt" -nogpulib -target amdgcn-amd-amdhsa -mcpu="$MCPU" \
-        -x ir -c "$LL_FILE" -o "$TMPDIR/$opt.o"
-    "$LLD" -flavor gnu -shared "$TMPDIR/$opt.o" -o "$TMPDIR/$opt.hsaco"
-done
+if [[ "$RUN_COMBINED" -eq 1 ]]; then
+    python3 - "$LL_FILE" "$TMPDIR/O0.ll" "$TMPDIR/O2.ll" <<'PY'
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+for path, name in [(sys.argv[2], "fuzz_kernel_o0"), (sys.argv[3], "fuzz_kernel_o2")]:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.replace("fuzz_kernel", name))
+PY
+    "$CLANG" -O0 -nogpulib -target amdgcn-amd-amdhsa -mcpu="$MCPU" \
+        -x ir -c "$TMPDIR/O0.ll" -o "$TMPDIR/O0.o"
+    "$CLANG" -O2 -nogpulib -target amdgcn-amd-amdhsa -mcpu="$MCPU" \
+        -x ir -c "$TMPDIR/O2.ll" -o "$TMPDIR/O2.o"
+    "$LLD" -flavor gnu -shared "$TMPDIR/O0.o" "$TMPDIR/O2.o" \
+        -o "$TMPDIR/combined.hsaco"
+else
+    for opt in O0 O2; do
+        "$CLANG" "-$opt" -nogpulib -target amdgcn-amd-amdhsa -mcpu="$MCPU" \
+            -x ir -c "$LL_FILE" -o "$TMPDIR/$opt.o"
+        "$LLD" -flavor gnu -shared "$TMPDIR/$opt.o" -o "$TMPDIR/$opt.hsaco"
+    done
+fi
 
 for ((iteration = 1; iteration <= REPEAT; ++iteration)); do
-    for opt in O0 O2; do
-        "$RUNNER" "$TMPDIR/$opt.hsaco" "$TMPDIR/input.bin" "$TMPDIR/$opt.out" \
-            "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT"
-    done
+    if [[ "$RUN_COMBINED" -eq 1 ]]; then
+        "$RUNNER" "$TMPDIR/combined.hsaco" "$TMPDIR/input.bin" "$TMPDIR/O0.out" \
+            "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT" fuzz_kernel_o0
+        "$RUNNER" "$TMPDIR/combined.hsaco" "$TMPDIR/input.bin" "$TMPDIR/O2.out" \
+            "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT" fuzz_kernel_o2
+    else
+        for opt in O0 O2; do
+            "$RUNNER" "$TMPDIR/$opt.hsaco" "$TMPDIR/input.bin" "$TMPDIR/$opt.out" \
+                "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT"
+        done
+    fi
 
     if [[ "$REPEAT" -eq 1 ]]; then
         python3 - "$INPUTS_TEXT" "$TMPDIR/O0.out" "$TMPDIR/O2.out" full "$iteration" <<'PY'

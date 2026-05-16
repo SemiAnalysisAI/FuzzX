@@ -311,6 +311,15 @@ bool hasThreePrivateMemoryOps(ArrayRef<Op> Ops) {
   return false;
 }
 
+bool hasTwoPrivateMemoryOps(ArrayRef<Op> Ops) {
+  unsigned Count = 0;
+  for (const Op &O : Ops) {
+    if (isPrivateMemoryOp(O) && ++Count >= 2)
+      return true;
+  }
+  return false;
+}
+
 bool isIdentityVectorLane0(const Op &O) {
   if (!isVectorOp(O))
     return false;
@@ -369,6 +378,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   bool AllowM017 =
       envFlag("FUZZX_ALLOW_M017_VECTOR_AND_LANE0_CLEAR_XOR", false);
   bool AllowM013 = envFlag("FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL", false);
+  bool AllowM018 =
+      envFlag("FUZZX_ALLOW_M018_TWO_PRIVATE_MEMORY_OPS", false);
   bool AllowM016 = envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false) ||
                    envFlag("FUZZX_ALLOW_M016_SCALAR_FSHL", false);
   P.Ops.reserve(OpCount);
@@ -377,6 +388,10 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     uint8_t Kind = RawKind % 27;
     if ((RawKind & 0xf0u) == 0x80u)
       Kind = 135 + ((RawKind & 15u) % 8);
+    if ((RawKind & 0xf0u) == 0x60u)
+      Kind = 159 + ((RawKind & 15u) % 8);
+    if ((RawKind & 0xf0u) == 0x70u)
+      Kind = 143 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0x90u)
       Kind = 119 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xa0u)
@@ -419,6 +434,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     }
     if (!AllowM014 && hasFourShlAddPairsBeforeCtpop(P.Ops))
       P.Ops.back().Kind = 0;
+    if (!AllowM018 && hasTwoPrivateMemoryOps(P.Ops))
+      P.Ops.back().Kind = 55;
     if (!AllowM013 && hasThreePrivateMemoryOps(P.Ops))
       P.Ops.back().Kind = AllowM016 ? 54 : 55;
   }
@@ -454,6 +471,22 @@ ConstantInt *ci64(LLVMContext &Ctx, uint64_t V) {
   return ConstantInt::get(Type::getInt64Ty(Ctx), V);
 }
 
+Constant *cf32(LLVMContext &Ctx, float V) {
+  return ConstantFP::get(Type::getFloatTy(Ctx), V);
+}
+
+Constant *cf64(LLVMContext &Ctx, double V) {
+  return ConstantFP::get(Type::getDoubleTy(Ctx), V);
+}
+
+float smallF32(uint64_t V) {
+  return static_cast<float>(1u + static_cast<unsigned>(V & 0xffu));
+}
+
+double smallF64(uint64_t V) {
+  return static_cast<double>(1u + static_cast<unsigned>(V & 0xffffu));
+}
+
 bool allowM015ScalarFshlZero() {
   static const bool Allow =
       envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false);
@@ -477,6 +510,13 @@ Constant *vectorConstant(LLVMContext &Ctx, ArrayRef<uint32_t> Values,
   SmallVector<Constant *, 4> Constants;
   for (uint32_t V : Values)
     Constants.push_back(ci32(Ctx, ShiftAmounts ? (V & 31u) : V));
+  return ConstantVector::get(Constants);
+}
+
+Constant *f32VectorConstant(LLVMContext &Ctx, ArrayRef<float> Values) {
+  SmallVector<Constant *, 4> Constants;
+  for (float V : Values)
+    Constants.push_back(cf32(Ctx, V));
   return ConstantVector::get(Constants);
 }
 
@@ -754,6 +794,274 @@ Value *emitI32VectorFshr(IRBuilder<> &B, Module &M, Value *V, unsigned Lanes,
                    {Other, Cur, Shift});
   Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
   return B.CreateXor(Extracted, B.CreateAdd(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *makeDerivedI32Vector(IRBuilder<> &B, Value *V, unsigned Lanes,
+                            const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = ConstantAggregateZero::get(VecTy);
+  for (unsigned I = 0; I < Lanes; ++I) {
+    Value *LaneValue = V;
+    switch (I) {
+    case 1:
+      LaneValue = B.CreateXor(V, ci32(Ctx, u32(O.A)));
+      break;
+    case 2:
+      LaneValue = B.CreateAdd(V, ci32(Ctx, u32(O.B)));
+      break;
+    default:
+      LaneValue = B.CreateOr(B.CreateLShr(V, ci32(Ctx, O.C & 31u)),
+                             ci32(Ctx, u32(O.A >> 32)));
+      break;
+    }
+    Cur = B.CreateInsertElement(Cur, LaneValue, ci32(Ctx, I));
+  }
+  return Cur;
+}
+
+Value *emitDerivedI32VectorMix(IRBuilder<> &B, Value *V, unsigned Lanes,
+                               const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeDerivedI32Vector(B, V, Lanes, O);
+  std::array<uint32_t, 4> Consts = {u32(O.A >> 32), u32(O.B >> 32),
+                                    u32(O.C >> 32), u32(O.A ^ O.C)};
+  ArrayRef<uint32_t> C(Consts.data(), Lanes);
+  Value *Mixed;
+  switch (O.C % 9) {
+  case 0:
+    Mixed = B.CreateAdd(Cur, vectorConstant(Ctx, C));
+    break;
+  case 1:
+    Mixed = B.CreateSub(Cur, vectorConstant(Ctx, C));
+    break;
+  case 2:
+    Mixed = B.CreateMul(Cur, vectorConstant(Ctx, C));
+    break;
+  case 3:
+    Mixed = B.CreateXor(Cur, vectorConstant(Ctx, C));
+    break;
+  case 4:
+    Mixed = B.CreateAnd(Cur, vectorConstant(Ctx, C));
+    break;
+  case 5:
+    Mixed = B.CreateOr(Cur, vectorConstant(Ctx, C));
+    break;
+  case 6:
+    Mixed = B.CreateShl(Cur, vectorConstant(Ctx, C, true));
+    break;
+  case 7:
+    Mixed = B.CreateLShr(Cur, vectorConstant(Ctx, C, true));
+    break;
+  default: {
+    Value *Shift =
+        B.CreateAnd(Cur, ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                                  ci32(Ctx, 31)));
+    Value *IsZero = B.CreateICmpEQ(Shift, ConstantAggregateZero::get(VecTy));
+    Shift = B.CreateSelect(
+        IsZero, ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                         ci32(Ctx, 1)),
+        Shift);
+    Mixed = B.CreateAShr(Cur, Shift);
+    break;
+  }
+  }
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateXor(Extracted, B.CreateAdd(V, ci32(Ctx, u32(O.A) | 1u)));
+}
+
+Value *emitDerivedI32VectorMinMax(IRBuilder<> &B, Module &M, Value *V,
+                                  unsigned Lanes, const Op &O,
+                                  Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeDerivedI32Vector(B, V, Lanes, O);
+  Value *Other =
+      makeDerivedI32Vector(B, B.CreateXor(V, ci32(Ctx, u32(O.C))), Lanes, O);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                   {Cur, Other});
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateAdd(Extracted, B.CreateXor(V, ci32(Ctx, u32(O.B) | 1u)));
+}
+
+Value *emitDerivedI32VectorUnaryIntrinsic(IRBuilder<> &B, Module &M, Value *V,
+                                          unsigned Lanes, const Op &O,
+                                          Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeDerivedI32Vector(B, V, Lanes, O);
+  FunctionCallee Fn = Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy});
+  Value *Mixed = ID == Intrinsic::abs
+                     ? B.CreateCall(Fn, {Cur, ConstantInt::getFalse(Ctx)})
+                     : B.CreateCall(Fn, {Cur});
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateXor(Extracted, B.CreateAdd(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *boundedI32ForFP(IRBuilder<> &B, Value *V, const Op &O, bool Signed) {
+  LLVMContext &Ctx = B.getContext();
+  Value *I = B.CreateXor(V, ci32(Ctx, u32(O.A)));
+  if (!Signed)
+    return B.CreateAnd(I, ci32(Ctx, 0xffffu));
+  return B.CreateAShr(B.CreateShl(I, ci32(Ctx, 16)), ci32(Ctx, 16));
+}
+
+Value *boundedI32VectorForFP(IRBuilder<> &B, Value *V, unsigned Lanes,
+                             const Op &O, bool Signed) {
+  LLVMContext &Ctx = B.getContext();
+  Value *I = makeDerivedI32Vector(B, V, Lanes, O);
+  auto Splat = [&](uint32_t X) {
+    return ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                    ci32(Ctx, X));
+  };
+  if (!Signed)
+    return B.CreateAnd(I, Splat(0xffffu));
+  return B.CreateAShr(B.CreateShl(I, Splat(16)), Splat(16));
+}
+
+Value *emitF32ScalarMix(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                        bool Signed) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  Value *I = boundedI32ForFP(B, V, O, Signed);
+  Value *F = Signed ? B.CreateSIToFP(I, F32) : B.CreateUIToFP(I, F32);
+  Value *C0 = cf32(Ctx, smallF32(O.B));
+  Value *C1 = cf32(Ctx, smallF32(O.C));
+  Value *Mixed;
+  switch (O.C % 8) {
+  case 0:
+    Mixed = B.CreateFAdd(F, C0);
+    break;
+  case 1:
+    Mixed = B.CreateFSub(F, C0);
+    break;
+  case 2:
+    Mixed = B.CreateFMul(F, C0);
+    break;
+  case 3:
+    Mixed = B.CreateFNeg(F);
+    break;
+  case 4:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fabs, {F32}), {F});
+    break;
+  case 5:
+    Mixed = B.CreateSelect(B.CreateFCmpOLT(F, C0), F, C0);
+    break;
+  case 6:
+    Mixed = B.CreateSelect(B.CreateFCmpOGT(F, C0), F, C0);
+    break;
+  default:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fma, {F32}),
+        {F, C0, C1});
+    break;
+  }
+  return B.CreateXor(V, B.CreateBitCast(Mixed, I32));
+}
+
+Value *emitF64ScalarMix(IRBuilder<> &B, Module &M, Value *V, const Op &O,
+                        bool Signed) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Type *F64 = Type::getDoubleTy(Ctx);
+  Value *I32Value = boundedI32ForFP(B, V, O, Signed);
+  Value *I64Value =
+      Signed ? B.CreateSExt(I32Value, I64) : B.CreateZExt(I32Value, I64);
+  Value *F = Signed ? B.CreateSIToFP(I64Value, F64)
+                    : B.CreateUIToFP(I64Value, F64);
+  Value *C0 = cf64(Ctx, smallF64(O.B));
+  Value *C1 = cf64(Ctx, smallF64(O.C));
+  Value *Mixed;
+  switch (O.C % 8) {
+  case 0:
+    Mixed = B.CreateFAdd(F, C0);
+    break;
+  case 1:
+    Mixed = B.CreateFSub(F, C0);
+    break;
+  case 2:
+    Mixed = B.CreateFMul(F, C0);
+    break;
+  case 3:
+    Mixed = B.CreateFNeg(F);
+    break;
+  case 4:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fabs, {F64}), {F});
+    break;
+  case 5:
+    Mixed = B.CreateSelect(B.CreateFCmpOLT(F, C0), F, C0);
+    break;
+  case 6:
+    Mixed = B.CreateSelect(B.CreateFCmpOGT(F, C0), F, C0);
+    break;
+  default:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fma, {F64}),
+        {F, C0, C1});
+    break;
+  }
+  Value *Bits = B.CreateBitCast(Mixed, I64);
+  Value *Lo = B.CreateTrunc(Bits, I32);
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Bits, ci64(Ctx, 32)), I32);
+  return B.CreateXor(V, B.CreateXor(Lo, Hi));
+}
+
+Value *emitF32VectorMix(IRBuilder<> &B, Module &M, Value *V, unsigned Lanes,
+                        const Op &O, bool Signed) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  auto *VecTy = FixedVectorType::get(F32, Lanes);
+  Value *I = boundedI32VectorForFP(B, V, Lanes, O, Signed);
+  Value *F = Signed ? B.CreateSIToFP(I, VecTy) : B.CreateUIToFP(I, VecTy);
+  std::array<float, 4> C0Values = {smallF32(O.A), smallF32(O.B),
+                                   smallF32(O.C), smallF32(O.A ^ O.C)};
+  std::array<float, 4> C1Values = {smallF32(O.C), smallF32(O.A),
+                                   smallF32(O.B), smallF32(O.A + O.B)};
+  Value *C0 = f32VectorConstant(Ctx, ArrayRef<float>(C0Values.data(), Lanes));
+  Value *C1 = f32VectorConstant(Ctx, ArrayRef<float>(C1Values.data(), Lanes));
+  Value *Mixed;
+  switch (O.C % 8) {
+  case 0:
+    Mixed = B.CreateFAdd(F, C0);
+    break;
+  case 1:
+    Mixed = B.CreateFSub(F, C0);
+    break;
+  case 2:
+    Mixed = B.CreateFMul(F, C0);
+    break;
+  case 3:
+    Mixed = B.CreateFNeg(F);
+    break;
+  case 4:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fabs, {VecTy}), {F});
+    break;
+  case 5:
+    Mixed = B.CreateSelect(B.CreateFCmpOLT(F, C0), F, C0);
+    break;
+  case 6:
+    Mixed = B.CreateSelect(B.CreateFCmpOGT(F, C0), F, C0);
+    break;
+  default:
+    Mixed = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fma, {VecTy}),
+        {F, C0, C1});
+    break;
+  }
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateXor(V, B.CreateBitCast(Extracted, I32));
 }
 
 Constant *packedVectorConstant(LLVMContext &Ctx, unsigned LaneBits,
@@ -1469,6 +1777,56 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitI32VectorFshr(B, M, V, 2, O, true);
   case 142:
     return emitI32VectorFshr(B, M, V, 4, O, true);
+  case 143:
+    return emitDerivedI32VectorMix(B, V, 2, O);
+  case 144:
+    return emitDerivedI32VectorMix(B, V, 4, O);
+  case 145:
+    return emitDerivedI32VectorMinMax(B, M, V, 2, O, Intrinsic::umin);
+  case 146:
+    return emitDerivedI32VectorMinMax(B, M, V, 2, O, Intrinsic::umax);
+  case 147:
+    return emitDerivedI32VectorMinMax(B, M, V, 2, O, Intrinsic::smin);
+  case 148:
+    return emitDerivedI32VectorMinMax(B, M, V, 2, O, Intrinsic::smax);
+  case 149:
+    return emitDerivedI32VectorMinMax(B, M, V, 4, O, Intrinsic::umin);
+  case 150:
+    return emitDerivedI32VectorMinMax(B, M, V, 4, O, Intrinsic::umax);
+  case 151:
+    return emitDerivedI32VectorMinMax(B, M, V, 4, O, Intrinsic::smin);
+  case 152:
+    return emitDerivedI32VectorMinMax(B, M, V, 4, O, Intrinsic::smax);
+  case 153:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 2, O,
+                                              Intrinsic::bitreverse);
+  case 154:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 4, O,
+                                              Intrinsic::bitreverse);
+  case 155:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 2, O, Intrinsic::bswap);
+  case 156:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 4, O, Intrinsic::bswap);
+  case 157:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 2, O, Intrinsic::abs);
+  case 158:
+    return emitDerivedI32VectorUnaryIntrinsic(B, M, V, 4, O, Intrinsic::abs);
+  case 159:
+    return emitF32ScalarMix(B, M, V, O, false);
+  case 160:
+    return emitF32ScalarMix(B, M, V, O, true);
+  case 161:
+    return emitF64ScalarMix(B, M, V, O, false);
+  case 162:
+    return emitF64ScalarMix(B, M, V, O, true);
+  case 163:
+    return emitF32VectorMix(B, M, V, 2, O, false);
+  case 164:
+    return emitF32VectorMix(B, M, V, 4, O, false);
+  case 165:
+    return emitF32VectorMix(B, M, V, 2, O, true);
+  case 166:
+    return emitF32VectorMix(B, M, V, 4, O, true);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));

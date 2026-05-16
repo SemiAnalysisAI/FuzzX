@@ -17,7 +17,11 @@ The generated IR also covers narrow min/max intrinsics, widened compare /
 select and `fshr` paths, and masked dynamic shifts across scalar and narrow
 integer widths. Packed-vector coverage includes saturating arithmetic, bit
 intrinsics, and masked dynamic shifts. Wider `i32` vectors cover min/max, bit
-intrinsics, masked dynamic shifts, and vector `fshr`.
+intrinsics, masked dynamic shifts, vector `fshr`, and vectors whose lanes are
+all derived from the live input value. Floating-point coverage includes finite
+`float` and `double` arithmetic, comparisons, `fabs`, and `fma`; the generator
+keeps the values bounded and mixes them back through bitcasts to avoid
+FP-to-integer poison.
 
 ## Requirements
 
@@ -60,10 +64,10 @@ For ROCm 7.2.3 release fuzzing, use the release wrapper:
 scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
 ```
 
-That wrapper keeps the release-reproducing bugs suppressed (`m001`, `m013`, and
-`m017`), but explicitly re-enables the idioms that only failed on LLVM HEAD /
-ROCm HEAD in the checked matrix (`m002` through `m012`, plus `m014` through
-`m016`).
+That wrapper keeps the release-reproducing bugs suppressed (`m001`, `m013`,
+`m017`, and `m018`), but explicitly re-enables the idioms that only failed on
+LLVM HEAD / ROCm HEAD in the checked matrix (`m002` through `m012`, plus `m014`
+through `m016`).
 
 Candidate compiler crashes, runner failures, or output mismatches are saved
 under `findings/`. Generated corpora and findings are local artifacts and are
@@ -93,6 +97,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` | unset | Re-enable zero-count `fshl` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md); this also permits generated `fshl` after m016. |
 | `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable nonzero scalar `fshl` generation for [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md). |
 | `FUZZX_ALLOW_M017_VECTOR_AND_LANE0_CLEAR_XOR=1` | unset | Re-enable vector lane-0 `and`/`extractelement` clear-xor shapes for [m017](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md). |
+| `FUZZX_ALLOW_M018_TWO_PRIVATE_MEMORY_OPS=1` | unset | Re-enable programs with two private-memory operations for [m018](known-miscompiles/m018-two-private-memory-ops/NOTES.md). |
 
 ## Layout
 
@@ -142,6 +147,7 @@ Tested toolchains as of 2026-05-16:
 | [m015-scalar-fshl-zero](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 0)` through a 64-bit shift-by-`-1` sequence that returns zero. |
 | [m016-scalar-fshl-one](known-miscompiles/m016-scalar-fshl-one/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 1)` through a 64-bit shift-by-`-1` sequence that returns only bit 31. |
 | [m017-vector-and-lane0-clear-xor](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` drops a vector lane-0 `and`/`extractelement` clear before `xor`; LLVM HEAD and ROCm HEAD already pass. |
+| [m018-two-private-memory-ops](known-miscompiles/m018-two-private-memory-ops/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` intermittently reads stale scratch data across two private-memory sequences; LLVM HEAD and ROCm HEAD pass 50 repeated combined runs. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 

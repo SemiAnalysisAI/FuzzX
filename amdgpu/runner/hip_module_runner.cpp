@@ -11,7 +11,7 @@ namespace {
 
 int usage(const char *argv0) {
     std::fprintf(stderr,
-                 "usage: %s <kernel.hsaco> <input.bin> <output.bin> <output_n> [device] [input_n]\n",
+                 "usage: %s <kernel.hsaco> <input.bin> <output.bin> <output_n> [device] [input_n] [kernel]\n",
                  argv0);
     return 2;
 }
@@ -60,7 +60,7 @@ bool write_u32_file(const std::string &path, const std::vector<std::uint32_t> &d
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc != 5 && argc != 6 && argc != 7) {
+    if (argc != 5 && argc != 6 && argc != 7 && argc != 8) {
         return usage(argv[0]);
     }
 
@@ -74,7 +74,8 @@ int main(int argc, char **argv) {
     }
     const std::uint32_t output_n = static_cast<std::uint32_t>(output_n_long);
     const int device = argc >= 6 ? std::atoi(argv[5]) : 0;
-    const auto input_n_long = argc == 7 ? std::strtol(argv[6], nullptr, 10) : output_n_long;
+    const auto input_n_long = argc >= 7 ? std::strtol(argv[6], nullptr, 10) : output_n_long;
+    const char *kernel_name = argc == 8 ? argv[7] : "fuzz_kernel";
     if (input_n_long <= 0) {
         std::fprintf(stderr, "input_n must be positive\n");
         return 2;
@@ -98,7 +99,7 @@ int main(int argc, char **argv) {
     HIP_CHECK(hipMemcpy(dev_in, host_in.data(), input_n * sizeof(std::uint32_t), hipMemcpyHostToDevice));
     HIP_CHECK(hipMemset(dev_out, 0, output_n * sizeof(std::uint32_t)));
     HIP_CHECK(hipModuleLoad(&module, hsaco_path));
-    HIP_CHECK(hipModuleGetFunction(&kernel, module, "fuzz_kernel"));
+    HIP_CHECK(hipModuleGetFunction(&kernel, module, kernel_name));
 
     void *args[] = {&dev_in, &dev_out, const_cast<std::uint32_t *>(&output_n)};
     constexpr unsigned threads_per_block = 256;
