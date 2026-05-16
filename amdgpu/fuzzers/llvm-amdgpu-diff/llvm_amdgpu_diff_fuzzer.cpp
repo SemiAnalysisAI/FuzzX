@@ -91,6 +91,11 @@ struct Op {
 
 struct Program {
   std::vector<Op> Ops;
+  bool UseStructuredCFG = false;
+  uint8_t CFGPrefix = 0;
+  uint8_t CFGThen = 0;
+  uint8_t CFGElse = 0;
+  uint64_t CFGPredicate = 0;
 };
 
 uint32_t u32(uint64_t V) { return static_cast<uint32_t>(V & U32Mask); }
@@ -181,6 +186,20 @@ bool hasFiveShlAddPairs(ArrayRef<Op> Ops) {
   return false;
 }
 
+void chooseStructuredSlices(const Program &P, size_t &Prefix, size_t &ThenLen,
+                            size_t &ElseLen, size_t &SuffixStart) {
+  size_t Count = P.Ops.size();
+  size_t MaxPrefix = Count - 3;
+  Prefix = P.CFGPrefix % (MaxPrefix + 1);
+
+  size_t Remaining = Count - Prefix;
+  size_t BranchBudget = Remaining - 1;
+  ThenLen = 1 + (P.CFGThen % (BranchBudget - 1));
+  size_t ElseBudget = BranchBudget - ThenLen;
+  ElseLen = 1 + (P.CFGElse % ElseBudget);
+  SuffixStart = Prefix + ThenLen + ElseLen;
+}
+
 bool isVectorOp(const Op &O) { return O.Kind == 21 || O.Kind == 22; }
 
 bool isIdentityVectorLane0(const Op &O) {
@@ -240,6 +259,11 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     }
     P.Ops.push_back(O);
   }
+  P.UseStructuredCFG = P.Ops.size() >= 4 && (BS.next8() & 1);
+  P.CFGPrefix = BS.next8();
+  P.CFGThen = BS.next8();
+  P.CFGElse = BS.next8();
+  P.CFGPredicate = BS.next64();
   return P;
 }
 
@@ -499,6 +523,72 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
   }
 }
 
+Value *emitOps(IRBuilder<> &B, Module &M, Value *V, ArrayRef<Op> Ops) {
+  for (const Op &O : Ops)
+    V = emitOp(B, M, V, O);
+  return V;
+}
+
+Value *emitStructuredOps(IRBuilder<> &B, Module &M, Function *F,
+                         const Program &P, Value *V, Value *Idx) {
+  if (!P.UseStructuredCFG || P.Ops.size() < 4)
+    return emitOps(B, M, V, P.Ops);
+
+  LLVMContext &Ctx = B.getContext();
+  size_t Prefix = 0;
+  size_t ThenLen = 0;
+  size_t ElseLen = 0;
+  size_t SuffixStart = 0;
+  chooseStructuredSlices(P, Prefix, ThenLen, ElseLen, SuffixStart);
+
+  V = emitOps(B, M, V, ArrayRef<Op>(P.Ops).take_front(Prefix));
+  Value *PredBase = B.CreateXor(V, Idx);
+  uint32_t PredicateConst = u32(P.CFGPredicate);
+  Value *Cond = nullptr;
+  switch ((P.CFGPredicate >> 32) & 3u) {
+  case 0:
+    Cond = B.CreateICmpULT(PredBase, ci32(Ctx, PredicateConst));
+    break;
+  case 1:
+    Cond = B.CreateICmpSLT(PredBase, ci32(Ctx, PredicateConst));
+    break;
+  case 2: {
+    uint32_t Mask = u32(P.CFGPredicate >> 8) | 1u;
+    Cond = B.CreateICmpEQ(B.CreateAnd(PredBase, ci32(Ctx, Mask)),
+                          ci32(Ctx, PredicateConst & Mask));
+    break;
+  }
+  default: {
+    uint32_t Mask = u32(P.CFGPredicate >> 16) | 1u;
+    Cond = B.CreateICmpNE(B.CreateAnd(PredBase, ci32(Ctx, Mask)),
+                          ci32(Ctx, PredicateConst & Mask));
+    break;
+  }
+  }
+
+  BasicBlock *ThenBB = BasicBlock::Create(Ctx, "cfg.then", F);
+  BasicBlock *ElseBB = BasicBlock::Create(Ctx, "cfg.else", F);
+  BasicBlock *MergeBB = BasicBlock::Create(Ctx, "cfg.merge", F);
+  B.CreateCondBr(Cond, ThenBB, ElseBB);
+
+  ArrayRef<Op> Ops(P.Ops);
+  B.SetInsertPoint(ThenBB);
+  Value *ThenV = emitOps(B, M, V, Ops.slice(Prefix, ThenLen));
+  B.CreateBr(MergeBB);
+  ThenBB = B.GetInsertBlock();
+
+  B.SetInsertPoint(ElseBB);
+  Value *ElseV = emitOps(B, M, V, Ops.slice(Prefix + ThenLen, ElseLen));
+  B.CreateBr(MergeBB);
+  ElseBB = B.GetInsertBlock();
+
+  B.SetInsertPoint(MergeBB);
+  PHINode *Phi = B.CreatePHI(Type::getInt32Ty(Ctx), 2);
+  Phi->addIncoming(ThenV, ThenBB);
+  Phi->addIncoming(ElseV, ElseBB);
+  return emitOps(B, M, Phi, Ops.drop_front(SuffixStart));
+}
+
 std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
                                     StringRef CPU) {
   auto M = std::make_unique<Module>("fuzzx_amdgpu_diff", Ctx);
@@ -551,8 +641,7 @@ std::unique_ptr<Module> buildModule(LLVMContext &Ctx, const Program &P,
   Value *Idx64 = B.CreateZExt(Idx, I64);
   Value *InPtr = B.CreateGEP(I32, In, Idx64);
   Value *V = B.CreateLoad(I32, InPtr);
-  for (const Op &O : P.Ops)
-    V = emitOp(B, *M, V, O);
+  V = emitStructuredOps(B, *M, F, P, V, Idx);
   Value *OutPtr = B.CreateGEP(I32, Out, Idx64);
   B.CreateStore(V, OutPtr);
   B.CreateBr(Exit);
