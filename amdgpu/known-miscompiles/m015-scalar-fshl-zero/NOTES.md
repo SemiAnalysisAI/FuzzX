@@ -49,4 +49,6 @@ matches, so the suppression is limited to generated `fshl` zero-count shapes.
 ## Fuzzer Suppression
 
 The directed C++ fuzzer avoids generating zero-count `llvm.fshl.i32` by default.
-Set `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` to re-enable this bug class.
+After m016, generated `fshl` is also suppressed broadly. Set
+`FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` to re-enable this zero-count bug class and
+permit generated `fshl` again.

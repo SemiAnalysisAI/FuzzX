@@ -281,6 +281,27 @@ bool isVectorOp(const Op &O) { return O.Kind == 21 || O.Kind == 22; }
 
 bool isPrivateMemoryOp(const Op &O) { return O.Kind == 53 || O.Kind == 58; }
 
+bool isFshlOp(const Op &O) {
+  return O.Kind == 29 || O.Kind == 42 || O.Kind == 54 || O.Kind == 58;
+}
+
+void breakFshl(Op &O) {
+  switch (O.Kind) {
+  case 29:
+    O.Kind = 30;
+    break;
+  case 42:
+  case 54:
+    O.Kind = 55;
+    break;
+  case 58:
+    O.Kind = 53;
+    break;
+  default:
+    break;
+  }
+}
+
 bool hasThreePrivateMemoryOps(ArrayRef<Op> Ops) {
   unsigned Count = 0;
   for (const Op &O : Ops) {
@@ -333,6 +354,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
                    envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
   bool AllowM013 = envFlag("FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL", false);
+  bool AllowM016 = envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false) ||
+                   envFlag("FUZZX_ALLOW_M016_SCALAR_FSHL", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
@@ -356,6 +379,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       breakIdentityNarrow(O);
     if (!AllowM004 && isIdentityVectorLane0(O))
       ++O.B;
+    if (!AllowM016 && isFshlOp(O))
+      breakFshl(O);
     P.Ops.push_back(O);
     if (!AllowM003) {
       if (hasFiveShlAddPairs(P.Ops)) {
@@ -368,7 +393,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     if (!AllowM014 && hasFourShlAddPairsBeforeCtpop(P.Ops))
       P.Ops.back().Kind = 0;
     if (!AllowM013 && hasThreePrivateMemoryOps(P.Ops))
-      P.Ops.back().Kind = 54;
+      P.Ops.back().Kind = AllowM016 ? 54 : 55;
   }
   P.UseStructuredCFG = P.Ops.size() >= 4 && (BS.next8() & 1);
   P.CFGPrefix = BS.next8();
