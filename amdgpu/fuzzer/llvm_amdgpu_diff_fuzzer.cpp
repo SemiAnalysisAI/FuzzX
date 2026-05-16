@@ -35,6 +35,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <random>
 #include <string>
 #include <system_error>
 #include <unistd.h>
@@ -43,6 +44,8 @@
 LLD_HAS_DRIVER(elf)
 
 using namespace llvm;
+
+extern "C" size_t LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
 
 namespace {
 
@@ -457,6 +460,251 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   P.CFGElse = BS.next8();
   P.CFGPredicate = BS.next64();
   return P;
+}
+
+constexpr size_t EncodedProgramOverhead = 13;
+constexpr size_t EncodedOpSize = 25;
+
+unsigned maxEncodedOps(size_t MaxSize) {
+  if (MaxSize < EncodedProgramOverhead + EncodedOpSize)
+    return 0;
+  return std::min<unsigned>(48, (MaxSize - EncodedProgramOverhead) /
+                                    EncodedOpSize);
+}
+
+uint8_t rawKindFor(uint8_t Kind) {
+  if (Kind <= 26)
+    return Kind;
+  if (Kind <= 42)
+    return 0xf0u + (Kind - 27);
+  if (Kind <= 58)
+    return 0xe0u + (Kind - 43);
+  if (Kind <= 74)
+    return 0xd0u + (Kind - 59);
+  if (Kind <= 90)
+    return 0xc0u + (Kind - 75);
+  if (Kind <= 102)
+    return 0xb0u + (Kind - 91);
+  if (Kind <= 118)
+    return 0xa0u + (Kind - 103);
+  if (Kind <= 134)
+    return 0x90u + (Kind - 119);
+  if (Kind <= 142)
+    return 0x80u + (Kind - 135);
+  if (Kind <= 158)
+    return 0x70u + (Kind - 143);
+  if (Kind <= 166)
+    return 0x60u + (Kind - 159);
+  if (Kind <= 172)
+    return 0x50u + (Kind - 167);
+  if (Kind <= 178)
+    return 0x40u + (Kind - 173);
+  if (Kind <= 184)
+    return 0x30u + (Kind - 179);
+  if (Kind <= 194)
+    return 0x10u + (Kind - 185);
+  if (Kind <= 204)
+    return 0x20u + (Kind - 195);
+  return Kind % 27;
+}
+
+void appendLE64(std::vector<uint8_t> &Out, uint64_t V) {
+  for (unsigned I = 0; I < 8; ++I)
+    Out.push_back(static_cast<uint8_t>(V >> (I * 8)));
+}
+
+std::vector<uint8_t> serializeProgram(const Program &P, size_t MaxSize) {
+  unsigned MaxOps = maxEncodedOps(MaxSize);
+  if (MaxOps == 0 || P.Ops.empty())
+    return {};
+
+  unsigned Count = std::min<unsigned>(P.Ops.size(), MaxOps);
+  std::vector<uint8_t> Out;
+  Out.reserve(EncodedProgramOverhead + Count * EncodedOpSize);
+  Out.push_back(static_cast<uint8_t>(Count - 1));
+  for (const Op &O : ArrayRef<Op>(P.Ops).take_front(Count)) {
+    Out.push_back(rawKindFor(O.Kind));
+    appendLE64(Out, O.A);
+    appendLE64(Out, O.B);
+    appendLE64(Out, O.C);
+  }
+  Out.push_back(P.UseStructuredCFG && Count >= 4 ? 1 : 0);
+  Out.push_back(P.CFGPrefix);
+  Out.push_back(P.CFGThen);
+  Out.push_back(P.CFGElse);
+  appendLE64(Out, P.CFGPredicate);
+  return Out.size() <= MaxSize ? Out : std::vector<uint8_t>();
+}
+
+uint64_t random64(std::minstd_rand &Gen) {
+  uint64_t V = 0;
+  for (unsigned I = 0; I < 8; ++I)
+    V |= (static_cast<uint64_t>(Gen() & 0xffu) << (I * 8));
+  return V;
+}
+
+uint64_t randomInteresting64(std::minstd_rand &Gen) {
+  switch (Gen() % 12) {
+  case 0:
+    return 0;
+  case 1:
+    return 1;
+  case 2:
+    return ~0ull;
+  case 3:
+    return 0x7fffffffull;
+  case 4:
+    return 0x80000000ull;
+  case 5:
+    return 0xffffffffull;
+  case 6:
+    return 0x5555555555555555ull;
+  case 7:
+    return 0xaaaaaaaaaaaaaaaaull;
+  case 8:
+    return 1ull << (Gen() % 64);
+  case 9:
+    return (1ull << (Gen() % 63)) - 1;
+  default:
+    return random64(Gen);
+  }
+}
+
+void mutateU64(uint64_t &V, std::minstd_rand &Gen) {
+  if ((Gen() % 4) == 0) {
+    V = randomInteresting64(Gen);
+    return;
+  }
+
+  uint8_t Bytes[8];
+  std::memcpy(Bytes, &V, sizeof(Bytes));
+  size_t NewSize = LLVMFuzzerMutate(Bytes, sizeof(Bytes), sizeof(Bytes));
+  if (NewSize < sizeof(Bytes))
+    std::memset(Bytes + NewSize, 0, sizeof(Bytes) - NewSize);
+  std::memcpy(&V, Bytes, sizeof(Bytes));
+}
+
+uint8_t randomKind(std::minstd_rand &Gen) {
+  struct Family {
+    uint8_t Base;
+    uint8_t Count;
+  };
+  static constexpr std::array<Family, 17> Families = {{
+      {0, 27},   {27, 16},  {43, 16},  {59, 16},  {75, 16},
+      {91, 12},  {103, 16}, {119, 16}, {135, 8},  {143, 16},
+      {159, 8},  {167, 6},  {173, 6},  {179, 6},  {185, 10},
+      {195, 10}, {0, 27},
+  }};
+  Family F = Families[Gen() % Families.size()];
+  return F.Base + (Gen() % F.Count);
+}
+
+Op randomOp(std::minstd_rand &Gen) {
+  return {randomKind(Gen), randomInteresting64(Gen), randomInteresting64(Gen),
+          randomInteresting64(Gen)};
+}
+
+Program normalizeProgram(const Program &P, size_t MaxSize) {
+  std::vector<uint8_t> Bytes = serializeProgram(P, MaxSize);
+  if (Bytes.empty())
+    return P;
+  return makeProgram(Bytes.data(), Bytes.size());
+}
+
+void mutateCFG(Program &P, std::minstd_rand &Gen) {
+  if (P.Ops.size() < 4) {
+    P.UseStructuredCFG = false;
+    return;
+  }
+  switch (Gen() % 5) {
+  case 0:
+    P.UseStructuredCFG = !P.UseStructuredCFG;
+    break;
+  case 1:
+    P.CFGPrefix = static_cast<uint8_t>(Gen());
+    break;
+  case 2:
+    P.CFGThen = static_cast<uint8_t>(Gen());
+    break;
+  case 3:
+    P.CFGElse = static_cast<uint8_t>(Gen());
+    break;
+  default:
+    mutateU64(P.CFGPredicate, Gen);
+    break;
+  }
+}
+
+void mutateProgram(Program &P, unsigned MaxOps, std::minstd_rand &Gen) {
+  if (P.Ops.empty())
+    P.Ops.push_back(randomOp(Gen));
+
+  switch (Gen() % 9) {
+  case 0:
+    if (P.Ops.size() < MaxOps) {
+      auto Pos = P.Ops.begin() + (Gen() % (P.Ops.size() + 1));
+      P.Ops.insert(Pos, randomOp(Gen));
+    }
+    break;
+  case 1:
+    if (P.Ops.size() > 1)
+      P.Ops.erase(P.Ops.begin() + (Gen() % P.Ops.size()));
+    break;
+  case 2:
+    P.Ops[Gen() % P.Ops.size()].Kind = randomKind(Gen);
+    break;
+  case 3: {
+    Op &O = P.Ops[Gen() % P.Ops.size()];
+    switch (Gen() % 3) {
+    case 0:
+      mutateU64(O.A, Gen);
+      break;
+    case 1:
+      mutateU64(O.B, Gen);
+      break;
+    default:
+      mutateU64(O.C, Gen);
+      break;
+    }
+    break;
+  }
+  case 4:
+    if (P.Ops.size() > 1)
+      std::swap(P.Ops[Gen() % P.Ops.size()], P.Ops[Gen() % P.Ops.size()]);
+    break;
+  case 5:
+    if (P.Ops.size() < MaxOps) {
+      size_t Start = Gen() % P.Ops.size();
+      size_t Len = 1 + (Gen() % std::min<size_t>(8, P.Ops.size() - Start));
+      Len = std::min<size_t>(Len, MaxOps - P.Ops.size());
+      auto Pos = P.Ops.begin() + (Gen() % (P.Ops.size() + 1));
+      P.Ops.insert(Pos, P.Ops.begin() + Start, P.Ops.begin() + Start + Len);
+    }
+    break;
+  case 6:
+    P.Ops[Gen() % P.Ops.size()] = randomOp(Gen);
+    break;
+  case 7:
+    mutateCFG(P, Gen);
+    break;
+  default: {
+    std::vector<uint8_t> Bytes = serializeProgram(P, MaxOps * EncodedOpSize +
+                                                         EncodedProgramOverhead);
+    if (!Bytes.empty()) {
+      size_t NewSize = LLVMFuzzerMutate(Bytes.data(), Bytes.size(),
+                                        Bytes.size());
+      P = makeProgram(Bytes.data(), NewSize);
+    }
+    break;
+  }
+  }
+
+  if (P.Ops.size() > MaxOps)
+    P.Ops.resize(MaxOps);
+  if (P.Ops.empty())
+    P.Ops.push_back(randomOp(Gen));
+  if (P.Ops.size() < 4)
+    P.UseStructuredCFG = false;
 }
 
 std::array<uint32_t, InputCount> makeInputs(const uint8_t *Data, size_t Size) {
@@ -4181,6 +4429,90 @@ int getDevice() {
 }
 
 } // namespace
+
+extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
+                                          size_t MaxSize, unsigned Seed) {
+  unsigned MaxOps = maxEncodedOps(MaxSize);
+  if (MaxOps == 0)
+    return 0;
+
+  std::minstd_rand Gen(Seed);
+  Program P = makeProgram(Data, Size);
+
+  unsigned NumMutations = 1;
+  while (NumMutations < 16 && (Gen() % 4) == 0)
+    ++NumMutations;
+
+  for (unsigned I = 0; I < NumMutations; ++I)
+    mutateProgram(P, MaxOps, Gen);
+
+  P = normalizeProgram(P, MaxSize);
+  std::vector<uint8_t> Out = serializeProgram(P, MaxSize);
+  if (Out.empty())
+    return 0;
+
+  std::memcpy(Data, Out.data(), Out.size());
+  return Out.size();
+}
+
+extern "C" size_t LLVMFuzzerCustomCrossOver(const uint8_t *Data1,
+                                            size_t Size1,
+                                            const uint8_t *Data2,
+                                            size_t Size2, uint8_t *Out,
+                                            size_t MaxOutSize,
+                                            unsigned Seed) {
+  unsigned MaxOps = maxEncodedOps(MaxOutSize);
+  if (MaxOps == 0)
+    return 0;
+
+  std::minstd_rand Gen(Seed);
+  Program Base = makeProgram(Data1, Size1);
+  Program Other = makeProgram(Data2, Size2);
+  if (Base.Ops.empty() || Other.Ops.empty())
+    return 0;
+
+  size_t OtherStart = Gen() % Other.Ops.size();
+  size_t OtherLen =
+      1 + (Gen() % std::min<size_t>(8, Other.Ops.size() - OtherStart));
+  size_t InsertPos = Gen() % (Base.Ops.size() + 1);
+  size_t DeleteLen = 0;
+  if (!Base.Ops.empty()) {
+    size_t DeleteBudget = Base.Ops.size() - std::min(InsertPos, Base.Ops.size());
+    DeleteLen = Gen() % (std::min<size_t>(8, DeleteBudget) + 1);
+  }
+
+  auto DeleteBegin = Base.Ops.begin() + std::min(InsertPos, Base.Ops.size());
+  Base.Ops.erase(DeleteBegin, DeleteBegin + DeleteLen);
+  OtherLen =
+      std::min<size_t>(OtherLen,
+                       MaxOps - std::min<size_t>(Base.Ops.size(), MaxOps));
+  if (OtherLen > 0) {
+    InsertPos = std::min(InsertPos, Base.Ops.size());
+    Base.Ops.insert(Base.Ops.begin() + InsertPos, Other.Ops.begin() + OtherStart,
+                    Other.Ops.begin() + OtherStart + OtherLen);
+  }
+  if (Base.Ops.size() > MaxOps)
+    Base.Ops.resize(MaxOps);
+  if (Base.Ops.empty())
+    Base.Ops.push_back(randomOp(Gen));
+
+  if ((Gen() & 1) && Other.Ops.size() >= 4) {
+    Base.UseStructuredCFG = Other.UseStructuredCFG;
+    Base.CFGPrefix = Other.CFGPrefix;
+    Base.CFGThen = Other.CFGThen;
+    Base.CFGElse = Other.CFGElse;
+    Base.CFGPredicate = Other.CFGPredicate;
+  }
+  if (Base.Ops.size() < 4)
+    Base.UseStructuredCFG = false;
+
+  Base = normalizeProgram(Base, MaxOutSize);
+  std::vector<uint8_t> Buffer = serializeProgram(Base, MaxOutSize);
+  if (Buffer.empty())
+    return 0;
+  std::memcpy(Out, Buffer.data(), Buffer.size());
+  return Buffer.size();
+}
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   if (Size < 2 || Size > 4096)

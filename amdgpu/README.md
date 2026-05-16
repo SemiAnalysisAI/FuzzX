@@ -28,6 +28,12 @@ Set `FUZZX_ENABLE_ORACLE=1` to also compare GPU output against the fuzzer's
 integer/bit/vector/private-memory/LDS/global-memory/atomic semantic oracle.
 FP operations currently remain differential-only in oracle mode.
 
+The corpus format is a compact binary encoding of this restricted `Program`
+model, not textual LLVM IR. The fuzzer provides `LLVMFuzzerCustomMutator` and
+`LLVMFuzzerCustomCrossOver` so libFuzzer mutates whole operations, operation
+constants, CFG controls, and operation ranges instead of mostly corrupting byte
+boundaries.
+
 ## Requirements
 
 | Component | Notes |
