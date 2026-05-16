@@ -18,6 +18,7 @@ FUZZX_FINDINGS_DIR="${FUZZX_FINDINGS_DIR:-$RUNTIME_ROOT/findings}"
 TMPDIR="${FUZZX_TMPDIR:-$RUNTIME_ROOT/tmp}"
 FUZZX_LOCALIZE_FUZZER="${FUZZX_LOCALIZE_FUZZER:-1}"
 FUZZX_CPUSET="${FUZZX_CPUSET:-auto}"
+FUZZX_CORPUS_MODE="${FUZZX_CORPUS_MODE:-shared}"
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 resolve_cpuset() {
@@ -101,6 +102,19 @@ if ! [[ "$WORKERS_PER_GPU" =~ ^[1-9][0-9]*$ ]]; then
     exit 2
 fi
 
+case "$FUZZX_CORPUS_MODE" in
+    shared | on | true | 1)
+        FUZZX_CORPUS_MODE=shared
+        ;;
+    isolated | off | false | 0)
+        FUZZX_CORPUS_MODE=isolated
+        ;;
+    *)
+        echo "FUZZX_CORPUS_MODE must be 'shared' or 'isolated'" >&2
+        exit 2
+        ;;
+esac
+
 mkdir -p "$CORPUS_ROOT" "$ARTIFACT_ROOT" "$LOG_DIR" "$FUZZX_FINDINGS_DIR" "$TMPDIR"
 RESOLVED_CPUSET="$(resolve_cpuset)"
 CPUSET_CMD=()
@@ -111,8 +125,20 @@ export TMPDIR
 export FUZZX_FINDINGS_DIR
 export ASAN_OPTIONS
 
+seed_corpus_if_empty() {
+    local corpus="$1"
+    if ! compgen -G "$corpus/*" >/dev/null; then
+        printf '\001\002\003\004\005\006\007\010' >"$corpus/seed"
+    fi
+}
+
 start_seconds="$SECONDS"
 status=0
+SHARED_CORPUS="$CORPUS_ROOT/shared"
+if [[ "$FUZZX_CORPUS_MODE" == shared ]]; then
+    mkdir -p "$SHARED_CORPUS"
+    seed_corpus_if_empty "$SHARED_CORPUS"
+fi
 for device in "${GPU_LIST[@]}"; do
     for ((worker = 0; worker < WORKERS_PER_GPU; ++worker)); do
         if [[ "$WORKERS_PER_GPU" -eq 1 ]]; then
@@ -120,12 +146,14 @@ for device in "${GPU_LIST[@]}"; do
         else
             name="device-$device-worker-$worker"
         fi
-        corpus="$CORPUS_ROOT/$name"
+        if [[ "$FUZZX_CORPUS_MODE" == shared ]]; then
+            corpus="$SHARED_CORPUS"
+        else
+            corpus="$CORPUS_ROOT/$name"
+        fi
         artifacts="$ARTIFACT_ROOT/$name"
         mkdir -p "$corpus" "$artifacts"
-        if ! compgen -G "$corpus/*" >/dev/null; then
-            printf '\001\002\003\004\005\006\007\010' >"$corpus/seed"
-        fi
+        seed_corpus_if_empty "$corpus"
         HIP_DEVICE="$device" "${CPUSET_CMD[@]}" "$FUZZER_BIN" "$corpus" \
             -artifact_prefix="$artifacts/" \
             "$@" >"$LOG_DIR/$name.log" 2>&1 &
@@ -139,6 +167,10 @@ done
 elapsed="$((SECONDS - start_seconds))"
 echo "logs: $LOG_DIR"
 echo "corpus: $CORPUS_ROOT"
+echo "corpus_mode: $FUZZX_CORPUS_MODE"
+if [[ "$FUZZX_CORPUS_MODE" == shared ]]; then
+    echo "shared_corpus: $SHARED_CORPUS"
+fi
 echo "artifacts: $ARTIFACT_ROOT"
 echo "findings: $FUZZX_FINDINGS_DIR"
 echo "tmp: $TMPDIR"

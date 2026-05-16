@@ -57,11 +57,16 @@ Run one directed fuzzer process per GPU:
 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
 ```
 
-Run multiple independent directed fuzzer workers on each selected GPU:
+Run multiple directed fuzzer workers on each selected GPU:
 
 ```bash
 WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
 ```
+
+Multi-GPU runs share one live libFuzzer corpus by default, so workers can
+reload inputs discovered by other workers while keeping per-worker logs and
+artifact directories. Set `FUZZX_CORPUS_MODE=isolated` to return to one
+independent corpus directory per worker.
 
 With an optimized ROCm 7.2.3 LLVM build using sanitizer coverage and no ASan,
 the directed fuzzer currently reaches about 500 exec/s aggregate across 8 GPUs.
