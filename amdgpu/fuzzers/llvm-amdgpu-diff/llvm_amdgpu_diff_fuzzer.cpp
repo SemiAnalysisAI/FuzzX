@@ -139,6 +139,26 @@ bool triggersM002(const Op &O) { return isIdentityNarrow(O, 8); }
 
 bool triggersM009(const Op &O) { return isIdentityNarrow(O, 16); }
 
+bool triggersM010(const Op &O) {
+  if (O.Kind != 28)
+    return false;
+  uint64_t Mask = 0xffffu;
+  switch (narrowVariant(O)) {
+  case 0:
+  case 1:
+  case 3:
+    return (O.A & Mask) == 0;
+  case 2:
+    return (O.A & Mask) == 1;
+  case 4:
+  case 5:
+  case 6:
+    return narrowShift(O, 16) == 0;
+  default:
+    return false;
+  }
+}
+
 void breakIdentityNarrow(Op &O) {
   switch (narrowVariant(O)) {
   case 0:
@@ -237,6 +257,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
                    envFlag("FUZZX_ALLOW_M006_I8_CLEAR_XOR", false) ||
                    envFlag("FUZZX_ALLOW_M008_I8_CLEAR_XOR", false);
   bool AllowM009 = envFlag("FUZZX_ALLOW_M009_I16_CLEAR_XOR", false);
+  bool AllowM010 = envFlag("FUZZX_ALLOW_M010_I16_SEXT_CLEAR_XOR", false);
   bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false) ||
                    envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
@@ -253,6 +274,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
     if (!AllowM002 && triggersM002(O))
       breakIdentityNarrow(O);
     if (!AllowM009 && triggersM009(O))
+      breakIdentityNarrow(O);
+    if (!AllowM010 && triggersM010(O))
       breakIdentityNarrow(O);
     if (!AllowM004 && isIdentityVectorLane0(O))
       ++O.B;
