@@ -272,6 +272,17 @@ void chooseStructuredSlices(const Program &P, size_t &Prefix, size_t &ThenLen,
 
 bool isVectorOp(const Op &O) { return O.Kind == 21 || O.Kind == 22; }
 
+bool isPrivateMemoryOp(const Op &O) { return O.Kind == 53 || O.Kind == 58; }
+
+bool hasFivePrivateMemoryOps(ArrayRef<Op> Ops) {
+  unsigned Count = 0;
+  for (const Op &O : Ops) {
+    if (isPrivateMemoryOp(O) && ++Count >= 5)
+      return true;
+  }
+  return false;
+}
+
 bool isIdentityVectorLane0(const Op &O) {
   if (!isVectorOp(O))
     return false;
@@ -313,6 +324,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
                    envFlag("FUZZX_ALLOW_M012_ADD_SHL_LADDER", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false) ||
                    envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
+  bool AllowM013 = envFlag("FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
@@ -334,17 +346,17 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       breakIdentityNarrow(O);
     if (!AllowM004 && isIdentityVectorLane0(O))
       ++O.B;
+    P.Ops.push_back(O);
     if (!AllowM003) {
-      P.Ops.push_back(O);
       if (hasFiveShlAddPairs(P.Ops)) {
         P.Ops.back().Kind = 3;
         ++P.Ops.back().A;
       } else if (hasAddShlLadder(P.Ops)) {
         P.Ops.back().Kind = 11;
       }
-      continue;
     }
-    P.Ops.push_back(O);
+    if (!AllowM013 && hasFivePrivateMemoryOps(P.Ops))
+      P.Ops.back().Kind = 54;
   }
   P.UseStructuredCFG = P.Ops.size() >= 4 && (BS.next8() & 1);
   P.CFGPrefix = BS.next8();

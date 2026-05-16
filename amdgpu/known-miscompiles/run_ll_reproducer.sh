@@ -17,6 +17,7 @@ else
 fi
 INPUTS_TEXT="${2:-}"
 DEVICE="${3:-0}"
+REPEAT_TEXT="${4:-}"
 
 ROCM_PATH="${ROCM_PATH:-/opt/rocm-7.1.1}"
 MCPU="${MCPU:-gfx950}"
@@ -67,9 +68,20 @@ if [[ -z "$INPUTS_TEXT" ]]; then
     INPUTS_TEXT="$(sed -n -E 's/^[[:space:]]*;[[:space:]]*RUN-INPUTS:[[:space:]]*//p' "$LL_FILE" | head -n 1)"
 fi
 
+if [[ -z "$REPEAT_TEXT" ]]; then
+    REPEAT_TEXT="$(sed -n -E 's/^[[:space:]]*;[[:space:]]*RUN-REPEAT:[[:space:]]*//p' "$LL_FILE" | head -n 1)"
+fi
+
+REPEAT="${REPEAT_TEXT:-1}"
+
 if [[ -z "$INPUTS_TEXT" ]]; then
     echo "no input values specified" >&2
     echo "pass inputs as the second argument, or add '; RUN-INPUTS: 0x...' to the .ll file" >&2
+    exit 2
+fi
+
+if ! [[ "$REPEAT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "RUN-REPEAT must be a positive integer: $REPEAT" >&2
     exit 2
 fi
 
@@ -83,7 +95,16 @@ import sys
 
 text = sys.argv[1].strip().strip("[]")
 tokens = [token for token in re.split(r"[\s,]+", text) if token]
-values = [int(token, 0) & 0xffffffff for token in tokens]
+values = []
+for token in tokens:
+    if "*" in token:
+        value_text, count_text = token.rsplit("*", 1)
+        count = int(count_text, 0)
+        if count < 0:
+            raise SystemExit(f"negative repeat count in {token!r}")
+        values.extend([int(value_text, 0) & 0xffffffff] * count)
+    else:
+        values.append(int(token, 0) & 0xffffffff)
 if not values:
     raise SystemExit("no input values parsed")
 with open(sys.argv[2], "wb") as f:
@@ -97,18 +118,29 @@ for opt in O0 O2; do
     "$CLANG" "-$opt" -nogpulib -target amdgcn-amd-amdhsa -mcpu="$MCPU" \
         -x ir -c "$LL_FILE" -o "$TMPDIR/$opt.o"
     "$LLD" -flavor gnu -shared "$TMPDIR/$opt.o" -o "$TMPDIR/$opt.hsaco"
-    "$RUNNER" "$TMPDIR/$opt.hsaco" "$TMPDIR/input.bin" "$TMPDIR/$opt.out" \
-        "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT"
 done
 
-python3 - "$INPUTS_TEXT" "$TMPDIR/O0.out" "$TMPDIR/O2.out" <<'PY'
+for ((iteration = 1; iteration <= REPEAT; ++iteration)); do
+    for opt in O0 O2; do
+        "$RUNNER" "$TMPDIR/$opt.hsaco" "$TMPDIR/input.bin" "$TMPDIR/$opt.out" \
+            "$INPUT_COUNT" "$DEVICE" "$INPUT_COUNT"
+    done
+
+    if [[ "$REPEAT" -eq 1 ]]; then
+        python3 - "$INPUTS_TEXT" "$TMPDIR/O0.out" "$TMPDIR/O2.out" full "$iteration" <<'PY'
 import re
 import struct
 import sys
 
 text = sys.argv[1].strip().strip("[]")
-inputs = [int(token, 0) & 0xffffffff
-          for token in re.split(r"[\s,]+", text) if token]
+tokens = [token for token in re.split(r"[\s,]+", text) if token]
+inputs = []
+for token in tokens:
+    if "*" in token:
+        value_text, count_text = token.rsplit("*", 1)
+        inputs.extend([int(value_text, 0) & 0xffffffff] * int(count_text, 0))
+    else:
+        inputs.append(int(token, 0) & 0xffffffff)
 
 def read_u32s(path):
     with open(path, "rb") as f:
@@ -131,3 +163,49 @@ else:
         print(f"[{index}] input=0x{input_value:08x} O0=0x{o0:08x} O2=0x{o2:08x} mismatch={'true' if mismatch else 'false'}")
     print(f"any_mismatch={'true' if any_mismatch else 'false'}")
 PY
+    else
+        if python3 - "$INPUTS_TEXT" "$TMPDIR/O0.out" "$TMPDIR/O2.out" brief "$iteration" <<'PY'
+import re
+import struct
+import sys
+
+text = sys.argv[1].strip().strip("[]")
+tokens = [token for token in re.split(r"[\s,]+", text) if token]
+inputs = []
+for token in tokens:
+    if "*" in token:
+        value_text, count_text = token.rsplit("*", 1)
+        inputs.extend([int(value_text, 0) & 0xffffffff] * int(count_text, 0))
+    else:
+        inputs.append(int(token, 0) & 0xffffffff)
+
+def read_u32s(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return list(struct.unpack("<" + "I" * (len(data) // 4), data))
+
+o0_values = read_u32s(sys.argv[2])
+o2_values = read_u32s(sys.argv[3])
+iteration = int(sys.argv[5])
+
+for index, (input_value, o0, o2) in enumerate(zip(inputs, o0_values, o2_values)):
+    if o0 != o2:
+        print(f"iteration={iteration}")
+        print(f"index={index}")
+        print(f"input=0x{input_value:08x}")
+        print(f"O0=0x{o0:08x}")
+        print(f"O2=0x{o2:08x}")
+        print("mismatch=true")
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+        then
+            exit 0
+        fi
+    fi
+done
+
+if [[ "$REPEAT" -gt 1 ]]; then
+    echo "mismatch=false"
+    echo "iterations=$REPEAT"
+fi

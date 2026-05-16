@@ -32,6 +32,11 @@ known-miscompiles/run_ll_reproducer.sh \
   "0x7fffffff,0x00008000"
 ```
 
+Repeated input values can be written as `value*count`, for example
+`0x0*129`. Intermittent testcases can add `; RUN-REPEAT: N`, or pass the repeat
+count as the fourth argument; in repeat mode the runner stops at the first
+observed O0/O2 mismatch.
+
 The runner defaults to `/opt/rocm-7.1.1`, `gfx950`, and device `0`. Override
 those with `ROCM_PATH`, `MCPU`, and the script's third argument respectively.
 If a testcase has a `; RUN-LLVM-BUILD:` comment and `CLANG` / `LLD` are not set,
