@@ -52,8 +52,6 @@ LLD_HAS_DRIVER(elf)
 
 using namespace llvm;
 
-extern "C" size_t LLVMFuzzerMutate(uint8_t *Data, size_t Size, size_t MaxSize);
-
 namespace {
 
 constexpr unsigned ThreadsPerBlock = 256;

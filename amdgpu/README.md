@@ -3,8 +3,8 @@
 This directory contains the AMDGPU fuzzer work area.  It is intentionally
 separate from the PTX / `ptxas` fuzzer in [`../ptx/`](../ptx/).
 
-The current fuzzer is the directed C++ libFuzzer target in `fuzzer/`. Its
-corpus entries are LLVM bitcode modules containing an AMDGPU kernel named
+The AMDGPU fuzzer is the directed C++ libFuzzer target in `fuzzer/`. Its only
+input format is an LLVM bitcode module containing an AMDGPU kernel named
 `fuzz_kernel`. For each input module, the fuzzer compiles the kernel through
 `-O0` and `-O2` LLVM pipelines, links both code objects into one HSACO, runs
 both kernels through HIP, and compares device output.
