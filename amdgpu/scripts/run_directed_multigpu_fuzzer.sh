@@ -125,19 +125,12 @@ export TMPDIR
 export FUZZX_FINDINGS_DIR
 export ASAN_OPTIONS
 
-seed_corpus_if_empty() {
-    local corpus="$1"
-    if ! compgen -G "$corpus/*" >/dev/null; then
-        printf '\001\002\003\004\005\006\007\010' >"$corpus/seed"
-    fi
-}
-
 start_seconds="$SECONDS"
 status=0
 SHARED_CORPUS="$CORPUS_ROOT/shared"
 if [[ "$FUZZX_CORPUS_MODE" == shared ]]; then
     mkdir -p "$SHARED_CORPUS"
-    seed_corpus_if_empty "$SHARED_CORPUS"
+    "$ROOT/scripts/seed_ir_corpus.sh" "$SHARED_CORPUS"
 fi
 for device in "${GPU_LIST[@]}"; do
     for ((worker = 0; worker < WORKERS_PER_GPU; ++worker)); do
@@ -153,7 +146,7 @@ for device in "${GPU_LIST[@]}"; do
         fi
         artifacts="$ARTIFACT_ROOT/$name"
         mkdir -p "$corpus" "$artifacts"
-        seed_corpus_if_empty "$corpus"
+        "$ROOT/scripts/seed_ir_corpus.sh" "$corpus"
         HIP_DEVICE="$device" "${CPUSET_CMD[@]}" "$FUZZER_BIN" "$corpus" \
             -artifact_prefix="$artifacts/" \
             "$@" >"$LOG_DIR/$name.log" 2>&1 &

@@ -3,36 +3,19 @@
 This directory contains the AMDGPU fuzzer work area.  It is intentionally
 separate from the PTX / `ptxas` fuzzer in [`../ptx/`](../ptx/).
 
-The current fuzzer is the directed C++ libFuzzer target in
-`fuzzer/`. It builds restricted LLVM IR through LLVM's C++ API,
-compiles the IR to AMDGPU code objects through `-O0` and `-O2` LLVM pipelines,
-runs both through HIP, and compares device output.  The generator emits only
-operations with defined LLVM semantics: no `undef`, no `poison`, no `nuw` /
-`nsw` / `exact`, no `inbounds`, no division, and all shift amounts are constants
-below the shifted value's bit width.  Coverage includes scalar integer ops,
-small-width integer ops, packed `i8` / `i16` vectors, selects, structured CFG,
-private-memory, LDS/local-memory, and global scratch load/store sequences, and
-deterministic per-workitem LDS/global `atomicrmw` sequences, and LLVM overflow,
-saturation, bit, and
-funnel-shift intrinsics across scalar, small-width, and widened integer types.
-The generated IR also covers narrow min/max intrinsics, widened compare /
-select and `fshr` paths, and masked dynamic shifts across scalar and narrow
-integer widths. Packed-vector coverage includes saturating arithmetic, bit
-intrinsics, and masked dynamic shifts. Wider `i32` vectors cover min/max, bit
-intrinsics, masked dynamic shifts, vector `fshr`, and vectors whose lanes are
-all derived from the live input value. Floating-point coverage includes finite
-`half`, `float`, and `double` arithmetic, comparisons, `fabs`, `sqrt`, `fma`,
-`fdiv`, and `double`-to-`float` rounding; the generator keeps the values
-bounded and mixes them back through bitcasts to avoid FP-to-integer poison.
-Set `FUZZX_ENABLE_ORACLE=1` to also compare GPU output against the fuzzer's
-integer/bit/vector/private-memory/LDS/global-memory/atomic semantic oracle.
-FP operations currently remain differential-only in oracle mode.
+The current fuzzer is the directed C++ libFuzzer target in `fuzzer/`. Its
+corpus entries are LLVM bitcode modules containing an AMDGPU kernel named
+`fuzz_kernel`. For each input module, the fuzzer compiles the kernel through
+`-O0` and `-O2` LLVM pipelines, links both code objects into one HSACO, runs
+both kernels through HIP, and compares device output.
 
-The corpus format is a compact binary encoding of this restricted `Program`
-model, not textual LLVM IR. The fuzzer provides `LLVMFuzzerCustomMutator` and
-`LLVMFuzzerCustomCrossOver` so libFuzzer mutates whole operations, operation
-constants, CFG controls, and operation ranges instead of mostly corrupting byte
-boundaries.
+The custom mutator and crossover operate on LLVM IR rather than on raw bytes.
+They currently build a conservative, defined subset of integer IR: no `undef`,
+no explicit poison values, no `nuw` / `nsw` / `exact`, no `inbounds`, no
+integer division, and only masked or constant shift amounts. Coverage includes
+scalar integer arithmetic, bitwise ops, compares/selects, and LLVM bit,
+min/max, saturation, and funnel-shift intrinsics. Corpus files can be inspected
+directly with `opt -S corpus-entry -o -`.
 
 ## Requirements
 
@@ -48,25 +31,27 @@ Build and run the directed C++ GPU differential fuzzer:
 
 ```bash
 scripts/build_directed_fuzzer.sh
-HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=512
+HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=65536
 ```
 
 Run one directed fuzzer process per GPU:
 
 ```bash
-scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
+scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=65536
 ```
 
 Run multiple directed fuzzer workers on each selected GPU:
 
 ```bash
-WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=512
+WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=65536
 ```
 
 Multi-GPU runs share one live libFuzzer corpus by default, so workers can
 reload inputs discovered by other workers while keeping per-worker logs and
 artifact directories. Set `FUZZX_CORPUS_MODE=isolated` to return to one
 independent corpus directory per worker.
+Fresh corpus directories are seeded with a valid LLVM bitcode module before
+libFuzzer starts.
 
 With an optimized ROCm 7.2.3 LLVM build using sanitizer coverage and no ASan,
 the directed fuzzer currently reaches about 500 exec/s aggregate across 8 GPUs.
@@ -85,52 +70,16 @@ CPU set.
 For ROCm 7.2.3 release fuzzing, use the release wrapper:
 
 ```bash
-scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
+scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=65536 -rss_limit_mb=8192 -use_value_profile=1
 ```
 
-To look for lowering bugs shared by both optimization levels, enable the
-expected-output oracle:
-
-```bash
-FUZZX_ENABLE_ORACLE=1 scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=1024 -rss_limit_mb=8192 -use_value_profile=1
-```
-
-That wrapper keeps the release-reproducing bugs suppressed (`m001`, `m013`,
-`m017`, and `m018`), but explicitly re-enables the idioms that only failed on
-LLVM HEAD / ROCm HEAD in the checked matrix (`m002` through `m012`, plus `m014`
-through `m016`).
+That wrapper selects the ROCm 7.2.3 fuzzer build.
 
 Candidate compiler crashes, runner failures, or output mismatches are saved
 under `$FUZZX_RUNTIME_ROOT/findings` by default. Generated corpora and findings
 are local artifacts and are ignored by git; set `FUZZX_RUNTIME_ROOT`,
 `CORPUS_ROOT`, `LOG_DIR`, `ARTIFACT_ROOT`, or `FUZZX_FINDINGS_DIR` to override
 the default local runtime paths.
-
-### Known-Bug Suppression
-
-Known bug patterns are suppressed by default so continued fuzzing does not keep
-rediscovering the same issue.
-
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable the directed C++ fuzzer shape for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
-| `FUZZX_ALLOW_M002_I8_CLEAR_XOR=1` | unset | Re-enable the adjacent `i8` narrow/xor shape for [m002](known-miscompiles/m002-i8-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M003_SHL3_ADD_CHAIN=1` | unset | Re-enable the five-step `shl/add` chain shape found by [m003](known-miscompiles/m003-shl3-add-chain/NOTES.md). |
-| `FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR=1` | unset | Re-enable vector lane-0 identity xor shapes including [m004](known-miscompiles/m004-vector-identity-xor/NOTES.md) and [m017](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M005_SHL_ADD_CHAIN=1` | unset | Alias to re-enable the broader five-step `shl/add` chain shape for [m005](known-miscompiles/m005-shl1-add-chain/NOTES.md). |
-| `FUZZX_ALLOW_M006_I8_CLEAR_XOR=1` | unset | Alias to re-enable the broader adjacent `i8` narrow/xor shape for [m006](known-miscompiles/m006-i8-xor-clear/NOTES.md). |
-| `FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR=1` | unset | Alias to re-enable the broader vector lane-0 identity xor shape for [m007](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md). |
-| `FUZZX_ALLOW_M008_I8_CLEAR_XOR=1` | unset | Alias to re-enable the broader `i8` identity byte-clear xor shape for [m008](known-miscompiles/m008-i8-separated-clear/NOTES.md). |
-| `FUZZX_ALLOW_M009_I16_CLEAR_XOR=1` | unset | Re-enable the `i16` identity low-16 clear xor shape for [m009](known-miscompiles/m009-i16-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M010_I16_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i16` sign-extended identity clear xor shape for [m010](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M011_I8_SEXT_CLEAR_XOR=1` | unset | Re-enable the `i8` sign-extended identity clear xor shape for [m011](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M012_ADD_SHL_LADDER=1` | unset | Alias to re-enable the broader `add/shl` ladder shape for [m012](known-miscompiles/m012-add-shl-ladder/NOTES.md). |
-| `FUZZX_ALLOW_M013_PRIVATE_MEMORY_FSHL=1` | unset | Re-enable three-or-more private-memory/funnel-shift ops for [m013](known-miscompiles/m013-private-memory-fshl/NOTES.md). |
-| `FUZZX_ALLOW_M014_SHL_ADD_CTPOP=1` | unset | Re-enable four-step `shl/add` chains feeding `ctpop` for [m014](known-miscompiles/m014-shl-add-ctpop/NOTES.md). |
-| `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` | unset | Re-enable zero-count `fshl` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md); this also permits generated `fshl` after m016. |
-| `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable nonzero scalar `fshl` generation for [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md). |
-| `FUZZX_ALLOW_M017_VECTOR_AND_LANE0_CLEAR_XOR=1` | unset | Re-enable vector lane-0 `and`/`extractelement` clear-xor shapes for [m017](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md). |
-| `FUZZX_ALLOW_M018_TWO_PRIVATE_MEMORY_OPS=1` | unset | Re-enable programs with two private-memory operations for [m018](known-miscompiles/m018-two-private-memory-ops/NOTES.md). |
 
 ## Layout
 
@@ -139,9 +88,10 @@ rediscovering the same issue.
 | `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
+| `scripts/seed_ir_corpus.sh` | Writes the initial LLVM bitcode corpus seed. |
 | `scripts/run_directed_fuzzer.sh` | Runs the C++ directed fuzzer on one GPU. |
 | `scripts/run_directed_multigpu_fuzzer.sh` | Runs one or more C++ directed fuzzer processes per selected GPU. |
-| `scripts/run_rocm_7_2_3_release_fuzzer.sh` | Runs the C++ directed fuzzer with the ROCm 7.2.3 release suppression policy. |
+| `scripts/run_rocm_7_2_3_release_fuzzer.sh` | Runs the C++ directed fuzzer with the ROCm 7.2.3 release build. |
 | `fuzzer/` | LLVM API plus HIP differential libFuzzer target. |
 | `runner/hip_module_runner.cpp` | HIP module loader used to execute generated HSACO files. |
 | `known-miscompiles/` | Reduced or standalone reproducers for confirmed findings. |

@@ -83,9 +83,7 @@ if [[ "$FUZZX_LOCALIZE_FUZZER" != "0" && "$FUZZX_LOCALIZE_FUZZER" != "false" ]];
 fi
 
 mkdir -p "$CORPUS_DIR" "$ARTIFACT_DIR" "$FUZZX_FINDINGS_DIR" "$TMPDIR"
-if ! compgen -G "$CORPUS_DIR/*" >/dev/null; then
-    printf '\001\002\003\004\005\006\007\010' >"$CORPUS_DIR/seed"
-fi
+"$ROOT/scripts/seed_ir_corpus.sh" "$CORPUS_DIR"
 
 RESOLVED_CPUSET="$(resolve_cpuset)"
 CPUSET_CMD=()
