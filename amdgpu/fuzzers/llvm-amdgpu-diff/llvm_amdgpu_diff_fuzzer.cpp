@@ -243,8 +243,11 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
                    envFlag("FUZZX_ALLOW_M007_VECTOR_IDENTITY_XOR", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
-    Op O{static_cast<uint8_t>(BS.next8() % 27), BS.next64(), BS.next64(),
-         BS.next64()};
+    uint8_t RawKind = BS.next8();
+    uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf8u) == 0xf8u)
+      Kind = 27 + (RawKind & 1u);
+    Op O{Kind, BS.next64(), BS.next64(), BS.next64()};
     if (!AllowM001 && O.Kind == 19 && O.C % 7 == 6)
       ++O.C;
     if (!AllowM002 && triggersM002(O))
@@ -303,7 +306,8 @@ Constant *vectorConstant(LLVMContext &Ctx, ArrayRef<uint32_t> Values,
   return ConstantVector::get(Constants);
 }
 
-Value *emitNarrow(IRBuilder<> &B, Value *V, unsigned Bits, const Op &O) {
+Value *emitNarrow(IRBuilder<> &B, Value *V, unsigned Bits, const Op &O,
+                  bool SignedExtend = false) {
   LLVMContext &Ctx = B.getContext();
   Type *NarrowTy = Type::getIntNTy(Ctx, Bits);
   uint32_t Mask = (1u << Bits) - 1u;
@@ -333,7 +337,10 @@ Value *emitNarrow(IRBuilder<> &B, Value *V, unsigned Bits, const Op &O) {
     Mixed = B.CreateAShr(N, ConstantInt::get(NarrowTy, Shift));
     break;
   }
-  return B.CreateXor(V, B.CreateZExt(Mixed, Type::getInt32Ty(Ctx)));
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Extended = SignedExtend ? B.CreateSExt(Mixed, I32)
+                                 : B.CreateZExt(Mixed, I32);
+  return B.CreateXor(V, Extended);
 }
 
 Value *emitWide(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
@@ -518,6 +525,10 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, const Op &O) {
     Value *F = B.CreateXor(V, ci32(Ctx, u32(O.C)));
     return B.CreateSelect(Cmp, T, F);
   }
+  case 27:
+    return emitNarrow(B, V, 8, O, true);
+  case 28:
+    return emitNarrow(B, V, 16, O, true);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
