@@ -108,7 +108,7 @@ Tested toolchains as of 2026-05-16:
 | LLVM HEAD | https://github.com/llvm/llvm-project/commit/10756d32f96154f0889eda159ea9a26bc4188bda (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
 | ROCm HEAD | https://github.com/ROCm/llvm-project/commit/9115c466b3577830455f70c4f492429bf6c64b25 (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
 
-| Bug | ROCm rel | LLVM HEAD | ROCm HEAD | Description |
+| Bug | ROCm 7.2.3 | LLVM HEAD | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
 | [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md) | ❌ | ❌ | ❌ | `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
 | [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result. |
@@ -126,6 +126,8 @@ Tested toolchains as of 2026-05-16:
 | [m014-shl-add-ctpop](known-miscompiles/m014-shl-add-ctpop/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a four-step `shl/add` chain feeding `ctpop` through lane 0. |
 | [m015-scalar-fshl-zero](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 0)` through a 64-bit shift-by-`-1` sequence that returns zero. |
 | [m016-scalar-fshl-one](known-miscompiles/m016-scalar-fshl-one/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 1)` through a 64-bit shift-by-`-1` sequence that returns only bit 31. |
+
+*Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 
 ## LLVM Source Builds
 
