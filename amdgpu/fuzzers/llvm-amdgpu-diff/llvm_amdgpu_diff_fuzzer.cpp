@@ -104,17 +104,107 @@ bool envFlag(const char *Name, bool Default) {
          std::strcmp(Value, "off") != 0;
 }
 
+unsigned narrowVariant(const Op &O) { return O.C % 7; }
+
+unsigned narrowShift(const Op &O, unsigned Bits) {
+  return static_cast<unsigned>(O.B) & (Bits - 1);
+}
+
+bool isIdentityNarrow8(const Op &O) {
+  if (O.Kind != 18)
+    return false;
+  switch (narrowVariant(O)) {
+  case 0:
+  case 1:
+  case 3:
+    return (O.A & 0xffu) == 0;
+  case 2:
+    return (O.A & 0xffu) == 1;
+  case 4:
+  case 5:
+  case 6:
+    return narrowShift(O, 8) == 0;
+  default:
+    return false;
+  }
+}
+
+bool triggersM002(ArrayRef<Op> Ops, const Op &O) {
+  return !Ops.empty() && Ops.back().Kind == 18 &&
+         narrowVariant(Ops.back()) == 0 && isIdentityNarrow8(O);
+}
+
+void breakIdentityNarrow8(Op &O) {
+  switch (narrowVariant(O)) {
+  case 0:
+  case 1:
+  case 2:
+  case 3:
+    ++O.A;
+    break;
+  case 4:
+  case 5:
+  case 6:
+    ++O.B;
+    break;
+  }
+}
+
+bool isI32Shl3(const Op &O) { return O.Kind == 6 && (O.A & 31u) == 3; }
+
+bool isI32Add(const Op &O) { return O.Kind == 0; }
+
+bool isI32AddZero(const Op &O) { return isI32Add(O) && u32(O.A) == 0; }
+
+bool hasFiveShl3AddPairs(ArrayRef<Op> Ops) {
+  unsigned Pairs = 0;
+  bool NeedAdd = false;
+  for (const Op &O : Ops) {
+    if (NeedAdd) {
+      if (isI32Add(O)) {
+        ++Pairs;
+        NeedAdd = false;
+        if (Pairs >= 5)
+          return true;
+        continue;
+      }
+      Pairs = 0;
+      NeedAdd = false;
+    } else if (isI32AddZero(O)) {
+      continue;
+    }
+
+    if (isI32Shl3(O))
+      NeedAdd = true;
+    else if (!isI32AddZero(O))
+      Pairs = 0;
+  }
+  return false;
+}
+
 Program makeProgram(const uint8_t *Data, size_t Size) {
   ByteStream BS{Data, Size};
   Program P;
   unsigned OpCount = 1 + (BS.next8() % 48);
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
+  bool AllowM002 = envFlag("FUZZX_ALLOW_M002_I8_CLEAR_XOR", false);
+  bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
     Op O{static_cast<uint8_t>(BS.next8() % 27), BS.next64(), BS.next64(),
          BS.next64()};
     if (!AllowM001 && O.Kind == 19 && O.C % 7 == 6)
       ++O.C;
+    if (!AllowM002 && triggersM002(P.Ops, O))
+      breakIdentityNarrow8(O);
+    if (!AllowM003) {
+      P.Ops.push_back(O);
+      if (hasFiveShl3AddPairs(P.Ops)) {
+        P.Ops.back().Kind = 3;
+        ++P.Ops.back().A;
+      }
+      continue;
+    }
     P.Ops.push_back(O);
   }
   return P;

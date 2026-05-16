@@ -20,8 +20,6 @@ DEVICE="${3:-0}"
 
 ROCM_PATH="${ROCM_PATH:-/opt/rocm-7.1.1}"
 MCPU="${MCPU:-gfx950}"
-CLANG="${CLANG:-$ROCM_PATH/lib/llvm/bin/clang}"
-LLD="${LLD:-$ROCM_PATH/lib/llvm/bin/lld}"
 HIPCC="${HIPCC:-$ROCM_PATH/bin/hipcc}"
 RUNNER="${RUNNER:-$ROOT/build/hip_module_runner}"
 
@@ -31,6 +29,24 @@ if [[ ! -f "$LL_FILE" ]]; then
     echo "LLVM IR file not found: $LL_FILE" >&2
     exit 2
 fi
+
+RUN_LLVM_BUILD="$(sed -n -E 's/^[[:space:]]*;[[:space:]]*RUN-LLVM-BUILD:[[:space:]]*//p' "$LL_FILE" | head -n 1)"
+if [[ -n "$RUN_LLVM_BUILD" ]]; then
+    if [[ "$RUN_LLVM_BUILD" == /* ]]; then
+        RUN_LLVM_BUILD_DIR="$RUN_LLVM_BUILD"
+    else
+        RUN_LLVM_BUILD_DIR="$ROOT/$RUN_LLVM_BUILD"
+    fi
+    if [[ -z "${CLANG+x}" ]]; then
+        CLANG="$RUN_LLVM_BUILD_DIR/bin/clang"
+    fi
+    if [[ -z "${LLD+x}" ]]; then
+        LLD="$RUN_LLVM_BUILD_DIR/bin/lld"
+    fi
+fi
+
+CLANG="${CLANG:-$ROCM_PATH/lib/llvm/bin/clang}"
+LLD="${LLD:-$ROCM_PATH/lib/llvm/bin/lld}"
 
 if [[ ! -x "$CLANG" ]]; then
     echo "clang not found or not executable: $CLANG" >&2

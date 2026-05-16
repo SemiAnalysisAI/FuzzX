@@ -34,3 +34,5 @@ known-miscompiles/run_ll_reproducer.sh \
 
 The runner defaults to `/opt/rocm-7.1.1`, `gfx950`, and device `0`. Override
 those with `ROCM_PATH`, `MCPU`, and the script's third argument respectively.
+If a testcase has a `; RUN-LLVM-BUILD:` comment and `CLANG` / `LLD` are not set,
+the runner uses that build directory's `bin/clang` and `bin/lld`.
