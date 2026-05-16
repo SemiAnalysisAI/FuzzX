@@ -360,6 +360,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0x80u)
+      Kind = 135 + ((RawKind & 15u) % 8);
     if ((RawKind & 0xf0u) == 0x90u)
       Kind = 119 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xa0u)
@@ -712,6 +714,31 @@ Value *emitI32VectorDynamicShift(IRBuilder<> &B, Value *V, unsigned Lanes,
   return B.CreateAdd(Extracted, ci32(Ctx, u32(O.A)));
 }
 
+Value *emitI32VectorFshr(IRBuilder<> &B, Module &M, Value *V, unsigned Lanes,
+                         const Op &O, bool DynamicShift) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  Value *Cur = makeI32Vector(B, V, Lanes, O);
+  std::array<uint32_t, 4> Consts = {u32(O.A), u32(O.B), u32(O.C),
+                                    u32(O.A ^ O.C)};
+  Value *Other =
+      vectorConstant(Ctx, ArrayRef<uint32_t>(Consts.data(), Lanes));
+  Value *Shift;
+  if (DynamicShift) {
+    std::array<uint32_t, 4> ShiftMasks = {31, 31, 31, 31};
+    Shift = B.CreateAnd(Cur, vectorConstant(Ctx, ArrayRef<uint32_t>(
+                                                   ShiftMasks.data(), Lanes)));
+  } else {
+    Shift = vectorConstant(Ctx, ArrayRef<uint32_t>(Consts.data(), Lanes), true);
+  }
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {VecTy}),
+                   {Other, Cur, Shift});
+  Value *Extracted = B.CreateExtractElement(Mixed, ci32(Ctx, O.B % Lanes));
+  return B.CreateXor(Extracted, B.CreateAdd(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
 Constant *packedVectorConstant(LLVMContext &Ctx, unsigned LaneBits,
                                unsigned Lanes, uint64_t Bits,
                                bool ShiftAmounts = false) {
@@ -842,6 +869,31 @@ Value *emitPackedDynamicShift(IRBuilder<> &B, Value *V, unsigned LaneBits,
     break;
   }
   return B.CreateAdd(B.CreateBitCast(Mixed, I32), ci32(Ctx, u32(O.B)));
+}
+
+Value *emitPackedFshr(IRBuilder<> &B, Module &M, Value *V, unsigned LaneBits,
+                      const Op &O, bool DynamicShift) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *LaneTy = Type::getIntNTy(Ctx, LaneBits);
+  unsigned Lanes = 32 / LaneBits;
+  auto *VecTy = FixedVectorType::get(LaneTy, Lanes);
+  Value *Cur = B.CreateBitCast(V, VecTy);
+  Value *Other = packedVectorConstant(Ctx, LaneBits, Lanes, O.A);
+  Value *Shift;
+  if (DynamicShift) {
+    Shift = B.CreateBitCast(B.CreateXor(V, ci32(Ctx, u32(O.B))), VecTy);
+    Shift = B.CreateAnd(Shift, ConstantVector::getSplat(
+                                   ElementCount::getFixed(Lanes),
+                                   ConstantInt::get(LaneTy, LaneBits - 1)));
+  } else {
+    Shift = packedVectorConstant(Ctx, LaneBits, Lanes, O.C, true);
+  }
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {VecTy}),
+                   {Other, Cur, Shift});
+  return B.CreateAdd(B.CreateBitCast(Mixed, I32),
+                     B.CreateXor(V, ci32(Ctx, u32(O.C) | 1u)));
 }
 
 Value *emitSmallSat(IRBuilder<> &B, Module &M, Value *V, const Op &O,
@@ -1384,6 +1436,22 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitI32VectorDynamicShift(B, V, 2, O);
   case 134:
     return emitI32VectorDynamicShift(B, V, 4, O);
+  case 135:
+    return emitPackedFshr(B, M, V, 8, O, false);
+  case 136:
+    return emitPackedFshr(B, M, V, 16, O, false);
+  case 137:
+    return emitPackedFshr(B, M, V, 8, O, true);
+  case 138:
+    return emitPackedFshr(B, M, V, 16, O, true);
+  case 139:
+    return emitI32VectorFshr(B, M, V, 2, O, false);
+  case 140:
+    return emitI32VectorFshr(B, M, V, 4, O, false);
+  case 141:
+    return emitI32VectorFshr(B, M, V, 2, O, true);
+  case 142:
+    return emitI32VectorFshr(B, M, V, 4, O, true);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
