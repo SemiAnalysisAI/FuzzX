@@ -150,13 +150,13 @@ void breakIdentityNarrow8(Op &O) {
   }
 }
 
-bool isI32Shl3(const Op &O) { return O.Kind == 6 && (O.A & 31u) == 3; }
+bool isI32Shl(const Op &O) { return O.Kind == 6; }
 
 bool isI32Add(const Op &O) { return O.Kind == 0; }
 
 bool isI32AddZero(const Op &O) { return isI32Add(O) && u32(O.A) == 0; }
 
-bool hasFiveShl3AddPairs(ArrayRef<Op> Ops) {
+bool hasFiveShlAddPairs(ArrayRef<Op> Ops) {
   unsigned Pairs = 0;
   bool NeedAdd = false;
   for (const Op &O : Ops) {
@@ -174,7 +174,7 @@ bool hasFiveShl3AddPairs(ArrayRef<Op> Ops) {
       continue;
     }
 
-    if (isI32Shl3(O))
+    if (isI32Shl(O))
       NeedAdd = true;
     else if (!isI32AddZero(O))
       Pairs = 0;
@@ -220,7 +220,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   unsigned OpCount = 1 + (BS.next8() % 48);
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
   bool AllowM002 = envFlag("FUZZX_ALLOW_M002_I8_CLEAR_XOR", false);
-  bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false);
+  bool AllowM003 = envFlag("FUZZX_ALLOW_M003_SHL3_ADD_CHAIN", false) ||
+                   envFlag("FUZZX_ALLOW_M005_SHL_ADD_CHAIN", false);
   bool AllowM004 = envFlag("FUZZX_ALLOW_M004_VECTOR_IDENTITY_XOR", false);
   P.Ops.reserve(OpCount);
   for (unsigned I = 0; I < OpCount; ++I) {
@@ -234,7 +235,7 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
       ++O.B;
     if (!AllowM003) {
       P.Ops.push_back(O);
-      if (hasFiveShl3AddPairs(P.Ops)) {
+      if (hasFiveShlAddPairs(P.Ops)) {
         P.Ops.back().Kind = 3;
         ++P.Ops.back().A;
       }
