@@ -91,6 +91,7 @@ rediscovering the same issue.
 | --- | --- | --- |
 | `FUZZX_ALLOW_M019_HIGHBIT_OR_XOR=1` | unset | Re-enable the outer high-bit `(x | C) ^ x` shape for [m019](known-miscompiles/m019-highbit-or-xor/NOTES.md). |
 | `FUZZX_ALLOW_M020_OR_XOR_AND=1` | unset | Re-enable the `((a | b) ^ b) & (a | b)` shape for [m020](known-miscompiles/m020-or-xor-and/NOTES.md). |
+| `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a | b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
 
 ## Layout
 
@@ -144,6 +145,7 @@ Tested toolchains as of 2026-05-16:
 | [m018-two-private-memory-ops](known-miscompiles/m018-two-private-memory-ops/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` intermittently reads stale scratch data across two private-memory sequences; LLVM HEAD and ROCm HEAD pass 50 repeated combined runs. |
 | [m019-highbit-or-xor](known-miscompiles/m019-highbit-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a high-bit `(x | C) ^ x` expression into `v_bitop3_b32` with the wrong truth table or operands. |
 | [m020-or-xor-and](known-miscompiles/m020-or-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((a | b) ^ b) & (a | b)` into `v_bitop3_b32` with the wrong result. |
+| [m021-fshl-or-xor](known-miscompiles/m021-fshl-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a dynamic `(a | b) ^ a` expression after `fshl` into `v_bitop3_b32` with the wrong result. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 

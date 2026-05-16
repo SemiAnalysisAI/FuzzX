@@ -513,6 +513,25 @@ bool triggersM020OrXorAnd(const Instruction &I) {
          isXorOfOrWithOrOperand(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool feedsM020OrXorAnd(const Instruction &I) {
+  for (const User *U : I.users())
+    if (const auto *UserI = dyn_cast<Instruction>(U))
+      if (triggersM020OrXorAnd(*UserI))
+        return true;
+  return false;
+}
+
+bool triggersM021OrXor(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  if (triggersM019HighBitOrXor(I) || feedsM020OrXorAnd(I))
+    return false;
+  return isOrWithOperand(BO->getOperand(0), BO->getOperand(1)) ||
+         isOrWithOperand(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -554,6 +573,7 @@ bool validateFixedMemoryShape(Function &Kernel) {
 bool validateIRCorpusModule(Module &M) {
   bool AllowM019 = envFlag("FUZZX_ALLOW_M019_HIGHBIT_OR_XOR", false);
   bool AllowM020 = envFlag("FUZZX_ALLOW_M020_OR_XOR_AND", false);
+  bool AllowM021 = envFlag("FUZZX_ALLOW_M021_OR_XOR", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -570,7 +590,8 @@ bool validateIRCorpusModule(Module &M) {
         for (Instruction &I : BB)
           if (!isAllowedIRInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
-              (!AllowM020 && triggersM020OrXorAnd(I)))
+              (!AllowM020 && triggersM020OrXorAnd(I)) ||
+              (!AllowM021 && triggersM021OrXor(I)))
             return false;
       continue;
     }
