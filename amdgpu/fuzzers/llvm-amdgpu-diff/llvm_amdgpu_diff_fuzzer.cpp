@@ -360,6 +360,8 @@ Program makeProgram(const uint8_t *Data, size_t Size) {
   for (unsigned I = 0; I < OpCount; ++I) {
     uint8_t RawKind = BS.next8();
     uint8_t Kind = RawKind % 27;
+    if ((RawKind & 0xf0u) == 0xa0u)
+      Kind = 103 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xb0u)
       Kind = 91 + (RawKind & 15u);
     if ((RawKind & 0xf0u) == 0xc0u)
@@ -696,6 +698,69 @@ Value *emitPackedVector(IRBuilder<> &B, Value *V, unsigned LaneBits,
   }
   Value *Packed = B.CreateBitCast(Mixed, I32);
   return B.CreateAdd(Packed, B.CreateXor(V, ci32(Ctx, u32(O.C) | 1u)));
+}
+
+Value *emitPackedVectorSat(IRBuilder<> &B, Module &M, Value *V,
+                           unsigned LaneBits, const Op &O, Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  unsigned Lanes = 32 / LaneBits;
+  auto *VecTy = FixedVectorType::get(Type::getIntNTy(Ctx, LaneBits), Lanes);
+  Value *Cur = B.CreateBitCast(V, VecTy);
+  Value *Mixed =
+      B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                   {Cur, packedVectorConstant(Ctx, LaneBits, Lanes, O.A)});
+  Value *Packed = B.CreateBitCast(Mixed, I32);
+  return B.CreateXor(Packed, B.CreateAdd(V, ci32(Ctx, u32(O.B) | 1u)));
+}
+
+Value *emitPackedVectorBitIntrinsic(IRBuilder<> &B, Module &M, Value *V,
+                                    unsigned LaneBits, Intrinsic::ID ID) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  unsigned Lanes = 32 / LaneBits;
+  auto *VecTy = FixedVectorType::get(Type::getIntNTy(Ctx, LaneBits), Lanes);
+  Value *Cur = B.CreateBitCast(V, VecTy);
+  FunctionCallee Fn = Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy});
+  Value *Mixed;
+  if (ID == Intrinsic::ctlz || ID == Intrinsic::cttz)
+    Mixed = B.CreateCall(Fn, {Cur, ConstantInt::getFalse(Ctx)});
+  else
+    Mixed = B.CreateCall(Fn, {Cur});
+  return B.CreateXor(V, B.CreateBitCast(Mixed, I32));
+}
+
+Value *emitPackedDynamicShift(IRBuilder<> &B, Value *V, unsigned LaneBits,
+                              const Op &O) {
+  LLVMContext &Ctx = B.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *LaneTy = Type::getIntNTy(Ctx, LaneBits);
+  unsigned Lanes = 32 / LaneBits;
+  auto *VecTy = FixedVectorType::get(LaneTy, Lanes);
+  Value *Cur = B.CreateBitCast(V, VecTy);
+  Value *Shift = B.CreateBitCast(B.CreateXor(V, ci32(Ctx, u32(O.A))), VecTy);
+  Shift = B.CreateAnd(Shift, ConstantVector::getSplat(
+                                 ElementCount::getFixed(Lanes),
+                                 ConstantInt::get(LaneTy, LaneBits - 1)));
+  Value *IsZero =
+      B.CreateICmpEQ(Shift, ConstantAggregateZero::get(VecTy));
+  Shift = B.CreateSelect(IsZero,
+                         ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                                  ConstantInt::get(LaneTy, 1)),
+                         Shift);
+  Value *Mixed;
+  switch (O.C % 3) {
+  case 0:
+    Mixed = B.CreateShl(Cur, Shift);
+    break;
+  case 1:
+    Mixed = B.CreateLShr(Cur, Shift);
+    break;
+  default:
+    Mixed = B.CreateAShr(Cur, Shift);
+    break;
+  }
+  return B.CreateAdd(B.CreateBitCast(Mixed, I32), ci32(Ctx, u32(O.B)));
 }
 
 Value *emitSmallSat(IRBuilder<> &B, Module &M, Value *V, const Op &O,
@@ -1174,6 +1239,38 @@ Value *emitOp(IRBuilder<> &B, Module &M, Value *V, Value *Idx, const Op &O) {
     return emitNarrowDynamicShift(B, V, O, 16, 1, false);
   case 102:
     return emitNarrowDynamicShift(B, V, O, 16, 2, true);
+  case 103:
+    return emitPackedVectorSat(B, M, V, 8, O, Intrinsic::uadd_sat);
+  case 104:
+    return emitPackedVectorSat(B, M, V, 8, O, Intrinsic::usub_sat);
+  case 105:
+    return emitPackedVectorSat(B, M, V, 8, O, Intrinsic::sadd_sat);
+  case 106:
+    return emitPackedVectorSat(B, M, V, 8, O, Intrinsic::ssub_sat);
+  case 107:
+    return emitPackedVectorSat(B, M, V, 16, O, Intrinsic::uadd_sat);
+  case 108:
+    return emitPackedVectorSat(B, M, V, 16, O, Intrinsic::usub_sat);
+  case 109:
+    return emitPackedVectorSat(B, M, V, 16, O, Intrinsic::sadd_sat);
+  case 110:
+    return emitPackedVectorSat(B, M, V, 16, O, Intrinsic::ssub_sat);
+  case 111:
+    return emitPackedVectorBitIntrinsic(B, M, V, 8, Intrinsic::ctlz);
+  case 112:
+    return emitPackedVectorBitIntrinsic(B, M, V, 8, Intrinsic::cttz);
+  case 113:
+    return emitPackedVectorBitIntrinsic(B, M, V, 8, Intrinsic::ctpop);
+  case 114:
+    return emitPackedVectorBitIntrinsic(B, M, V, 8, Intrinsic::bitreverse);
+  case 115:
+    return emitPackedVectorBitIntrinsic(B, M, V, 16, Intrinsic::ctpop);
+  case 116:
+    return emitPackedVectorBitIntrinsic(B, M, V, 16, Intrinsic::bitreverse);
+  case 117:
+    return emitPackedDynamicShift(B, V, 8, O);
+  case 118:
+    return emitPackedDynamicShift(B, V, 16, O);
   default: {
     Value *Cmp = B.CreateICmpSLT(V, ci32(Ctx, u32(O.A)));
     Value *T = B.CreateXor(V, ci32(Ctx, u32(O.B)));
