@@ -1762,6 +1762,51 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
   Store->setOperand(0, Phi);
 }
 
+void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || F->size() >= 192)
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+  unsigned TripCount = 1 + (Gen() % 4);
+
+  BasicBlock *Preheader = Store->getParent();
+  BasicBlock *Exit =
+      Preheader->splitBasicBlock(Store->getIterator(), "fuzz.loop.exit");
+  BasicBlock *Header =
+      BasicBlock::Create(Ctx, "fuzz.loop.header", F, Exit);
+  BasicBlock *Body = BasicBlock::Create(Ctx, "fuzz.loop.body", F, Exit);
+
+  Instruction *OldTerm = Preheader->getTerminator();
+  IRBuilder<NoFolder> PreB(OldTerm);
+  PreB.CreateBr(Header);
+  OldTerm->eraseFromParent();
+
+  IRBuilder<NoFolder> HeaderB(Header);
+  PHINode *Index = HeaderB.CreatePHI(I32, 2, "fuzz.loop.iv");
+  PHINode *Acc = HeaderB.CreatePHI(I32, 2, "fuzz.loop.acc");
+  Index->addIncoming(ci32(Ctx, 0), Preheader);
+  Acc->addIncoming(Current, Preheader);
+  Value *Done =
+      HeaderB.CreateICmpULT(Index, ci32(Ctx, TripCount), "fuzz.loop.cond");
+  HeaderB.CreateCondBr(Done, Body, Exit);
+
+  IRBuilder<NoFolder> BodyB(Body);
+  Value *Next = emitRandomCFGLinearArm(BodyB, M, Acc, Other, Gen);
+  Value *NextIndex = BodyB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
+  BodyB.CreateBr(Header);
+  Index->addIncoming(NextIndex, Body);
+  Acc->addIncoming(Next, Body);
+
+  Store->setOperand(0, Acc);
+}
+
 void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
   if (!F)
@@ -1822,7 +1867,7 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 16 && (Gen() % 4) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 12) {
+    switch (Gen() % 15) {
     case 0:
     case 1:
     case 2:
@@ -1840,6 +1885,10 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
       break;
     case 9:
     case 10:
+      mutateIRAddCountedLoop(M, Gen);
+      break;
+    case 11:
+    case 12:
       mutateIRModifyConstant(M, Gen);
       break;
     default:
