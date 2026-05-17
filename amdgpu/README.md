@@ -40,7 +40,10 @@ or take a guarded early exit from the loop body through an exit phi, so corpus
 entries exercise both expression simplification and CFG and loop transforms. CFG
 arms include the same scalar
 integer, bit, boolean, narrowing, saturating, funnel-shift, finite-FP, and vector
-expression families as the linear mutator.
+expression families as the linear mutator. Scalar and CFG expressions can also
+mix in extra `i32` global input loads from `in[seed % n]`; these loads are only
+emitted inside the existing `idx < n` guard and are bounded by the module
+validator.
 Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Requirements

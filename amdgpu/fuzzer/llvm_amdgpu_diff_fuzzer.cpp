@@ -608,6 +608,8 @@ bool isAllowedIRInstruction(const Instruction &I) {
              isAllowedFPVectorType(BO->getType());
     case Instruction::UDiv:
     case Instruction::URem:
+      if (BO->hasName() && BO->getName().starts_with("fuzz.load.idx"))
+        return true;
       return isKnownNonZeroI32(BO->getOperand(1));
     case Instruction::SDiv:
     case Instruction::SRem:
@@ -1311,29 +1313,68 @@ bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
 
-bool validateFixedMemoryShape(Function &Kernel) {
-  unsigned GEPs = 0;
-  unsigned Loads = 0;
+bool hasNameStartingWith(const Value *V, StringRef Prefix) {
+  return V && V->hasName() && V->getName().starts_with(Prefix);
+}
+
+bool isFuzzInputLoadIndex(const Value *V, Function &Kernel) {
+  const auto *ZExt = dyn_cast<ZExtInst>(V);
+  if (!ZExt || !hasNameStartingWith(ZExt, "fuzz.load.idx64") ||
+      !ZExt->getType()->isIntegerTy(64))
+    return false;
+
+  const auto *URem = dyn_cast<BinaryOperator>(ZExt->getOperand(0));
+  return URem && URem->getOpcode() == Instruction::URem &&
+         hasNameStartingWith(URem, "fuzz.load.idx") &&
+         URem->getOperand(1) == Kernel.getArg(2);
+}
+
+bool isFuzzInputLoadPtr(const Value *V) {
+  return hasNameStartingWith(V, "fuzz.load.ptr");
+}
+
+bool validateMemoryShape(Function &Kernel) {
+  bool SawBaseInGEP = false;
+  bool SawBaseOutGEP = false;
+  unsigned BaseLoads = 0;
+  unsigned ExtraLoadGEPs = 0;
+  unsigned ExtraLoads = 0;
   unsigned Stores = 0;
   for (BasicBlock &BB : Kernel) {
     for (Instruction &I : BB) {
       if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-        ++GEPs;
         if (GEP->getSourceElementType() != Type::getInt32Ty(Kernel.getContext()))
           return false;
-        if (!hasName(GEP, "in.ptr") && !hasName(GEP, "out.ptr"))
+        if (hasName(GEP, "in.ptr") || hasName(GEP, "out.ptr")) {
+          if (GEP->getNumIndices() != 1 ||
+              !hasName(GEP->idx_begin()->get(), "idx64"))
+            return false;
+          unsigned ArgNo = hasName(GEP, "in.ptr") ? 0 : 1;
+          if (GEP->getPointerOperand() != Kernel.getArg(ArgNo))
+            return false;
+          if (ArgNo == 0)
+            SawBaseInGEP = true;
+          else
+            SawBaseOutGEP = true;
+        } else if (isFuzzInputLoadPtr(GEP)) {
+          if (GEP->getPointerOperand() != Kernel.getArg(0) ||
+              GEP->getNumIndices() != 1 ||
+              !isFuzzInputLoadIndex(GEP->idx_begin()->get(), Kernel))
+            return false;
+          ++ExtraLoadGEPs;
+        } else {
           return false;
-        if (GEP->getNumIndices() != 1 ||
-            !hasName(GEP->idx_begin()->get(), "idx64"))
-          return false;
-        unsigned ArgNo = hasName(GEP, "in.ptr") ? 0 : 1;
-        if (GEP->getPointerOperand() != Kernel.getArg(ArgNo))
-          return false;
+        }
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
-        ++Loads;
-        if (!Load->getType()->isIntegerTy(32) ||
-            !hasName(Load->getPointerOperand(), "in.ptr"))
+        if (!Load->getType()->isIntegerTy(32))
           return false;
+        if (hasName(Load->getPointerOperand(), "in.ptr")) {
+          ++BaseLoads;
+        } else if (isFuzzInputLoadPtr(Load->getPointerOperand())) {
+          ++ExtraLoads;
+        } else {
+          return false;
+        }
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
         ++Stores;
         if (!Store->getValueOperand()->getType()->isIntegerTy(32) ||
@@ -1342,7 +1383,8 @@ bool validateFixedMemoryShape(Function &Kernel) {
       }
     }
   }
-  return GEPs == 2 && Loads == 1 && Stores == 1;
+  return SawBaseInGEP && SawBaseOutGEP && BaseLoads == 1 && Stores == 1 &&
+         ExtraLoadGEPs == ExtraLoads && ExtraLoads <= 32;
 }
 
 bool validateIRCorpusModule(Module &M) {
@@ -1370,7 +1412,7 @@ bool validateIRCorpusModule(Module &M) {
     if (&F == Kernel) {
       if (F.empty())
         return false;
-      if (!validateFixedMemoryShape(F))
+      if (!validateMemoryShape(F))
         return false;
       for (BasicBlock &BB : F)
         for (Instruction &I : BB)
@@ -2081,6 +2123,51 @@ Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
   return B.CreateSDiv(A, Den, Twine(NamePrefix) + ".op");
 }
 
+Value *emitSafeInputLoadInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                    Value *A, Value *Bv,
+                                    std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  Function *F = B.GetInsertBlock()->getParent();
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *In = F->getArg(0);
+  Value *N = F->getArg(2);
+  Value *Seed = nullptr;
+  switch (Gen() % 4) {
+  case 0:
+    Seed = A;
+    break;
+  case 1:
+    Seed = Bv;
+    break;
+  case 2:
+    Seed = B.CreateAdd(A, Bv, Twine(NamePrefix) + ".seed.add");
+    break;
+  default:
+    Seed = B.CreateXor(A, Bv, Twine(NamePrefix) + ".seed.xor");
+    break;
+  }
+
+  Value *Idx = B.CreateURem(Seed, N, Twine(NamePrefix) + ".idx");
+  Value *Idx64 = B.CreateZExt(Idx, I64, Twine(NamePrefix) + ".idx64");
+  Value *Ptr = B.CreateGEP(I32, In, Idx64, Twine(NamePrefix) + ".ptr");
+  Value *Loaded = B.CreateLoad(I32, Ptr, Twine(NamePrefix) + ".value");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(A, Loaded, Twine(NamePrefix) + ".xor");
+  case 1:
+    return B.CreateAdd(Bv, Loaded, Twine(NamePrefix) + ".add");
+  case 2:
+    return B.CreateSub(Loaded, A, Twine(NamePrefix) + ".sub");
+  default: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), Loaded, A,
+                              Twine(NamePrefix) + ".cmp");
+    return B.CreateSelect(Cmp, Loaded, Bv, Twine(NamePrefix) + ".select");
+  }
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -2090,7 +2177,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 70) {
+  switch (Gen() % 74) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -2236,6 +2323,11 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 57:
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.fp.signed");
+  case 58:
+  case 59:
+  case 60:
+  case 61:
+    return emitSafeInputLoadInstruction(B, M, A, Bv, Gen, "fuzz.load");
   default:
     switch (Gen() % 4) {
     case 0:
@@ -2268,7 +2360,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 56) {
+  switch (Gen() % 60) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2401,6 +2493,11 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 49:
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.cfg.fp.signed");
+  case 50:
+  case 51:
+  case 52:
+  case 53:
+    return emitSafeInputLoadInstruction(B, M, A, Bv, Gen, "fuzz.load");
   default:
     switch (Gen() % 4) {
     case 0:
@@ -3171,6 +3268,8 @@ std::vector<uint8_t> moduleToBitcode(Module &M) {
 bool isCrossOverCloneableInstruction(const Instruction &I) {
   if (I.isTerminator() || I.mayReadOrWriteMemory() ||
       isa<GetElementPtrInst, PHINode>(&I))
+    return false;
+  if (I.hasName() && I.getName().starts_with("fuzz.load."))
     return false;
   Type *Ty = I.getType();
   if (!Ty->isIntegerTy(1) && !Ty->isIntegerTy(32))
