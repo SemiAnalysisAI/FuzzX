@@ -10,30 +10,32 @@ The original saved fuzzer program was:
 ```
 
 The automated reducer shrank the original 2,644-line program to 180 lines.
-Manual cleanup removed unreferenced structured labels, bringing the checked-in
-PTX to 114 lines. A straight-line scalar version and a simple structured
-branch version both compile correctly; the remaining trigger still needs
-structured-branch context around the value chain.
+Manual cleanup removed unreferenced structured labels, bringing the first
+checked-in PTX to 114 lines. A later reducer update removed unused predicate
+definitions and a hand pass shrank the reproducer to 38 PTX lines. A
+straight-line scalar version and a single-branch version both compile
+correctly; the remaining trigger still needs nested structured-branch context
+around the value chain.
 
 ## Scalar Trace
 
-The kernel is launched with 32 threads, so `%tid.x` is `0..31`. The divergent
-lanes are the lanes where the loaded input is `<= 2488671102`, causing the
-then arm to compute `%r23` and `%r26`:
+The kernel is launched with 32 threads, so `%tid.x` is `0..31`. The reduced
+reproducer no longer depends on input data; `%p0 = %tid.x < 32` is true for
+every launched thread and is used for both nested branches:
 
 ```text
-%r21 = popc(0x7a5e1ae0) = 16
-%r26 = popc(%r21) = 1
-%r1  = 2147483646 + %r26 = 0x7fffffff
-%r4  = 3046743225 - %r1 = 0x35999cba
-%r36 = input + 32
-%r23 = %r4 & %r36
-%r0  = %r23 + %r26
+%r3 = popc(0x7a5e1ae0) = 16
+%r2 = popc(%r3) = 1
+%r4 = %tid.x + 32
+%r5 = 2147483646 + %r2 = 0x7fffffff
+%r6 = 3046743225 - %r5 = 0x35999cba
+%r1 = %r6 & %r4
+%r7 = %r1 + %r2
 ```
 
 `ptxas -O0` follows that trace. Optimized ptxas produces results that are
-`2` lower for the eight affected lanes. The optimized SASS uses `0x35999cb8`
-as the `and` mask instead of the correct `0x35999cba`, as if the
+`2` lower for the affected lanes. The optimized SASS uses `0x35999cb8` as the
+`and` mask instead of the correct `0x35999cba`, as if the
 `0x7fffffff` subtract input had been treated like `0x80000001`.
 
 This is likely related to the signed-boundary fold in

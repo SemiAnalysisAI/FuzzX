@@ -150,6 +150,22 @@ fn candidate_without_lines(lines: &[String], remove_indices: &[usize]) -> String
     out
 }
 
+fn line_mentions_pred(line: &str, pred: &str) -> bool {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
+        .any(|token| token == pred)
+}
+
+fn setp_output_pred(trimmed_line: &str) -> Option<String> {
+    if !trimmed_line.starts_with("setp.") {
+        return None;
+    }
+    trimmed_line
+        .split_whitespace()
+        .nth(1)
+        .map(|token| token.trim_end_matches(',').to_string())
+        .filter(|token| token.starts_with("%p"))
+}
+
 /// Both opt levels compile + launch + are deterministic across two runs, and
 /// their outputs differ. Returns the divergent (o0, o3) on success.
 fn diverges_deterministically(
@@ -416,10 +432,19 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
                 )
             })?
     };
+    let first_store = lines
+        .iter()
+        .position(|l| l.trim().starts_with("st.global.u32"))
+        .ok_or_else(|| anyhow!("could not locate output store"))?;
     let exit_start = lines
         .iter()
         .position(|l| l.trim() == "exit:")
-        .ok_or_else(|| anyhow!("could not locate `exit:` label"))?;
+        .or_else(|| {
+            lines[..first_store]
+                .iter()
+                .rposition(|l| l.trim().starts_with("cvta.to.global.u64"))
+        })
+        .ok_or_else(|| anyhow!("could not locate `exit:` label or epilogue start"))?;
 
     let mut out = Vec::new();
     // Body: between prologue_end (exclusive) and exit_start (exclusive).
@@ -428,9 +453,15 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         if t.is_empty() || t.ends_with(':') {
             continue;
         }
-        // Removing a predicate definition can leave an undefined branch or
-        // selp predicate while still producing deterministic-looking output.
-        if t.starts_with("setp.") {
+        // Removing a still-used predicate definition can leave an undefined
+        // branch or selp predicate while still producing deterministic-looking
+        // output. Unused predicate definitions are normal reducer clutter.
+        if setp_output_pred(t).is_some_and(|pred| {
+            lines
+                .iter()
+                .enumerate()
+                .any(|(j, line)| j != i && line_mentions_pred(line, &pred))
+        }) {
             continue;
         }
         out.push(i);
@@ -442,6 +473,60 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{line_mentions_pred, removable_indices};
+
+    #[test]
+    fn predicate_matching_does_not_confuse_prefixes() {
+        assert!(line_mentions_pred("@%p1 bra label;", "%p1"));
+        assert!(!line_mentions_pred("@%p10 bra label;", "%p1"));
+    }
+
+    #[test]
+    fn structured_epilogue_without_exit_label_is_reducible() {
+        let ptx = r#".version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel()
+{
+    .reg .pred  %p<3>;
+    .reg .b32   %r<8>;
+    .reg .b64   %rd<6>;
+
+    ld.global.u32   %r1, [%rd0];
+
+    setp.eq.u32   %p0, %r1, %r2;
+    @%p0 bra      keep;
+    setp.ne.u32   %p1, %r3, %r4;
+keep:
+    add.u32       %r5, %r5, %r6;
+
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r7, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r5;
+    ret;
+}"#;
+        let lines: Vec<_> = ptx.lines().collect();
+        let removable = removable_indices(ptx).unwrap();
+
+        assert!(removable
+            .iter()
+            .any(|&i| lines[i].trim().starts_with("setp.ne.u32")));
+        assert!(!removable
+            .iter()
+            .any(|&i| lines[i].trim().starts_with("setp.eq.u32")));
+        assert!(removable
+            .iter()
+            .any(|&i| lines[i].trim().starts_with("add.u32")));
+        assert!(!removable
+            .iter()
+            .any(|&i| lines[i].trim().starts_with("cvta.to.global.u64")));
+    }
 }
 
 fn main() -> Result<()> {
