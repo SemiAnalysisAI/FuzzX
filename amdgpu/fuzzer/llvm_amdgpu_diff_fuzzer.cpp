@@ -1200,7 +1200,7 @@ bool dependsOnVectorSelect(const Value *V, SmallPtrSetImpl<const Value *> &Seen,
 bool triggersM032LoopVectorSelect(const Instruction &I) {
   const auto *Phi = dyn_cast<PHINode>(&I);
   if (!Phi || !Phi->getType()->isIntegerTy(32) ||
-      !hasExactName(Phi, "fuzz.loop.acc"))
+      !Phi->hasName() || !Phi->getName().starts_with("fuzz.loop.acc"))
     return false;
 
   for (unsigned Idx = 0, End = Phi->getNumIncomingValues(); Idx != End; ++Idx) {
@@ -2191,6 +2191,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
+  bool UseSecondAccumulator = (Gen() % 3) == 0;
 
   BasicBlock *Preheader = Store->getParent();
   BasicBlock *Exit =
@@ -2216,8 +2217,13 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   IRBuilder<NoFolder> HeaderB(Header);
   PHINode *Index = HeaderB.CreatePHI(I32, 2, "fuzz.loop.iv");
   PHINode *Acc = HeaderB.CreatePHI(I32, 2, "fuzz.loop.acc");
+  PHINode *Acc2 = nullptr;
   Index->addIncoming(ci32(Ctx, 0), Preheader);
   Acc->addIncoming(Current, Preheader);
+  if (UseSecondAccumulator) {
+    Acc2 = HeaderB.CreatePHI(I32, 2, "fuzz.loop.acc2");
+    Acc2->addIncoming(Other, Preheader);
+  }
   Value *Done =
       HeaderB.CreateICmpULT(Index, TripCount, "fuzz.loop.cond");
   HeaderB.CreateCondBr(Done, Body, Exit);
@@ -2225,14 +2231,33 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   IRBuilder<NoFolder> BodyB(Body);
   CFGFragment BodyFrag = emitRandomCFGSubgraph(
       BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 4, Gen), Gen);
-  IRBuilder<NoFolder> BodyTailB(BodyFrag.Tail);
+  CFGFragment FinalFrag = BodyFrag;
+  Value *NextAcc2 = nullptr;
+  if (Acc2) {
+    IRBuilder<NoFolder> Acc2B(BodyFrag.Tail);
+    FinalFrag = emitRandomCFGSubgraph(Acc2B, M, Exit, Acc2, BodyFrag.Result,
+                                      chooseCFGDepth(*F, 3, Gen), Gen);
+    IRBuilder<NoFolder> MixB(FinalFrag.Tail);
+    NextAcc2 = MixB.CreateXor(FinalFrag.Result, BodyFrag.Result,
+                              "fuzz.loop.acc2.mix");
+  }
+
+  IRBuilder<NoFolder> BodyTailB(FinalFrag.Tail);
   Value *NextIndex =
       BodyTailB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
   BodyTailB.CreateBr(Header);
-  Index->addIncoming(NextIndex, BodyFrag.Tail);
-  Acc->addIncoming(BodyFrag.Result, BodyFrag.Tail);
+  Index->addIncoming(NextIndex, FinalFrag.Tail);
+  Acc->addIncoming(BodyFrag.Result, FinalFrag.Tail);
+  if (Acc2)
+    Acc2->addIncoming(NextAcc2, FinalFrag.Tail);
 
-  Store->setOperand(0, Acc);
+  if (Acc2) {
+    IRBuilder<NoFolder> ExitB(Store);
+    Value *Mixed = ExitB.CreateAdd(Acc, Acc2, "fuzz.loop.acc.mix");
+    Store->setOperand(0, Mixed);
+  } else {
+    Store->setOperand(0, Acc);
+  }
 }
 
 void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {

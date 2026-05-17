@@ -22,10 +22,11 @@ funnel-shift intrinsics. The mutator can also wrap the current result in
 structured two-way branches, wider multi-way switches, and deeper bounded
 nested acyclic subgraphs with `i32` phi joins. It also generates counted loops
 with small bounded constant or dynamically masked trip counts whose bodies can
-contain nested diamonds and switches, so corpus entries exercise both expression
-simplification and CFG and loop transforms. CFG arms include the same scalar
-integer, bit, boolean, narrowing, saturating, funnel-shift, and vector
-expression families as the linear mutator.
+contain nested diamonds and switches. Some generated loops carry two independent
+`i32` accumulator phis and combine them after the loop, so corpus entries
+exercise both expression simplification and CFG and loop transforms. CFG arms
+include the same scalar integer, bit, boolean, narrowing, saturating,
+funnel-shift, and vector expression families as the linear mutator.
 Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Requirements
