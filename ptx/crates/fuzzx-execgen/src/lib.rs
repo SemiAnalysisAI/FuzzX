@@ -2143,8 +2143,12 @@ fn pick_divrem(u: &mut Unstructured, emit_signed_divrem: bool) -> Result<DivRemO
 /// constant-folder cares about: 0, INT_MIN, INT_MAX, 0xFFFFFFFF, powers of
 /// two. `max_small` caps the uniform-small bucket.
 fn sanitize_imm32(v: u32, max_small: u32, emit_i32_boundary_immediates: bool) -> u32 {
-    if !emit_i32_boundary_immediates && matches!(v, 0x7FFF_FFFF | 0x8000_0000) {
-        max_small.min(0x7FFF_FFFE)
+    const SIGNED_BOUNDARY_LO: u32 = 0x7FFF_FF00;
+    const SIGNED_BOUNDARY_HI: u32 = 0x8000_00FF;
+    const SAFE_BELOW_SIGNED_BOUNDARY: u32 = SIGNED_BOUNDARY_LO - 1;
+
+    if !emit_i32_boundary_immediates && (SIGNED_BOUNDARY_LO..=SIGNED_BOUNDARY_HI).contains(&v) {
+        max_small.min(SAFE_BELOW_SIGNED_BOUNDARY)
     } else {
         v
     }
@@ -3464,6 +3468,24 @@ mod tests {
                 assert!(!ptx.contains(imm), "seed {seed:x} emitted {imm}");
             }
         }
+    }
+
+    #[test]
+    fn i32_boundary_suppression_covers_nearby_values() {
+        let max_small = u32::MAX;
+        assert_eq!(sanitize_imm32(0x7FFF_FEFF, max_small, false), 0x7FFF_FEFF);
+        for imm in [
+            0x7FFF_FF00,
+            0x7FFF_FFFE,
+            0x7FFF_FFFF,
+            0x8000_0000,
+            0x8000_0001,
+            0x8000_00FF,
+        ] {
+            assert_eq!(sanitize_imm32(imm, max_small, false), 0x7FFF_FEFF);
+        }
+        assert_eq!(sanitize_imm32(0x8000_0100, max_small, false), 0x8000_0100);
+        assert_eq!(sanitize_imm32(0x7FFF_FFFE, max_small, true), 0x7FFF_FFFE);
     }
 
     #[test]

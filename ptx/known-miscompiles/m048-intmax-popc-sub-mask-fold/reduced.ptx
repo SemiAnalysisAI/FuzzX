@@ -1,0 +1,180 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<23>;
+    .reg .b32   %r<50>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r48, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r48, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r48;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r48;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r8, 8;
+    mov.u32         %r9, %r48;
+    mov.u32         %r10, %r2;
+    mov.u32         %r11, %r0;
+    mov.u32         %r12, 12;
+    mov.u32         %r13, %r48;
+    mov.u32         %r14, %r2;
+    mov.u32         %r15, %r0;
+    mov.u32         %r16, 16;
+    mov.u32         %r17, %r48;
+    mov.u32         %r18, %r2;
+    mov.u32         %r19, %r0;
+    mov.u32         %r20, 20;
+    mov.u32         %r21, %r48;
+    mov.u32         %r22, %r2;
+    mov.u32         %r23, %r0;
+    mov.u32         %r24, 24;
+    mov.u32         %r25, %r48;
+    mov.u32         %r26, %r2;
+    mov.u32         %r27, %r0;
+    mov.u32         %r28, 28;
+    mov.u32         %r29, %r48;
+    mov.u32         %r30, %r2;
+    mov.u32         %r31, %r0;
+    mov.u32         %r32, 32;
+    mov.u32         %r33, %r48;
+    mov.u32         %r34, %r2;
+    mov.u32         %r35, %r0;
+    mov.u32         %r36, 36;
+    mov.u32         %r37, %r48;
+    mov.u32         %r38, %r2;
+    mov.u32         %r39, %r0;
+    mov.u32         %r40, 40;
+    mov.u32         %r41, %r48;
+    mov.u32         %r42, %r2;
+    mov.u32         %r43, %r0;
+    mov.u32         %r44, 44;
+    mov.u32         %r45, %r48;
+    mov.u32         %r46, %r2;
+    mov.u32         %r47, %r0;
+
+    setp.le.u32   %p0, %r42, 2488671102;
+    @%p0 bra   structured_if_0_then;
+    bra             structured_if_0_else;
+structured_if_0_then:
+    popc.b32      %r21, 2052987616;
+    popc.b32      %r26, %r21;
+    add.u32       %r36, %r30, %r27;
+    setp.lt.u32   %p1, %r33, 723494775;
+    @%p1 bra   structured_if_1_then;
+    bra             structured_if_1_else;
+structured_if_1_then:
+    add.u32       %r1, 2147483646, %r26;
+    sub.u32       %r4, 3046743225, %r1;
+    and.b32       %r23, %r4, %r36;
+structured_if_1_else:
+structured_if_1_done:
+    setp.lt.u32   %p2, %r42, 1019145259;
+structured_if_2_then:
+structured_if_2_else:
+structured_if_2_done:
+    setp.lt.u32   %p3, %r35, %r27;
+structured_if_3_then:
+    setp.ne.u32   %p4, %r43, %r43;
+structured_if_4_then:
+structured_if_4_else:
+structured_if_4_done:
+    setp.ne.u32   %p5, 2683960277, 4278255360;
+structured_if_5_then:
+structured_if_5_else:
+structured_if_5_done:
+structured_if_3_else:
+structured_if_3_done:
+    setp.ge.u32   %p6, %r13, %r11;
+structured_if_6_then:
+    setp.le.u32   %p7, %r41, %r42;
+structured_if_7_then:
+structured_if_7_else:
+structured_if_7_done:
+structured_if_6_else:
+structured_if_6_done:
+    setp.le.u32   %p8, %r14, %r25;
+structured_if_8_then:
+structured_if_8_else:
+structured_if_8_done:
+structured_if_0_else:
+    setp.lt.u32   %p9, 32768, %r17;
+structured_if_9_then:
+    setp.le.u32   %p10, %r38, 266618723;
+structured_if_10_then:
+structured_if_10_else:
+structured_if_10_done:
+    setp.eq.u32   %p11, %r19, %r47;
+structured_if_11_then:
+structured_if_11_else:
+structured_if_11_done:
+    setp.eq.u32   %p12, %r5, 2;
+structured_if_12_then:
+structured_if_12_else:
+structured_if_12_done:
+    setp.lt.u32   %p13, %r19, 894635186;
+structured_if_13_then:
+structured_if_13_else:
+structured_if_13_done:
+structured_if_9_else:
+structured_if_9_done:
+    setp.eq.u32   %p14, %r46, %r23;
+structured_if_14_then:
+    setp.ne.u32   %p15, %r2, 512;
+structured_if_15_then:
+structured_if_15_else:
+structured_if_15_done:
+structured_if_14_else:
+    setp.gt.u32   %p16, %r4, 3712077568;
+structured_if_16_then:
+structured_if_16_else:
+structured_if_16_done:
+    setp.lt.u32   %p17, %r46, %r0;
+structured_if_17_then:
+    setp.lt.u32   %p18, %r31, %r34;
+structured_if_18_then:
+structured_if_18_else:
+    setp.lt.u32   %p19, %r10, %r5;
+structured_if_19_then:
+structured_if_19_else:
+structured_if_19_done:
+structured_if_18_done:
+structured_if_17_else:
+structured_if_17_done:
+structured_if_14_done:
+    setp.lt.u32   %p20, %r28, 3155773991;
+structured_if_20_then:
+structured_if_20_else:
+structured_if_20_done:
+    setp.gt.u32   %p21, %r33, %r21;
+structured_if_21_then:
+structured_if_21_else:
+structured_if_21_done:
+structured_if_0_done:
+    setp.le.u32   %p22, %r8, %r39;
+structured_if_22_then:
+    add.u32       %r0, %r23, %r26;
+structured_if_22_else:
+structured_if_22_done:
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r48, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    ret;
+}
