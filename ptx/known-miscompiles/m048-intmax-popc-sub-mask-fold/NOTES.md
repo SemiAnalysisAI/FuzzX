@@ -10,9 +10,10 @@ The original saved fuzzer program was:
 ```
 
 The automated reducer shrank the original 2,644-line program to 180 lines.
-Manual cleanup showed that a straight-line scalar version and a simple
-structured branch version both compile correctly; the remaining trigger still
-needs structured-branch context around the value chain.
+Manual cleanup removed unreferenced structured labels, bringing the checked-in
+PTX to 114 lines. A straight-line scalar version and a simple structured
+branch version both compile correctly; the remaining trigger still needs
+structured-branch context around the value chain.
 
 ## Scalar Trace
 
