@@ -15,6 +15,7 @@ no explicit poison values, no `nuw` / `nsw` / `exact`, no `inbounds`, no
 integer division except nonzero-denominator `udiv` / `urem`, only masked or
 constant shift amounts, and only the fixed skeleton input load/output store.
 Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
+rare signed division/remainder by proven-positive divisors,
 `i64` subexpressions truncated to `i32`, `<2 x i32>` / `<4 x i32>` vector
 subexpressions reduced back to `i32`, explicit `i1` boolean subexpressions
 reduced back to `i32`, and LLVM bit, min/max, saturation, absolute-value, and

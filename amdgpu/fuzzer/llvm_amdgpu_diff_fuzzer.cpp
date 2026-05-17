@@ -424,6 +424,44 @@ bool isKnownNonZeroI32(const Value *V) {
   return false;
 }
 
+bool isKnownNonNegativeI32(const Value *V) {
+  if (const auto *C = dyn_cast<ConstantInt>(V))
+    return C->getType()->isIntegerTy(32) && !C->isNegative();
+
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || !BO->getType()->isIntegerTy(32))
+    return false;
+
+  if (BO->getOpcode() == Instruction::And) {
+    for (const Value *Op : BO->operands()) {
+      const auto *C = dyn_cast<ConstantInt>(Op);
+      if (C && !C->getValue().isSignBitSet())
+        return true;
+    }
+  }
+
+  if (BO->getOpcode() == Instruction::Or)
+    return isKnownNonNegativeI32(BO->getOperand(0)) &&
+           isKnownNonNegativeI32(BO->getOperand(1));
+
+  return false;
+}
+
+bool isKnownPositiveI32(const Value *V) {
+  if (const auto *C = dyn_cast<ConstantInt>(V))
+    return C->getType()->isIntegerTy(32) && C->getSExtValue() > 0;
+
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  return (isKnownPositiveI32(BO->getOperand(0)) &&
+          isKnownNonNegativeI32(BO->getOperand(1))) ||
+         (isKnownPositiveI32(BO->getOperand(1)) &&
+          isKnownNonNegativeI32(BO->getOperand(0)));
+}
+
 unsigned integerScalarWidth(Type *Ty) {
   if (Ty->isIntegerTy())
     return Ty->getIntegerBitWidth();
@@ -520,6 +558,9 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::UDiv:
     case Instruction::URem:
       return isKnownNonZeroI32(BO->getOperand(1));
+    case Instruction::SDiv:
+    case Instruction::SRem:
+      return isKnownPositiveI32(BO->getOperand(1));
     case Instruction::Shl:
     case Instruction::LShr:
     case Instruction::AShr:
@@ -1741,6 +1782,18 @@ Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
+                                       Value *Bv, bool IsRem,
+                                       StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *DenMask =
+      B.CreateAnd(Bv, ci32(Ctx, 255), Twine(NamePrefix) + ".den.mask");
+  Value *Den = B.CreateOr(DenMask, ci32(Ctx, 1), Twine(NamePrefix) + ".den");
+  if (IsRem)
+    return B.CreateSRem(A, Den, Twine(NamePrefix) + ".op");
+  return B.CreateSDiv(A, Den, Twine(NamePrefix) + ".op");
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -1750,7 +1803,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 62) {
+  switch (Gen() % 66) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -1886,6 +1939,10 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 50:
   case 51:
     return emitRandomFiniteFPInstruction(B, A, Bv, Gen, "fuzz.fp");
+  case 52:
+    return emitSafeSignedDivRemInstruction(B, A, Bv, false, "fuzz.sdiv");
+  case 53:
+    return emitSafeSignedDivRemInstruction(B, A, Bv, true, "fuzz.srem");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -1910,7 +1967,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 48) {
+  switch (Gen() % 52) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2033,6 +2090,10 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 42:
   case 43:
     return emitRandomFiniteFPInstruction(B, A, Bv, Gen, "fuzz.cfg.fp");
+  case 44:
+    return emitSafeSignedDivRemInstruction(B, A, Bv, false, "fuzz.cfg.sdiv");
+  case 45:
+    return emitSafeSignedDivRemInstruction(B, A, Bv, true, "fuzz.cfg.srem");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -2573,6 +2634,11 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
         continue;
       if (I.getName().starts_with("fuzz.fp.") ||
           I.getName().starts_with("fuzz.cfg.fp."))
+        continue;
+      if (I.getName().starts_with("fuzz.sdiv.") ||
+          I.getName().starts_with("fuzz.srem.") ||
+          I.getName().starts_with("fuzz.cfg.sdiv.") ||
+          I.getName().starts_with("fuzz.cfg.srem."))
         continue;
       for (unsigned IOp = 0; IOp < I.getNumOperands(); ++IOp) {
         if (auto *Call = dyn_cast<CallBase>(&I)) {
