@@ -634,6 +634,85 @@ bool triggersM025URemSExtOr(const Instruction &I) {
          isOrWithNonZeroI32Constant(BO->getOperand(1));
 }
 
+bool isUnsignedMaxWithOperand(const Value *MaybeMax, const Value *Operand) {
+  if (const auto *Call = dyn_cast<CallInst>(MaybeMax)) {
+    const Function *Callee = Call->getCalledFunction();
+    return Callee && Callee->isIntrinsic() &&
+           Callee->getIntrinsicID() == Intrinsic::umax &&
+           Call->arg_size() == 2 &&
+           (Call->getArgOperand(0) == Operand ||
+            Call->getArgOperand(1) == Operand);
+  }
+
+  const auto *Sel = dyn_cast<SelectInst>(MaybeMax);
+  if (!Sel || !Sel->getType()->isIntegerTy(32))
+    return false;
+
+  const auto *Cmp = dyn_cast<ICmpInst>(Sel->getCondition());
+  if (!Cmp)
+    return false;
+
+  const Value *LHS = Cmp->getOperand(0);
+  const Value *RHS = Cmp->getOperand(1);
+  const Value *TrueValue = Sel->getTrueValue();
+  const Value *FalseValue = Sel->getFalseValue();
+  switch (Cmp->getPredicate()) {
+  case ICmpInst::ICMP_ULT:
+  case ICmpInst::ICMP_ULE:
+    return TrueValue == RHS && FalseValue == LHS &&
+           (LHS == Operand || RHS == Operand);
+  case ICmpInst::ICMP_UGT:
+  case ICmpInst::ICMP_UGE:
+    return TrueValue == LHS && FalseValue == RHS &&
+           (LHS == Operand || RHS == Operand);
+  default:
+    return false;
+  }
+}
+
+bool isXorWithOperand(const Value *MaybeXor, const Value *Operand,
+                      const Value **Other = nullptr) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  if (BO->getOperand(0) == Operand) {
+    if (Other)
+      *Other = BO->getOperand(1);
+    return true;
+  }
+  if (BO->getOperand(1) == Operand) {
+    if (Other)
+      *Other = BO->getOperand(0);
+    return true;
+  }
+  return false;
+}
+
+bool isM026UMaxXorAndOperandPair(const Value *MaybeAndOperand,
+                                 const Value *MaybeXorOperand) {
+  const Value *Other = nullptr;
+  return isXorWithOperand(MaybeXorOperand, MaybeAndOperand, &Other) &&
+         isUnsignedMaxWithOperand(MaybeAndOperand, Other);
+}
+
+bool triggersM026UMaxXorAndHighBit(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::AShr ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  const auto *Shift = dyn_cast<ConstantInt>(BO->getOperand(1));
+  if (!Shift || Shift->getZExtValue() != 31)
+    return false;
+
+  const auto *And = dyn_cast<BinaryOperator>(BO->getOperand(0));
+  if (!And || And->getOpcode() != Instruction::And ||
+      !And->getType()->isIntegerTy(32))
+    return false;
+  return isM026UMaxXorAndOperandPair(And->getOperand(0), And->getOperand(1)) ||
+         isM026UMaxXorAndOperandPair(And->getOperand(1), And->getOperand(0));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -680,6 +759,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM023 = envFlag("FUZZX_ALLOW_M023_AND_XOR_IDENTITY", false);
   bool AllowM024 = envFlag("FUZZX_ALLOW_M024_UDIV_SEXT_OR", false);
   bool AllowM025 = envFlag("FUZZX_ALLOW_M025_UREM_SEXT_OR", false);
+  bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -701,7 +781,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM022 && triggersM022AndXorConstant(I)) ||
               (!AllowM023 && triggersM023AndXorIdentity(I)) ||
               (!AllowM024 && triggersM024UDivSExtOr(I)) ||
-              (!AllowM025 && triggersM025URemSExtOr(I)))
+              (!AllowM025 && triggersM025URemSExtOr(I)) ||
+              (!AllowM026 && triggersM026UMaxXorAndHighBit(I)))
             return false;
       continue;
     }
