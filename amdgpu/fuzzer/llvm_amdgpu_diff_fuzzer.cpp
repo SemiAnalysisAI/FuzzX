@@ -5,6 +5,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
@@ -421,7 +422,7 @@ bool isKnownNonZeroI32(const Value *V) {
 
 bool isAllowedIRInstruction(const Instruction &I) {
   if (isa<BranchInst, ReturnInst, LoadInst, StoreInst, GetElementPtrInst,
-          ZExtInst, SExtInst, TruncInst, ICmpInst, SelectInst>(&I))
+          ZExtInst, SExtInst, TruncInst, ICmpInst, PHINode, SelectInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
     switch (BO->getOpcode()) {
@@ -823,11 +824,10 @@ SmallVector<Value *, 32> i32ValuesBefore(Instruction *InsertPt) {
   for (Argument &Arg : F->args())
     if (Arg.getType() == I32)
       Values.push_back(&Arg);
+  DominatorTree DT(*F);
   for (BasicBlock &BB : *F) {
     for (Instruction &I : BB) {
-      if (&I == InsertPt)
-        return Values;
-      if (I.getType() == I32)
+      if (&I != InsertPt && I.getType() == I32 && DT.dominates(&I, InsertPt))
         Values.push_back(&I);
     }
   }
@@ -991,6 +991,124 @@ void mutateIRAddInstruction(Module &M, std::minstd_rand &Gen) {
   Store->setOperand(0, Next);
 }
 
+Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
+                                   Value *Bv, std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  switch (Gen() % 20) {
+  case 0:
+    return B.CreateAdd(A, Bv, "fuzz.cfg.add");
+  case 1:
+    return B.CreateSub(A, Bv, "fuzz.cfg.sub");
+  case 2:
+    return B.CreateMul(A, Bv, "fuzz.cfg.mul");
+  case 3:
+    return B.CreateXor(A, Bv, "fuzz.cfg.xor");
+  case 4:
+    return B.CreateAnd(A, Bv, "fuzz.cfg.and");
+  case 5:
+    return B.CreateOr(A, Bv, "fuzz.cfg.or");
+  case 6:
+    return B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.shl");
+  case 7:
+    return B.CreateLShr(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.lshr");
+  case 8:
+    return B.CreateAShr(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.ashr");
+  case 9:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctpop, {I32}), {A},
+        "fuzz.cfg.ctpop");
+  case 10:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::bitreverse, {I32}),
+        {A}, "fuzz.cfg.bitreverse");
+  case 11:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::bswap, {I32}), {A},
+        "fuzz.cfg.bswap");
+  case 12:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctlz, {I32}),
+        {A, ConstantInt::getFalse(Ctx)}, "fuzz.cfg.ctlz");
+  case 13:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::cttz, {I32}),
+        {A, ConstantInt::getFalse(Ctx)}, "fuzz.cfg.cttz");
+  case 14:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {I32}), {A, Bv},
+        "fuzz.cfg.umin");
+  case 15:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I32}), {A, Bv},
+        "fuzz.cfg.umax");
+  case 16:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I32}), {A, Bv},
+        "fuzz.cfg.smin");
+  case 17:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I32}), {A, Bv},
+        "fuzz.cfg.smax");
+  case 18: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A, Bv, "fuzz.cfg.cmp");
+    return B.CreateSelect(Cmp, A, Bv, "fuzz.cfg.select");
+  }
+  default:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I32}),
+        {A, ConstantInt::getFalse(Ctx)}, "fuzz.cfg.abs");
+  }
+}
+
+Value *emitRandomCFGArm(IRBuilder<NoFolder> &B, Module &M, Value *Current,
+                        Value *Other, std::minstd_rand &Gen) {
+  Value *Result = Current;
+  unsigned Steps = 1 + (Gen() % 3);
+  for (unsigned I = 0; I < Steps; ++I) {
+    Value *Bv = (Gen() % 2) == 0 ? Other : interestingI32(M.getContext(), Gen);
+    Result = emitRandomCFGArmInstruction(B, M, Result, Bv, Gen);
+  }
+  return Result;
+}
+
+void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || F->size() >= 64)
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+  BasicBlock *Head = Store->getParent();
+  BasicBlock *Join = Head->splitBasicBlock(Store->getIterator(), "fuzz.join");
+  BasicBlock *Then = BasicBlock::Create(M.getContext(), "fuzz.then", F, Join);
+  BasicBlock *Else = BasicBlock::Create(M.getContext(), "fuzz.else", F, Join);
+
+  Instruction *OldTerm = Head->getTerminator();
+  IRBuilder<NoFolder> HeadB(OldTerm);
+  Value *Cond =
+      HeadB.CreateICmp(randomICmpPredicate(Gen), Current, Other, "fuzz.branch");
+  HeadB.CreateCondBr(Cond, Then, Else);
+  OldTerm->eraseFromParent();
+
+  IRBuilder<NoFolder> ThenB(Then);
+  Value *ThenValue = emitRandomCFGArm(ThenB, M, Current, Other, Gen);
+  ThenB.CreateBr(Join);
+
+  IRBuilder<NoFolder> ElseB(Else);
+  Value *ElseValue = emitRandomCFGArm(ElseB, M, Current, Other, Gen);
+  ElseB.CreateBr(Join);
+
+  PHINode *Phi = PHINode::Create(Type::getInt32Ty(M.getContext()), 2,
+                                 "fuzz.phi", Join->begin());
+  Phi->addIncoming(ThenValue, Then);
+  Phi->addIncoming(ElseValue, Else);
+  Store->setOperand(0, Phi);
+}
+
 void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
   if (!F)
@@ -1051,13 +1169,17 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 16 && (Gen() % 4) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 5) {
+    switch (Gen() % 7) {
     case 0:
     case 1:
     case 2:
       mutateIRAddInstruction(M, Gen);
       break;
     case 3:
+    case 4:
+      mutateIRAddDiamond(M, Gen);
+      break;
+    case 5:
       mutateIRModifyConstant(M, Gen);
       break;
     default:
@@ -1111,7 +1233,8 @@ std::vector<uint8_t> moduleToBitcode(Module &M) {
 }
 
 bool isCrossOverCloneableInstruction(const Instruction &I) {
-  if (I.isTerminator() || I.mayReadOrWriteMemory() || isa<GetElementPtrInst>(&I))
+  if (I.isTerminator() || I.mayReadOrWriteMemory() ||
+      isa<GetElementPtrInst, PHINode>(&I))
     return false;
   Type *Ty = I.getType();
   if (!Ty->isIntegerTy(1) && !Ty->isIntegerTy(32))
