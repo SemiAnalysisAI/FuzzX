@@ -1727,8 +1727,10 @@ void mutateIRAddInstruction(Module &M, std::minstd_rand &Gen) {
 Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
                                    Value *Bv, std::minstd_rand &Gen) {
   LLVMContext &Ctx = M.getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 24) {
+  switch (Gen() % 36) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -1791,6 +1793,52 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I32}),
         {A, ConstantInt::getFalse(Ctx)}, "fuzz.cfg.abs");
+  case 20:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::uadd_sat, {I32}),
+        {A, Bv}, "fuzz.cfg.uadd_sat");
+  case 21:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::usub_sat, {I32}),
+        {A, Bv}, "fuzz.cfg.usub_sat");
+  case 22:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {I32}),
+        {A, Bv}, "fuzz.cfg.sadd_sat");
+  case 23:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {I32}),
+        {A, Bv}, "fuzz.cfg.ssub_sat");
+  case 24:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
+        {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.cfg.fshl");
+  case 25:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
+        {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.cfg.fshr");
+  case 26:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
+        {A, Bv, B.CreateAnd(Bv, ci32(Ctx, 31), "fuzz.cfg.shift")},
+        "fuzz.cfg.fshl.dyn");
+  case 27:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
+        {A, Bv, B.CreateAnd(A, ci32(Ctx, 31), "fuzz.cfg.shift")},
+        "fuzz.cfg.fshr.dyn");
+  case 28:
+    return B.CreateZExt(B.CreateTrunc(A, I8, "fuzz.cfg.trunc.i8"), I32,
+                        "fuzz.cfg.zext.i8");
+  case 29:
+    return B.CreateSExt(B.CreateTrunc(A, I8, "fuzz.cfg.trunc.i8"), I32,
+                        "fuzz.cfg.sext.i8");
+  case 30:
+    return B.CreateZExt(B.CreateTrunc(A, I16, "fuzz.cfg.trunc.i16"), I32,
+                        "fuzz.cfg.zext.i16");
+  case 31:
+    return B.CreateSExt(B.CreateTrunc(A, I16, "fuzz.cfg.trunc.i16"), I32,
+                        "fuzz.cfg.sext.i16");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
