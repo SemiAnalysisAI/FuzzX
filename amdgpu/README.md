@@ -117,15 +117,15 @@ rediscovering the same issue.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `FUZZX_ALLOW_M019_HIGHBIT_OR_XOR=1` | unset | Re-enable the outer high-bit `(x | C) ^ x` shape for [m019](known-miscompiles/m019-highbit-or-xor/NOTES.md). |
-| `FUZZX_ALLOW_M020_OR_XOR_AND=1` | unset | Re-enable the `((a | b) ^ b) & (a | b)` shape for [m020](known-miscompiles/m020-or-xor-and/NOTES.md). |
-| `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a | b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
+| `FUZZX_ALLOW_M019_HIGHBIT_OR_XOR=1` | unset | Re-enable the outer high-bit `(x \| C) ^ x` shape for [m019](known-miscompiles/m019-highbit-or-xor/NOTES.md). |
+| `FUZZX_ALLOW_M020_OR_XOR_AND=1` | unset | Re-enable the `((a \| b) ^ b) & (a \| b)` shape for [m020](known-miscompiles/m020-or-xor-and/NOTES.md). |
+| `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a \| b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
 | `FUZZX_ALLOW_M022_AND_XOR_CONSTANT=1` | unset | Re-enable the `((x ^ C) & x)` shape for [m022](known-miscompiles/m022-and-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_M023_AND_XOR_IDENTITY=1` | unset | Re-enable the `(x & y) ^ x` shape for [m023](known-miscompiles/m023-and-xor-identity/NOTES.md). |
 | `FUZZX_ALLOW_M024_UDIV_SEXT_OR=1` | unset | Re-enable unsigned division by odd `or` denominators for [m024](known-miscompiles/m024-udiv-or-one/NOTES.md). |
 | `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` | unset | Re-enable unsigned remainder by odd `or` denominators for [m025](known-miscompiles/m025-urem-or-one/NOTES.md). |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
-| `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) | base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
+| `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) \| base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
 | `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
 | `FUZZX_ALLOW_M029_FSHL_SELECT_PHI=1` | unset | Re-enable signed compare/select or compare/PHI shapes over `(y & x)` where `x` is a complemented masked `fshl` for [m029](known-miscompiles/m029-fshl-select-phi/NOTES.md). |
 | `FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3=1` | unset | Re-enable `or(add(shl(...), z), z)` and `or(smin(add(shl(...), z), z), z)` tails for [m030](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md). |
@@ -182,19 +182,19 @@ Tested toolchains as of 2026-05-17:
 | [m016-scalar-fshl-one](known-miscompiles/m016-scalar-fshl-one/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 1)` through a 64-bit shift-by-`-1` sequence that returns only bit 31. |
 | [m017-vector-and-lane0-clear-xor](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` drops a vector lane-0 `and`/`extractelement` clear before `xor`; LLVM HEAD and ROCm HEAD already pass. |
 | [m018-two-private-memory-ops](known-miscompiles/m018-two-private-memory-ops/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` intermittently reads stale scratch data across two private-memory sequences; LLVM HEAD and ROCm HEAD pass 50 repeated combined runs. |
-| [m019-highbit-or-xor](known-miscompiles/m019-highbit-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a high-bit `(x | C) ^ x` expression into `v_bitop3_b32` with the wrong truth table or operands. |
-| [m020-or-xor-and](known-miscompiles/m020-or-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((a | b) ^ b) & (a | b)` into `v_bitop3_b32` with the wrong result. |
-| [m021-fshl-or-xor](known-miscompiles/m021-fshl-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a dynamic `(a | b) ^ a` expression after `fshl` into `v_bitop3_b32` with the wrong result. |
+| [m019-highbit-or-xor](known-miscompiles/m019-highbit-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a high-bit `(x \| C) ^ x` expression into `v_bitop3_b32` with the wrong truth table or operands. |
+| [m020-or-xor-and](known-miscompiles/m020-or-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((a \| b) ^ b) & (a \| b)` into `v_bitop3_b32` with the wrong result. |
+| [m021-fshl-or-xor](known-miscompiles/m021-fshl-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a dynamic `(a \| b) ^ a` expression after `fshl` into `v_bitop3_b32` with the wrong result. |
 | [m022-and-xor-constant](known-miscompiles/m022-and-xor-constant/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((x ^ C) & x)` after a dynamic `and` into `v_bitop3_b32` with the wrong low bit. |
 | [m023-and-xor-identity](known-miscompiles/m023-and-xor-identity/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(x & y) ^ x` into `v_bitop3_b32` with the wrong identity result. |
-| [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x | 1` through an imprecise float reciprocal path. |
-| [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x | 1` through the same imprecise reciprocal path. |
+| [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x \| 1` through an imprecise float reciprocal path. |
+| [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x \| 1` through the same imprecise reciprocal path. |
 | [m026-shl-umax-xor-and](known-miscompiles/m026-shl-umax-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O2` combines a shifted `umax` high-bit extraction into `v_bitop3_b32` using the input and salt instead of their xor. |
-| [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(((y ^ x) & x) | base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`. |
+| [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(((y ^ x) & x) \| base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`. |
 | [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately. |
 | [m029-fshl-select-phi](known-miscompiles/m029-fshl-select-phi/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a signed compare/select over `y & x`, where `x` is a complemented masked `fshl`, so the true zero arm is chosen when the signed compare is false. |
 | [m030-ctlz-shl-or-bitop3](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a low-bit `or` through `v_bitop3_b32` using the unmasked `%n` value instead of `%n & 1`. |
-| [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `(x | 255) - x` instead of `(x | 255) - -1`. |
+| [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `(x \| 255) - x` instead of `(x \| 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
