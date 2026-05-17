@@ -105,9 +105,9 @@ scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=131072 -rs
 
 That wrapper selects the ROCm 7.2.3 fuzzer build.
 
-Candidate compiler crashes, runner failures, or output mismatches are saved
-under `$FUZZX_RUNTIME_ROOT/findings` by default. Generated corpora and findings
-are local artifacts and are ignored by git; set `FUZZX_RUNTIME_ROOT`,
+Candidate compiler crashes, compile/link failures, or output mismatches are
+saved under `$FUZZX_RUNTIME_ROOT/findings` by default. Generated corpora and
+findings are local artifacts and are ignored by git; set `FUZZX_RUNTIME_ROOT`,
 `CORPUS_ROOT`, `LOG_DIR`, `ARTIFACT_ROOT`, or `FUZZX_FINDINGS_DIR` to override
 the default local runtime paths.
 

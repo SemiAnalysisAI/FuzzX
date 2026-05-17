@@ -22,6 +22,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/Alignment.h"
+#include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -257,6 +258,14 @@ std::optional<SmallVector<char, 0>> emitObject(Module &M, TargetMachine &TM) {
   PM.run(M);
   return Obj;
 }
+
+struct CompileResult {
+  SmallVector<char, 0> Object;
+  std::string FailureStage;
+  int CrashRetCode = 0;
+  bool Success = false;
+  bool Crashed = false;
+};
 
 std::string moduleToString(Module &M) {
   std::string Text;
@@ -3482,21 +3491,52 @@ void prepareIRModuleForCompile(Module &M, StringRef CPU, StringRef KernelName) {
   }
 }
 
-std::optional<SmallVector<char, 0>>
+CompileResult
 compileIRModuleToObject(const Module &Input, StringRef CPU,
                         OptimizationLevel Level, StringRef KernelName,
                         std::string *IR = nullptr) {
+  CompileResult Result;
   TargetMachine *TM = getTargetMachine(CPU, Level);
   std::unique_ptr<Module> M = CloneModule(Input);
   prepareIRModuleForCompile(*M, CPU, KernelName);
   M->setDataLayout(TM->createDataLayout());
   if (IR)
     *IR = moduleToString(*M);
-  if (!validateIRCorpusModule(*M))
-    return std::nullopt;
-  if (!runOptimizationPipeline(*M, *TM, Level))
-    return std::nullopt;
-  return emitObject(*M, *TM);
+  if (!validateIRCorpusModule(*M)) {
+    Result.FailureStage = "validate";
+    return Result;
+  }
+
+  bool PipelineOk = false;
+  CrashRecoveryContext PipelineCRC;
+  if (!PipelineCRC.RunSafely(
+          [&] { PipelineOk = runOptimizationPipeline(*M, *TM, Level); })) {
+    Result.FailureStage = "opt-pipeline";
+    Result.Crashed = true;
+    Result.CrashRetCode = PipelineCRC.RetCode;
+    return Result;
+  }
+  if (!PipelineOk) {
+    Result.FailureStage = "opt-pipeline";
+    return Result;
+  }
+
+  std::optional<SmallVector<char, 0>> Obj;
+  CrashRecoveryContext CodeGenCRC;
+  if (!CodeGenCRC.RunSafely([&] { Obj = emitObject(*M, *TM); })) {
+    Result.FailureStage = "codegen";
+    Result.Crashed = true;
+    Result.CrashRetCode = CodeGenCRC.RetCode;
+    return Result;
+  }
+  if (!Obj) {
+    Result.FailureStage = "codegen";
+    return Result;
+  }
+
+  Result.Object = std::move(*Obj);
+  Result.Success = true;
+  return Result;
 }
 
 std::vector<uint8_t> moduleToBitcode(Module &M) {
@@ -3736,6 +3776,29 @@ void saveFinding(const uint8_t *Data, size_t Size, StringRef IR,
   errs() << "candidate saved: " << Dir.string() << "\n";
 }
 
+void saveFailureFinding(const uint8_t *Data, size_t Size, StringRef IR,
+                        StringRef Kind, StringRef Stage,
+                        std::optional<int> CrashRetCode = std::nullopt) {
+  const char *RootEnv = std::getenv("FUZZX_FINDINGS_DIR");
+  std::filesystem::path Root = RootEnv && *RootEnv ? RootEnv : "findings";
+  std::filesystem::create_directories(Root);
+  auto Dir = Root / ("cxx-failure-" + std::to_string(std::time(nullptr)) +
+                     "-" + std::to_string(getpid()));
+  std::filesystem::create_directories(Dir);
+
+  std::ofstream Raw(Dir / "fuzzer-input.bc", std::ios::binary);
+  Raw.write(reinterpret_cast<const char *>(Data),
+            static_cast<std::streamsize>(Size));
+  std::ofstream LL(Dir / "program.ll");
+  LL << IR.str();
+  std::ofstream Failure(Dir / "failure.txt");
+  Failure << "kind=" << Kind.str() << "\n"
+          << "stage=" << Stage.str() << "\n";
+  if (CrashRetCode)
+    Failure << "crash_retcode=" << *CrashRetCode << "\n";
+  errs() << "candidate saved: " << Dir.string() << "\n";
+}
+
 StringRef getCPU() {
   const char *CPU = std::getenv("AMDGPU_MCPU");
   return CPU && *CPU ? StringRef(CPU) : StringRef("gfx950");
@@ -3802,19 +3865,48 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
     return 0;
   auto Inputs = makeInputs(Data, Size);
 
-  std::string IR;
+  std::string O0IR;
   auto O0Obj =
       compileIRModuleToObject(*M, CPU, OptimizationLevel::O0, "fuzz_kernel_o0",
-                              &IR);
-  if (!O0Obj)
+                              &O0IR);
+  if (!O0Obj.Success) {
+    if (O0Obj.FailureStage != "validate") {
+      std::string Stage = "o0-" + O0Obj.FailureStage;
+      saveFailureFinding(Data, Size, O0IR,
+                         O0Obj.Crashed ? "compiler-crash"
+                                       : "compiler-failure",
+                         Stage,
+                         O0Obj.Crashed
+                             ? std::optional<int>(O0Obj.CrashRetCode)
+                             : std::nullopt);
+      std::abort();
+    }
     return 0;
+  }
+  std::string O2IR;
   auto O2Obj =
-      compileIRModuleToObject(*M, CPU, OptimizationLevel::O2, "fuzz_kernel_o2");
-  if (!O2Obj)
+      compileIRModuleToObject(*M, CPU, OptimizationLevel::O2, "fuzz_kernel_o2",
+                              &O2IR);
+  if (!O2Obj.Success) {
+    if (O2Obj.FailureStage != "validate") {
+      std::string Stage = "o2-" + O2Obj.FailureStage;
+      saveFailureFinding(Data, Size, O2IR,
+                         O2Obj.Crashed ? "compiler-crash"
+                                       : "compiler-failure",
+                         Stage,
+                         O2Obj.Crashed
+                             ? std::optional<int>(O2Obj.CrashRetCode)
+                             : std::nullopt);
+      std::abort();
+    }
     return 0;
-  auto HsacoPath = linkObjectsToHsaco(*O0Obj, *O2Obj);
-  if (!HsacoPath)
+  }
+  auto HsacoPath = linkObjectsToHsaco(O0Obj.Object, O2Obj.Object);
+  if (!HsacoPath) {
+    saveFailureFinding(Data, Size, O0IR, "link-failure", "hsaco-link");
+    std::abort();
     return 0;
+  }
 
   std::array<uint32_t, InputCount> O0Outputs{};
   std::array<uint32_t, InputCount> O2Outputs{};
@@ -3828,7 +3920,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
 
   for (unsigned I = 0; I < InputCount; ++I) {
     if (O0Outputs[I] != O2Outputs[I]) {
-      saveFinding(Data, Size, IR, *HsacoPath, "differential", I, Inputs[I],
+      saveFinding(Data, Size, O0IR, *HsacoPath, "differential", I, Inputs[I],
                   O0Outputs[I], O2Outputs[I]);
       std::abort();
     }
@@ -3838,6 +3930,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
 }
 
 extern "C" int LLVMFuzzerInitialize(int *, char ***) {
+  CrashRecoveryContext::Enable();
   if (hipSetDevice(getDevice()) != hipSuccess)
     return 1;
   return 0;
