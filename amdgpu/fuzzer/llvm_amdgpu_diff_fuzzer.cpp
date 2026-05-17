@@ -1,5 +1,6 @@
 #include "lld/Common/Driver.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -1175,6 +1176,40 @@ bool triggersM031VectorOrExtractSub(const Instruction &I) {
          LOr == ROr && LLane != RLane;
 }
 
+bool isVectorSelect(const Value *V) {
+  const auto *Sel = dyn_cast<SelectInst>(V);
+  return Sel && Sel->getType()->isVectorTy();
+}
+
+bool dependsOnVectorSelect(const Value *V, SmallPtrSetImpl<const Value *> &Seen,
+                           unsigned Depth = 0) {
+  if (!V || Depth > 64 || !Seen.insert(V).second)
+    return false;
+  if (isVectorSelect(V))
+    return true;
+  const auto *I = dyn_cast<Instruction>(V);
+  if (!I)
+    return false;
+  for (const Use &Op : I->operands())
+    if (dependsOnVectorSelect(Op.get(), Seen, Depth + 1))
+      return true;
+  return false;
+}
+
+bool triggersM032LoopVectorSelect(const Instruction &I) {
+  const auto *Phi = dyn_cast<PHINode>(&I);
+  if (!Phi || !Phi->getType()->isIntegerTy(32) ||
+      !hasExactName(Phi, "fuzz.loop.acc"))
+    return false;
+
+  for (unsigned Idx = 0, End = Phi->getNumIncomingValues(); Idx != End; ++Idx) {
+    SmallPtrSet<const Value *, 32> Seen;
+    if (dependsOnVectorSelect(Phi->getIncomingValue(Idx), Seen))
+      return true;
+  }
+  return false;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1227,6 +1262,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM029 = envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", false);
   bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
+  bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1256,7 +1292,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
               (!AllowM029 && triggersM029FshlSelectPhi(I)) ||
               (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
-              (!AllowM031 && triggersM031VectorOrExtractSub(I)))
+              (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
+              (!AllowM032 && triggersM032LoopVectorSelect(I)))
             return false;
       continue;
     }
