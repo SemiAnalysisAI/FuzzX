@@ -2192,6 +2192,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
   bool UseSecondAccumulator = (Gen() % 3) == 0;
+  bool UseEarlyExit = (Gen() % 4) == 0;
 
   BasicBlock *Preheader = Store->getParent();
   BasicBlock *Exit =
@@ -2242,16 +2243,44 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
                               "fuzz.loop.acc2.mix");
   }
 
-  IRBuilder<NoFolder> BodyTailB(FinalFrag.Tail);
+  Value *NextAcc = BodyFrag.Result;
+  Value *BreakValue = nullptr;
+  BasicBlock *Backedge = FinalFrag.Tail;
+  if (UseEarlyExit) {
+    IRBuilder<NoFolder> BreakB(FinalFrag.Tail);
+    BreakValue = NextAcc;
+    if (Acc2)
+      BreakValue =
+          BreakB.CreateAdd(NextAcc, NextAcc2, "fuzz.loop.break.value");
+    Value *BreakCond = BreakB.CreateICmp(randomICmpPredicate(Gen), BreakValue,
+                                         chooseCFGValue(Ctx, Other, Gen),
+                                         "fuzz.loop.break");
+    Backedge = BasicBlock::Create(Ctx, "fuzz.loop.continue", F, Exit);
+    BreakB.CreateCondBr(BreakCond, Exit, Backedge);
+  }
+
+  IRBuilder<NoFolder> BodyTailB(Backedge);
   Value *NextIndex =
       BodyTailB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
   BodyTailB.CreateBr(Header);
-  Index->addIncoming(NextIndex, FinalFrag.Tail);
-  Acc->addIncoming(BodyFrag.Result, FinalFrag.Tail);
+  Index->addIncoming(NextIndex, Backedge);
+  Acc->addIncoming(NextAcc, Backedge);
   if (Acc2)
-    Acc2->addIncoming(NextAcc2, FinalFrag.Tail);
+    Acc2->addIncoming(NextAcc2, Backedge);
 
-  if (Acc2) {
+  if (UseEarlyExit) {
+    Value *NaturalExitValue = Acc;
+    if (Acc2) {
+      IRBuilder<NoFolder> HeaderExitB(Header->getTerminator());
+      NaturalExitValue =
+          HeaderExitB.CreateAdd(Acc, Acc2, "fuzz.loop.natural.value");
+    }
+    PHINode *ExitValue =
+        PHINode::Create(I32, 2, "fuzz.loop.exit.value", Exit->begin());
+    ExitValue->addIncoming(NaturalExitValue, Header);
+    ExitValue->addIncoming(BreakValue, FinalFrag.Tail);
+    Store->setOperand(0, ExitValue);
+  } else if (Acc2) {
     IRBuilder<NoFolder> ExitB(Store);
     Value *Mixed = ExitB.CreateAdd(Acc, Acc2, "fuzz.loop.acc.mix");
     Store->setOperand(0, Mixed);
