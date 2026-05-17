@@ -659,6 +659,15 @@ Value *chooseI32Value(Instruction *InsertPt, std::minstd_rand &Gen) {
   return interestingI32(Ctx, Gen);
 }
 
+ICmpInst::Predicate randomICmpPredicate(std::minstd_rand &Gen) {
+  static constexpr std::array<ICmpInst::Predicate, 10> Predicates = {
+      ICmpInst::ICMP_EQ,  ICmpInst::ICMP_NE,  ICmpInst::ICMP_UGT,
+      ICmpInst::ICMP_UGE, ICmpInst::ICMP_ULT, ICmpInst::ICMP_ULE,
+      ICmpInst::ICMP_SGT, ICmpInst::ICMP_SGE, ICmpInst::ICMP_SLT,
+      ICmpInst::ICMP_SLE};
+  return Predicates[Gen() % Predicates.size()];
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -666,7 +675,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 18) {
+  switch (Gen() % 26) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -711,16 +720,44 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
         "fuzz.umin");
   case 15:
     return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I32}), {A, Bv},
+        "fuzz.umax");
+  case 16:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I32}), {A, Bv},
+        "fuzz.smin");
+  case 17:
+    return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I32}), {A, Bv},
         "fuzz.smax");
-  case 16: {
-    Value *Cmp = B.CreateICmpULT(A, Bv, "fuzz.cmp");
+  case 18:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::uadd_sat, {I32}),
+        {A, Bv}, "fuzz.uadd_sat");
+  case 19:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::usub_sat, {I32}),
+        {A, Bv}, "fuzz.usub_sat");
+  case 20:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {I32}),
+        {A, Bv}, "fuzz.sadd_sat");
+  case 21:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {I32}),
+        {A, Bv}, "fuzz.ssub_sat");
+  case 22: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A, Bv, "fuzz.cmp");
     return B.CreateSelect(Cmp, Bv, A, "fuzz.select");
   }
-  default:
+  case 23:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
         {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.fshl");
+  default:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
+        {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.fshr");
   }
 }
 
