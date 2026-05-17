@@ -457,6 +457,58 @@ bool isAllowedIRInstruction(const Instruction &I) {
   return false;
 }
 
+bool hasExactName(const Value *V, StringRef Name) {
+  return V && V->hasName() && V->getName() == Name;
+}
+
+bool isSmallLoopTripCount(const Value *V) {
+  const auto *C = dyn_cast<ConstantInt>(V);
+  if (!C || !C->getType()->isIntegerTy(32))
+    return false;
+  uint64_t Trip = C->getZExtValue();
+  return Trip >= 1 && Trip <= 4;
+}
+
+bool hasI32ConstantValue(const Value *V, uint32_t Expected) {
+  const auto *C = dyn_cast<ConstantInt>(V);
+  return C && C->getType()->isIntegerTy(32) && C->getZExtValue() == Expected;
+}
+
+bool isValidLoopControlInstruction(const Instruction &I) {
+  if (!I.hasName() || !I.getName().starts_with("fuzz.loop."))
+    return true;
+
+  if (I.getName() == "fuzz.loop.cond") {
+    const auto *Cmp = dyn_cast<ICmpInst>(&I);
+    return Cmp && Cmp->getPredicate() == ICmpInst::ICMP_ULT &&
+           hasExactName(Cmp->getOperand(0), "fuzz.loop.iv") &&
+           isSmallLoopTripCount(Cmp->getOperand(1));
+  }
+
+  if (I.getName() == "fuzz.loop.next") {
+    const auto *BO = dyn_cast<BinaryOperator>(&I);
+    return BO && BO->getOpcode() == Instruction::Add &&
+           hasExactName(BO->getOperand(0), "fuzz.loop.iv") &&
+           hasI32ConstantValue(BO->getOperand(1), 1);
+  }
+
+  if (I.getName() == "fuzz.loop.iv") {
+    const auto *Phi = dyn_cast<PHINode>(&I);
+    if (!Phi || Phi->getNumIncomingValues() != 2)
+      return false;
+    bool HasStart = false;
+    bool HasBackedge = false;
+    for (unsigned Idx = 0; Idx != 2; ++Idx) {
+      HasStart |= hasI32ConstantValue(Phi->getIncomingValue(Idx), 0);
+      HasBackedge |=
+          hasExactName(Phi->getIncomingValue(Idx), "fuzz.loop.next");
+    }
+    return HasStart && HasBackedge;
+  }
+
+  return true;
+}
+
 void scrubPoisonAnnotations(Module &M) {
   for (Function &F : M) {
     for (BasicBlock &BB : F) {
@@ -1080,6 +1132,7 @@ bool validateIRCorpusModule(Module &M) {
       for (BasicBlock &BB : F)
         for (Instruction &I : BB)
           if (!isAllowedIRInstruction(I) ||
+              !isValidLoopControlInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
               (!AllowM020 && triggersM020OrXorAnd(I)) ||
               (!AllowM021 && triggersM021OrXor(I)) ||
@@ -1815,6 +1868,8 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
   for (BasicBlock &BB : *F) {
     for (Instruction &I : BB) {
       if (!I.getName().starts_with("fuzz."))
+        continue;
+      if (I.getName().starts_with("fuzz.loop."))
         continue;
       for (unsigned IOp = 0; IOp < I.getNumOperands(); ++IOp) {
         if (auto *Call = dyn_cast<CallBase>(&I)) {
