@@ -1,0 +1,60 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .b32   %r<34>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    mov.u32         %r32, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r32, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+
+    mov.u32       %r7, 32;
+    mov.u32       %r11, 32;
+    mov.u32       %r13, %r32;
+    mov.u32       %r14, %r2;
+    mov.u32       %r17, %r32;
+    mov.u32       %r28, 28;
+
+    shl.b32       %r6, 28805, 3;
+    shl.b32       %r25, %r13, 0;
+    add.u32       %r31, 2740016779, 1431655765;
+    add.u32       %r29, 4294901760, %r31;
+    and.b32       %r33, %r14, 31;
+    shl.b32       %r21, 52957, %r33;
+    shl.b32       %r1, %r17, 21;
+    shl.b32       %r8, %r1, 13;
+    shl.b32       %r0, %r6, 28;
+    sub.u32       %r9, %r8, %r29;
+    and.b32       %r25, 65535, %r25;
+    bfe.s32       %r5, %r9, 4, 7;
+    and.b32       %r33, %r5, 31;
+    shl.b32       %r28, %r25, %r33;
+    add.u32       %r26, %r17, %r28;
+    add.u32       %r9, %r21, %r26;
+    shl.b32       %r31, %r0, 0;
+    shl.b32       %r26, %r31, 17;
+    shl.b32       %r19, %r9, 0;
+    and.b32       %r33, %r19, 31;
+    shl.b32       %r13, 28155, %r33;
+    and.b32       %r33, %r13, 31;
+    shl.b32       %r20, %r19, %r33;
+    add.u32       %r13, 65535, %r20;
+    add.u32       %r0, %r13, %r26;
+
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r32, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    ret;
+}

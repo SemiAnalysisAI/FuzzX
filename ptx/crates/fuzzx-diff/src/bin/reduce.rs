@@ -171,6 +171,23 @@ fn line_mentions_body_wide_scratch(line: &str) -> bool {
         .any(|token| matches!(token, "%rd6" | "%rd7"))
 }
 
+fn line_mentions_token(line: &str, needle: &str) -> bool {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
+        .any(|token| token == needle)
+}
+
+fn declared_b32_scratch_reg(lines: &[&str]) -> Option<String> {
+    lines.iter().find_map(|line| {
+        let trimmed = line.trim();
+        let prefix = ".reg .b32";
+        let r_pos = trimmed.strip_prefix(prefix)?.find("%r<")? + prefix.len();
+        let start = r_pos + "%r<".len();
+        let end = trimmed[start..].find('>')? + start;
+        let total = trimmed[start..end].parse::<u32>().ok()?;
+        total.checked_sub(1).map(|reg| format!("%r{reg}"))
+    })
+}
+
 /// Both opt levels compile + launch + are deterministic across two runs, and
 /// their outputs differ. Returns the divergent (o0, o3) on success.
 fn diverges_deterministically(
@@ -420,6 +437,7 @@ fn find_greedy_removal(
 /// `ret;`, braces.
 fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
     let lines: Vec<&str> = ptx.lines().collect();
+    let b32_scratch = declared_b32_scratch_reg(&lines);
     let prologue_end = if let Some(i) = lines.iter().position(|l| {
         let t = l.trim();
         t.starts_with("bra") && t.contains("block_0;")
@@ -476,6 +494,16 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         if line_mentions_body_wide_scratch(t) {
             continue;
         }
+        // The highest declared `%r` is the generator's scratch register for
+        // register-count shifts and the high half of `mov.b64` extraction.
+        // Removing either its defining mask or its use independently can leave
+        // an undefined shift count.
+        if b32_scratch
+            .as_deref()
+            .is_some_and(|reg| line_mentions_token(t, reg))
+        {
+            continue;
+        }
         out.push(i);
     }
     // Epilogue: store lines only; address arithmetic and `ret;` stay put.
@@ -489,7 +517,10 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{line_mentions_body_wide_scratch, line_mentions_pred, removable_indices};
+    use super::{
+        declared_b32_scratch_reg, line_mentions_body_wide_scratch, line_mentions_pred,
+        removable_indices,
+    };
 
     #[test]
     fn predicate_matching_does_not_confuse_prefixes() {
@@ -511,6 +542,16 @@ mod tests {
     }
 
     #[test]
+    fn finds_declared_b32_scratch_reg() {
+        let lines = [
+            ".reg .pred %p<3>;",
+            ".reg .b32   %r<34>;",
+            ".reg .b64 %rd<8>;",
+        ];
+        assert_eq!(declared_b32_scratch_reg(&lines).as_deref(), Some("%r33"));
+    }
+
+    #[test]
     fn structured_epilogue_without_exit_label_is_reducible() {
         let ptx = r#".version 8.8
 .target sm_103
@@ -529,6 +570,8 @@ mod tests {
     setp.ne.u32   %p1, %r3, %r4;
 keep:
     add.u32       %r5, %r5, %r6;
+    and.b32       %r7, %r1, 31;
+    shl.b32       %r5, %r5, %r7;
     cvt.u64.u32   %rd6, %r1;
     cvt.u64.u32   %rd7, %r2;
     xor.b64       %rd6, %rd6, %rd7;
@@ -552,6 +595,7 @@ keep:
         assert!(removable
             .iter()
             .any(|&i| lines[i].trim().starts_with("add.u32")));
+        assert!(!removable.iter().any(|&i| lines[i].trim().contains("%r7")));
         assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd6")));
         assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd7")));
         assert!(!removable

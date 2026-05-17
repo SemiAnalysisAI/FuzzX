@@ -127,6 +127,7 @@ Version | Description |
 | 13.2.78 | [m044-mul-lo-square-fold](known-miscompiles/m044-mul-lo-square-fold/NOTES.md): Likely same root cause as m041; square of a shifted `mul.lo` value folds to `0x80000000` instead of zero. |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
 | 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
+| 13.2.78 | [m050-reg-shl-mask-fold](known-miscompiles/m050-reg-shl-mask-fold/NOTES.md): Masked register-count `shl.b32` chains fold to the wrong shifted value. |
 | 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
 
 ## Running
