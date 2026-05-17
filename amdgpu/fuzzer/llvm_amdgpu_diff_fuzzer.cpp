@@ -938,6 +938,82 @@ bool triggersM029FshlSelectPhi(const Instruction &I) {
   return false;
 }
 
+bool isI32IntrinsicCall(const Value *V, Intrinsic::ID ID) {
+  const auto *Call = dyn_cast<CallInst>(V);
+  if (!Call || !Call->getType()->isIntegerTy(32))
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() && Callee->getIntrinsicID() == ID;
+}
+
+bool isM030CtlzZeroCompare(const Value *V) {
+  const auto *Cmp = dyn_cast<ICmpInst>(V);
+  if (!Cmp || !Cmp->isEquality())
+    return false;
+  return (isI32IntrinsicCall(Cmp->getOperand(0), Intrinsic::ctlz) &&
+          isa<ConstantInt>(Cmp->getOperand(1)) &&
+          cast<ConstantInt>(Cmp->getOperand(1))->isZero()) ||
+         (isI32IntrinsicCall(Cmp->getOperand(1), Intrinsic::ctlz) &&
+          isa<ConstantInt>(Cmp->getOperand(0)) &&
+          cast<ConstantInt>(Cmp->getOperand(0))->isZero());
+}
+
+bool isM030SmallBitValue(const Value *V) {
+  if (isI32IntrinsicCall(V, Intrinsic::ctpop))
+    return true;
+  const auto *ZExt = dyn_cast<ZExtInst>(V);
+  return ZExt && ZExt->getType()->isIntegerTy(32) &&
+         isM030CtlzZeroCompare(ZExt->getOperand(0));
+}
+
+bool isM030ShiftedI32(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::Shl ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  const auto *Shift = dyn_cast<ConstantInt>(BO->getOperand(1));
+  return Shift && Shift->getValue().ult(32);
+}
+
+bool isM030AddOfShiftAndBit(const Value *MaybeAdd, const Value *Bit) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeAdd);
+  if (!BO || BO->getOpcode() != Instruction::Add ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (BO->getOperand(0) == Bit && isM030ShiftedI32(BO->getOperand(1))) ||
+         (BO->getOperand(1) == Bit && isM030ShiftedI32(BO->getOperand(0)));
+}
+
+bool isM030SMinOfAddAndBit(const Value *MaybeSMin, const Value *Bit) {
+  const auto *Call = dyn_cast<CallInst>(MaybeSMin);
+  if (!Call || !Call->getType()->isIntegerTy(32))
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic() ||
+      Callee->getIntrinsicID() != Intrinsic::smin || Call->arg_size() != 2)
+    return false;
+  return (Call->getArgOperand(0) == Bit &&
+          isM030AddOfShiftAndBit(Call->getArgOperand(1), Bit)) ||
+         (Call->getArgOperand(1) == Bit &&
+          isM030AddOfShiftAndBit(Call->getArgOperand(0), Bit));
+}
+
+bool isM030OrValueForBit(const Value *MaybeOrValue, const Value *Bit) {
+  return isM030AddOfShiftAndBit(MaybeOrValue, Bit) ||
+         isM030SMinOfAddAndBit(MaybeOrValue, Bit);
+}
+
+bool triggersM030CtlzShlOrBitop3(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (isM030SmallBitValue(BO->getOperand(0)) &&
+          isM030OrValueForBit(BO->getOperand(1), BO->getOperand(0))) ||
+         (isM030SmallBitValue(BO->getOperand(1)) &&
+          isM030OrValueForBit(BO->getOperand(0), BO->getOperand(1)));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -988,6 +1064,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
   bool AllowM029 = envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", false);
+  bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1013,7 +1090,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
               (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
-              (!AllowM029 && triggersM029FshlSelectPhi(I)))
+              (!AllowM029 && triggersM029FshlSelectPhi(I)) ||
+              (!AllowM030 && triggersM030CtlzShlOrBitop3(I)))
             return false;
       continue;
     }
