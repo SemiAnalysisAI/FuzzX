@@ -532,6 +532,48 @@ bool triggersM021OrXor(const Instruction &I) {
          isOrWithOperand(BO->getOperand(1), BO->getOperand(0));
 }
 
+const Value *stripI32AndAllOnes(const Value *V) {
+  while (const auto *BO = dyn_cast<BinaryOperator>(V)) {
+    if (BO->getOpcode() != Instruction::And || !BO->getType()->isIntegerTy(32))
+      return V;
+    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0))) {
+      if (C->isMinusOne()) {
+        V = BO->getOperand(1);
+        continue;
+      }
+    }
+    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1))) {
+      if (C->isMinusOne()) {
+        V = BO->getOperand(0);
+        continue;
+      }
+    }
+    return V;
+  }
+  return V;
+}
+
+bool isXorWithConstantOf(const Value *MaybeXor, const Value *Operand) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
+  if (!BO || BO->getOpcode() != Instruction::Xor)
+    return false;
+  Operand = stripI32AndAllOnes(Operand);
+  return (stripI32AndAllOnes(BO->getOperand(0)) == Operand &&
+          isa<ConstantInt>(BO->getOperand(1))) ||
+         (stripI32AndAllOnes(BO->getOperand(1)) == Operand &&
+          isa<ConstantInt>(BO->getOperand(0)));
+}
+
+bool triggersM022AndXorConstant(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  const Value *LHS = stripI32AndAllOnes(BO->getOperand(0));
+  const Value *RHS = stripI32AndAllOnes(BO->getOperand(1));
+  return isXorWithConstantOf(LHS, RHS) || isXorWithConstantOf(RHS, LHS);
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -574,6 +616,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM019 = envFlag("FUZZX_ALLOW_M019_HIGHBIT_OR_XOR", false);
   bool AllowM020 = envFlag("FUZZX_ALLOW_M020_OR_XOR_AND", false);
   bool AllowM021 = envFlag("FUZZX_ALLOW_M021_OR_XOR", false);
+  bool AllowM022 = envFlag("FUZZX_ALLOW_M022_AND_XOR_CONSTANT", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -591,7 +634,8 @@ bool validateIRCorpusModule(Module &M) {
           if (!isAllowedIRInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
               (!AllowM020 && triggersM020OrXorAnd(I)) ||
-              (!AllowM021 && triggersM021OrXor(I)))
+              (!AllowM021 && triggersM021OrXor(I)) ||
+              (!AllowM022 && triggersM022AndXorConstant(I)))
             return false;
       continue;
     }
