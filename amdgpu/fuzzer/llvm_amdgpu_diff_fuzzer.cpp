@@ -6,6 +6,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/CFG.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -421,7 +422,82 @@ bool isKnownNonZeroI32(const Value *V) {
   return false;
 }
 
+unsigned integerScalarWidth(Type *Ty) {
+  if (Ty->isIntegerTy())
+    return Ty->getIntegerBitWidth();
+  if (auto *VT = dyn_cast<VectorType>(Ty)) {
+    Type *EltTy = VT->getElementType();
+    if (EltTy->isIntegerTy())
+      return EltTy->getIntegerBitWidth();
+  }
+  return 0;
+}
+
+bool isConstantIntOrVectorBelow(const Value *V, unsigned Limit) {
+  if (const auto *C = dyn_cast<ConstantInt>(V))
+    return C->getValue().ult(Limit);
+  const auto *C = dyn_cast<Constant>(V);
+  const auto *VT = V ? dyn_cast<FixedVectorType>(V->getType()) : nullptr;
+  if (!C || !VT)
+    return false;
+  for (unsigned I = 0, E = VT->getNumElements(); I != E; ++I) {
+    auto *Elt = dyn_cast_or_null<ConstantInt>(C->getAggregateElement(I));
+    if (!Elt || !Elt->getValue().ult(Limit))
+      return false;
+  }
+  return true;
+}
+
+bool isFixedIntVectorType(Type *Ty, unsigned BitWidth) {
+  auto *VT = dyn_cast<FixedVectorType>(Ty);
+  return VT && VT->getElementType()->isIntegerTy(BitWidth) &&
+         (VT->getNumElements() == 2 || VT->getNumElements() == 4);
+}
+
+bool isValidVectorLaneIndex(Type *VecTy, const Value *Index) {
+  auto *VT = dyn_cast<FixedVectorType>(VecTy);
+  auto *C = dyn_cast<ConstantInt>(Index);
+  return VT && C && C->getZExtValue() < VT->getNumElements();
+}
+
+bool isValidVectorInstruction(const Instruction &I) {
+  if (const auto *Insert = dyn_cast<InsertElementInst>(&I)) {
+    return isFixedIntVectorType(Insert->getType(), 32) &&
+           Insert->getOperand(1)->getType()->isIntegerTy(32) &&
+           isValidVectorLaneIndex(Insert->getType(), Insert->getOperand(2));
+  }
+  if (const auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
+    return Extract->getType()->isIntegerTy(32) &&
+           isFixedIntVectorType(Extract->getVectorOperandType(), 32) &&
+           isValidVectorLaneIndex(Extract->getVectorOperandType(),
+                                  Extract->getIndexOperand());
+  }
+  if (const auto *BO = dyn_cast<BinaryOperator>(&I)) {
+    if (!BO->getType()->isVectorTy())
+      return true;
+    if (!isFixedIntVectorType(BO->getType(), 32))
+      return false;
+    if (BO->isShift())
+      return isConstantIntOrVectorBelow(BO->getOperand(1), 32);
+  }
+  if (const auto *Cmp = dyn_cast<ICmpInst>(&I)) {
+    if (!Cmp->getOperand(0)->getType()->isVectorTy())
+      return true;
+    return isFixedIntVectorType(Cmp->getOperand(0)->getType(), 32) &&
+           isFixedIntVectorType(Cmp->getType(), 1);
+  }
+  if (const auto *Sel = dyn_cast<SelectInst>(&I)) {
+    if (!Sel->getType()->isVectorTy())
+      return true;
+    return isFixedIntVectorType(Sel->getType(), 32) &&
+           isFixedIntVectorType(Sel->getCondition()->getType(), 1);
+  }
+  return true;
+}
+
 bool isAllowedIRInstruction(const Instruction &I) {
+  if (isa<InsertElementInst, ExtractElementInst>(&I))
+    return true;
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, ICmpInst, PHINode,
           SelectInst>(&I))
@@ -441,8 +517,8 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::Shl:
     case Instruction::LShr:
     case Instruction::AShr:
-      if (auto *Shift = dyn_cast<ConstantInt>(BO->getOperand(1)))
-        return Shift->getValue().ult(BO->getType()->getIntegerBitWidth());
+      if (unsigned Width = integerScalarWidth(BO->getType()))
+        return isConstantIntOrVectorBelow(BO->getOperand(1), Width);
       return false;
     default:
       return false;
@@ -1132,6 +1208,7 @@ bool validateIRCorpusModule(Module &M) {
       for (BasicBlock &BB : F)
         for (Instruction &I : BB)
           if (!isAllowedIRInstruction(I) ||
+              !isValidVectorInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
               (!AllowM020 && triggersM020OrXorAnd(I)) ||
@@ -1371,6 +1448,98 @@ Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   return B.CreateTrunc(Result, I32, "fuzz.trunc.i64");
 }
 
+Constant *randomShiftVector(LLVMContext &Ctx, unsigned Lanes,
+                            std::minstd_rand &Gen) {
+  SmallVector<Constant *, 4> Elements;
+  for (unsigned I = 0; I != Lanes; ++I)
+    Elements.push_back(ci32(Ctx, Gen() & 31u));
+  return ConstantVector::get(Elements);
+}
+
+Value *emitVectorBuild(IRBuilder<NoFolder> &B, Type *VecTy,
+                       ArrayRef<Value *> Elements) {
+  Value *Result = Constant::getNullValue(VecTy);
+  LLVMContext &Ctx = VecTy->getContext();
+  for (unsigned I = 0, E = Elements.size(); I != E; ++I)
+    Result = B.CreateInsertElement(Result, Elements[I], ci32(Ctx, I),
+                                   "fuzz.vec.ins");
+  return Result;
+}
+
+Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
+                                   Value *Bv, std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  unsigned Lanes = (Gen() % 2) == 0 ? 2 : 4;
+  auto *VecTy = FixedVectorType::get(I32, Lanes);
+  SmallVector<Value *, 4> AElements;
+  SmallVector<Value *, 4> BElements;
+  for (unsigned I = 0; I != Lanes; ++I) {
+    AElements.push_back((I % 2) == 0 ? A : Bv);
+    if ((Gen() % 3) == 0)
+      BElements.push_back(interestingI32(Ctx, Gen));
+    else
+      BElements.push_back((I % 2) == 0 ? Bv : A);
+  }
+
+  Value *VA = emitVectorBuild(B, VecTy, AElements);
+  Value *VB = emitVectorBuild(B, VecTy, BElements);
+  Value *Result = nullptr;
+  switch (Gen() % 11) {
+  case 0:
+    Result = B.CreateAdd(VA, VB, "fuzz.vec.add");
+    break;
+  case 1:
+    Result = B.CreateSub(VA, VB, "fuzz.vec.sub");
+    break;
+  case 2:
+    Result = B.CreateMul(VA, VB, "fuzz.vec.mul");
+    break;
+  case 3:
+    Result = B.CreateXor(VA, VB, "fuzz.vec.xor");
+    break;
+  case 4:
+    Result = B.CreateAnd(VA, VB, "fuzz.vec.and");
+    break;
+  case 5:
+    Result = B.CreateOr(VA, VB, "fuzz.vec.or");
+    break;
+  case 6:
+    Result = B.CreateShl(VA, randomShiftVector(Ctx, Lanes, Gen),
+                         "fuzz.vec.shl");
+    break;
+  case 7:
+    Result = B.CreateLShr(VA, randomShiftVector(Ctx, Lanes, Gen),
+                          "fuzz.vec.lshr");
+    break;
+  case 8:
+    Result = B.CreateAShr(VA, randomShiftVector(Ctx, Lanes, Gen),
+                          "fuzz.vec.ashr");
+    break;
+  default: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
+                              "fuzz.vec.cmp");
+    Result = B.CreateSelect(Cmp, VA, VB, "fuzz.vec.select");
+    break;
+  }
+  }
+
+  unsigned Lane0 = Gen() % Lanes;
+  unsigned Lane1 = Gen() % Lanes;
+  Value *E0 = B.CreateExtractElement(Result, ci32(Ctx, Lane0), "fuzz.vec.ext");
+  Value *E1 = B.CreateExtractElement(Result, ci32(Ctx, Lane1), "fuzz.vec.ext");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(E0, E1, "fuzz.vec.reduce.xor");
+  case 1:
+    return B.CreateAdd(E0, E1, "fuzz.vec.reduce.add");
+  case 2:
+    return B.CreateOr(E0, E1, "fuzz.vec.reduce.or");
+  default:
+    return B.CreateSub(E0, E1, "fuzz.vec.reduce.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -1380,7 +1549,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 40) {
+  switch (Gen() % 48) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -1495,8 +1664,15 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
         {A, Bv, chooseI32Value(InsertPt, Gen)}, "fuzz.fshr.dyn");
-  default:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+  case 38:
+  case 39:
     return emitRandomI64Instruction(B, M, A, Bv, Gen);
+  default:
+    return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
 
@@ -1517,7 +1693,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
                                    Value *Bv, std::minstd_rand &Gen) {
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 20) {
+  switch (Gen() % 24) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -1576,10 +1752,12 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A, Bv, "fuzz.cfg.cmp");
     return B.CreateSelect(Cmp, A, Bv, "fuzz.cfg.select");
   }
-  default:
+  case 19:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I32}),
         {A, ConstantInt::getFalse(Ctx)}, "fuzz.cfg.abs");
+  default:
+    return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
 
@@ -1873,6 +2051,8 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
       if (!I.getName().starts_with("fuzz."))
         continue;
       if (I.getName().starts_with("fuzz.loop."))
+        continue;
+      if (I.getName().starts_with("fuzz.vec."))
         continue;
       for (unsigned IOp = 0; IOp < I.getNumOperands(); ++IOp) {
         if (auto *Call = dyn_cast<CallBase>(&I)) {
