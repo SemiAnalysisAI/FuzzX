@@ -19,15 +19,17 @@ Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
 subexpressions reduced back to `i32`, explicit `i1` boolean subexpressions
 reduced back to `i32`, and LLVM bit, min/max, saturation, absolute-value, and
 funnel-shift intrinsics. The mutator can also wrap the current result in
-structured two-way branches, wider multi-way switches, and deeper bounded
-nested acyclic subgraphs with `i32` phi joins. It also generates counted loops
-with small bounded constant or dynamically masked trip counts whose bodies can
-contain nested diamonds and switches. Some generated loops carry two independent
-`i32` accumulator phis, combine them after the loop, or take a guarded early
-exit from the loop body through an exit phi, so corpus entries exercise both
-expression simplification and CFG and loop transforms. CFG arms include the same
-scalar integer, bit, boolean, narrowing, saturating, funnel-shift, and vector
-expression families as the linear mutator.
+structured two-way branches, wider multi-way switches, and deeper bounded CFG
+subgraphs with `i32` phi joins. Those subgraphs can nest more diamonds,
+switches, and small counted loops with optional guarded early exits. The mutator
+also generates top-level counted loops with small bounded constant or
+dynamically masked trip counts whose bodies can contain nested diamonds,
+switches, and inner loops. Some generated loops carry two independent `i32`
+accumulator phis, combine them after the loop, or take a guarded early exit from
+the loop body through an exit phi, so corpus entries exercise both expression
+simplification and CFG and loop transforms. CFG arms include the same scalar
+integer, bit, boolean, narrowing, saturating, funnel-shift, and vector expression
+families as the linear mutator.
 Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Requirements
