@@ -15,11 +15,12 @@ no explicit poison values, no `nuw` / `nsw` / `exact`, no `inbounds`, no
 integer division except nonzero-denominator `udiv` / `urem`, only masked or
 constant shift amounts, and only the fixed skeleton input load/output store.
 Coverage includes scalar integer arithmetic,
-bitwise ops, compares/selects, and LLVM bit, min/max, saturation, and
-funnel-shift intrinsics. The mutator can also wrap the current result in
-structured two-way branches or small multi-way switches with `i32` phi joins,
-so corpus entries exercise both expression simplification and CFG transforms.
-Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
+bitwise ops, compares/selects, `i64` subexpressions truncated to `i32`, and
+LLVM bit, min/max, saturation, and funnel-shift intrinsics. The mutator can
+also wrap the current result in structured two-way branches or small multi-way
+switches with `i32` phi joins, so corpus entries exercise both expression
+simplification and CFG transforms. Corpus files can be inspected directly with
+`opt -S corpus-entry -o -`.
 
 ## Requirements
 

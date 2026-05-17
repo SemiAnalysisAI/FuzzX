@@ -852,6 +852,102 @@ ICmpInst::Predicate randomICmpPredicate(std::minstd_rand &Gen) {
   return Predicates[Gen() % Predicates.size()];
 }
 
+Value *extendI32ToI64(IRBuilder<NoFolder> &B, Value *V,
+                      std::minstd_rand &Gen) {
+  Type *I64 = Type::getInt64Ty(V->getContext());
+  if ((Gen() % 2) == 0)
+    return B.CreateZExt(V, I64, "fuzz.zext.i64");
+  return B.CreateSExt(V, I64, "fuzz.sext.i64");
+}
+
+Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
+                                Value *Bv, std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *A64 = extendI32ToI64(B, A, Gen);
+  Value *B64 = extendI32ToI64(B, Bv, Gen);
+  Value *Result = nullptr;
+  switch (Gen() % 18) {
+  case 0:
+    Result = B.CreateAdd(A64, B64, "fuzz.i64.add");
+    break;
+  case 1:
+    Result = B.CreateSub(A64, B64, "fuzz.i64.sub");
+    break;
+  case 2:
+    Result = B.CreateMul(A64, B64, "fuzz.i64.mul");
+    break;
+  case 3:
+    Result = B.CreateXor(A64, B64, "fuzz.i64.xor");
+    break;
+  case 4:
+    Result = B.CreateAnd(A64, B64, "fuzz.i64.and");
+    break;
+  case 5:
+    Result = B.CreateOr(A64, B64, "fuzz.i64.or");
+    break;
+  case 6:
+    Result = B.CreateShl(A64, ConstantInt::get(I64, Gen() & 63u),
+                         "fuzz.i64.shl");
+    break;
+  case 7:
+    Result = B.CreateLShr(A64, ConstantInt::get(I64, Gen() & 63u),
+                          "fuzz.i64.lshr");
+    break;
+  case 8:
+    Result = B.CreateAShr(A64, ConstantInt::get(I64, Gen() & 63u),
+                          "fuzz.i64.ashr");
+    break;
+  case 9:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctpop, {I64}), {A64},
+        "fuzz.i64.ctpop");
+    break;
+  case 10:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::bitreverse, {I64}),
+        {A64}, "fuzz.i64.bitreverse");
+    break;
+  case 11:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::bswap, {I64}), {A64},
+        "fuzz.i64.bswap");
+    break;
+  case 12:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctlz, {I64}),
+        {A64, ConstantInt::getFalse(Ctx)}, "fuzz.i64.ctlz");
+    break;
+  case 13:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::cttz, {I64}),
+        {A64, ConstantInt::getFalse(Ctx)}, "fuzz.i64.cttz");
+    break;
+  case 14:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {I64}),
+        {A64, B64}, "fuzz.i64.umin");
+    break;
+  case 15:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I64}),
+        {A64, B64}, "fuzz.i64.umax");
+    break;
+  case 16:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I64}),
+        {A64, B64}, "fuzz.i64.smin");
+    break;
+  default:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I64}),
+        {A64, B64}, "fuzz.i64.smax");
+    break;
+  }
+  return B.CreateTrunc(Result, I32, "fuzz.trunc.i64");
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -861,7 +957,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 34) {
+  switch (Gen() % 40) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -972,10 +1068,12 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
         {A, Bv, chooseI32Value(InsertPt, Gen)}, "fuzz.fshl.dyn");
-  default:
+  case 33:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
         {A, Bv, chooseI32Value(InsertPt, Gen)}, "fuzz.fshr.dyn");
+  default:
+    return emitRandomI64Instruction(B, M, A, Bv, Gen);
   }
 }
 
