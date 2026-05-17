@@ -30,12 +30,15 @@ also wrap the current result in structured two-way
 branches, wider multi-way switches, branch/PHI cascades, and deeper bounded CFG
 subgraphs with `i32` phi joins. Those subgraphs can nest more diamonds, switches,
 cascades, and small counted loops with optional guarded early exits. The mutator
-also generates top-level counted loops with small bounded constant or dynamically
+also generates top-level counted loops with bounded constant or dynamically
 masked trip counts whose bodies can contain nested diamonds, switches, cascades,
-and inner loops. Some generated loops carry two independent `i32` accumulator
-phis, combine them after the loop, or take a guarded early exit from the loop
-body through an exit phi, so corpus entries exercise both expression
-simplification and CFG and loop transforms. CFG arms include the same scalar
+and inner loops. A complex-CFG mutation chains several nested subgraphs before
+the final store, so a single corpus entry can contain multiple high-fanout joins
+and loop nests instead of just one wrapper around the result. Some generated
+loops carry two independent `i32` accumulator phis, combine them after the loop,
+or take a guarded early exit from the loop body through an exit phi, so corpus
+entries exercise both expression simplification and CFG and loop transforms. CFG
+arms include the same scalar
 integer, bit, boolean, narrowing, saturating, funnel-shift, finite-FP, and vector
 expression families as the linear mutator.
 Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
@@ -54,19 +57,19 @@ Build and run the directed C++ GPU differential fuzzer:
 
 ```bash
 scripts/build_directed_fuzzer.sh
-HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=65536
+HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=131072
 ```
 
 Run one directed fuzzer process per GPU:
 
 ```bash
-scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=65536
+scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=131072
 ```
 
 Run multiple directed fuzzer workers on each selected GPU:
 
 ```bash
-WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=65536
+WORKERS_PER_GPU=2 scripts/run_directed_multigpu_fuzzer.sh -runs=1000 -max_len=131072
 ```
 
 Multi-GPU runs share one live libFuzzer corpus by default, so workers can
@@ -93,7 +96,7 @@ CPU set.
 For ROCm 7.2.3 release fuzzing, use the release wrapper:
 
 ```bash
-scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=65536 -rss_limit_mb=8192 -use_value_profile=1
+scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=131072 -rss_limit_mb=8192 -use_value_profile=1
 ```
 
 That wrapper selects the ROCm 7.2.3 fuzzer build.
