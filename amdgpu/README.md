@@ -1,5 +1,35 @@
 # FuzzX AMDGPU
 
+*Human-written content*
+
+This is a vibe-coded fuzzer for the AMDGPU path in LLVM.
+
+We test the full LLVM IR -> AMDGPU assembly compilation path, although in
+practice most of the bugs we're finding are in the AMDGPU-specific parts of the
+compiler.
+
+The idea is to:
+ - generate programs that have defined semantics (no UB or poison),
+ - compile them with -O0 and -O2,
+ - ensure that -O0 and -O2 have the same result, and
+ - compare that result to that of a trusted interpreter.
+
+In most of the reproducers we've found, -O0 gives the wrong result and -O2
+gives the correct result.  My untested hypothesis is that we could find
+reproducers for most of these bugs at -O2 as well, it's just that LLVM is good
+at simplifying code, and simpler code is less likely to hit a backend bug.
+
+I initially used LLVM HEAD as the primary fuzzing target, but many of the bugs
+I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
+compared to the release.)  Seeing this, I figured I should be fuzzing the
+release instead.  In any case, the table of results below shows which versions
+reproduce which bugs.
+
+Everything below this line is AI-generated.  You probably only care about the
+"bugs generated" table.  Good luck.
+
+-----------
+
 This directory contains the AMDGPU fuzzer work area.  It is intentionally
 separate from the PTX / `ptxas` fuzzer in [`../ptx/`](../ptx/).
 
