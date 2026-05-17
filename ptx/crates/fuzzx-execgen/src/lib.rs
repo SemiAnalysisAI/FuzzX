@@ -2525,6 +2525,76 @@ mod tests {
         }
     }
 
+    fn dot_video_focused_config() -> GenConfig {
+        GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 1024,
+            max_insts_per_block: 1024,
+            n_working_regs: 96,
+            max_immediate: u32::MAX,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_lop3: false,
+            emit_minmax: false,
+            emit_selp: false,
+            emit_sub: false,
+            emit_mul_lo: false,
+            emit_mulhi: false,
+            emit_bitwise_binops: false,
+            emit_or: false,
+            emit_xor: false,
+            emit_prmt: false,
+            emit_not: false,
+            emit_clz: false,
+            emit_brev: false,
+            emit_cnot: false,
+            emit_abs: false,
+            emit_signed_cmp: false,
+            emit_signed_divrem: false,
+            emit_funnel: false,
+            emit_neg: false,
+            emit_shl: false,
+            emit_shr: false,
+            emit_signed_shr: false,
+            emit_bfind: false,
+            emit_bfi: false,
+            emit_bmsk: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_i32_boundary_immediates: false,
+            emit_dp2a: true,
+            emit_set: false,
+            emit_s32_slct: false,
+            emit_video: true,
+            emit_vsub4: false,
+            ..GenConfig::default()
+        }
+    }
+
+    fn dot_video_focused_mnemonics() -> Vec<&'static str> {
+        let mut mnemonics = Vec::new();
+        for group in [
+            CVT_MNEMONICS,
+            BFE_MNEMONICS,
+            &["div.u32", "rem.u32"],
+            SAD_MNEMONICS,
+            POST_KNOWN_SLCT_MNEMONICS,
+            DP4A_MNEMONICS,
+            DP2A_MNEMONICS,
+            POST_KNOWN_VIDEO_MNEMONICS,
+        ] {
+            mnemonics.extend_from_slice(group);
+        }
+        mnemonics.push("popc.b32");
+        mnemonics
+    }
+
     #[test]
     fn empty_bytes_does_not_panic() {
         // `arbitrary` is happy to keep handing back default values when out of
@@ -2594,6 +2664,14 @@ mod tests {
         let mnemonics = post_known_bug_suppression_mnemonics();
 
         assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
+    }
+
+    #[test]
+    fn dot_video_focused_profile_still_covers_targeted_instructions() {
+        let cfg = dot_video_focused_config();
+        let mnemonics = dot_video_focused_mnemonics();
+
+        assert_mnemonic_coverage(&cfg, 131072, 4096, &mnemonics);
     }
 
     #[test]
