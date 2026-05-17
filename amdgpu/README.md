@@ -94,6 +94,8 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a | b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
 | `FUZZX_ALLOW_M022_AND_XOR_CONSTANT=1` | unset | Re-enable the `((x ^ C) & x)` shape for [m022](known-miscompiles/m022-and-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_M023_AND_XOR_IDENTITY=1` | unset | Re-enable the `(x & y) ^ x` shape for [m023](known-miscompiles/m023-and-xor-identity/NOTES.md). |
+| `FUZZX_ALLOW_M024_UDIV_SEXT_OR=1` | unset | Re-enable unsigned division by odd `or` denominators for [m024](known-miscompiles/m024-udiv-or-one/NOTES.md). |
+| `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` | unset | Re-enable unsigned remainder by odd `or` denominators for [m025](known-miscompiles/m025-urem-or-one/NOTES.md). |
 
 ## Layout
 
@@ -150,6 +152,8 @@ Tested toolchains as of 2026-05-16:
 | [m021-fshl-or-xor](known-miscompiles/m021-fshl-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a dynamic `(a | b) ^ a` expression after `fshl` into `v_bitop3_b32` with the wrong result. |
 | [m022-and-xor-constant](known-miscompiles/m022-and-xor-constant/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((x ^ C) & x)` after a dynamic `and` into `v_bitop3_b32` with the wrong low bit. |
 | [m023-and-xor-identity](known-miscompiles/m023-and-xor-identity/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(x & y) ^ x` into `v_bitop3_b32` with the wrong identity result. |
+| [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x | 1` through an imprecise float reciprocal path. |
+| [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x | 1` through the same imprecise reciprocal path. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 
