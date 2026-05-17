@@ -32,7 +32,9 @@ optimized ptxas stores `0x0000ce19` (`52761`).
 
 This is likely the same broad root cause as `m032-cnot-neg-ugt-fold`: a
 `cnot`-derived value participates in wrapped arithmetic before an unsigned
-greater-than predicate, and the optimized fold selects the wrong arm.
+comparison predicate, and the optimized fold selects the wrong arm. A queued
+duplicate found before enabling `DIV_DISABLE_CNOT` reduced to the same pattern
+with `setp.ge.u32`.
 
 CUDA inline-PTX repro: `repro_nvcc_inline_ptx.cu`. Build the same source with
 `nvcc -Xptxas -O0` and `nvcc -Xptxas -O2`, run both binaries, and compare the

@@ -111,7 +111,7 @@ Version | Description |
 | 13.2.78 | [m030-not-clz-predicate-fold](known-miscompiles/m030-not-clz-predicate-fold/NOTES.md): Guarded path fold drops or misapplies `not.b32` before `clz.b32`. |
 | 13.2.78 | [m031-guarded-sub-sub-fold](known-miscompiles/m031-guarded-sub-sub-fold/NOTES.md): Guarded `x - (0x80000000 - x)` fold drops the `2*x` contribution. |
 | 13.2.78 | [m032-cnot-neg-ugt-fold](known-miscompiles/m032-cnot-neg-ugt-fold/NOTES.md): `cnot` / `neg` chain feeding an unsigned-greater-than predicate folds to the wrong arm. |
-| 13.2.78 | [m046-cnot-underflow-ugt-fold](known-miscompiles/m046-cnot-underflow-ugt-fold/NOTES.md): Likely same root cause as m032; `cnot` feeding wrapped subtraction before unsigned greater-than selects the wrong arm. |
+| 13.2.78 | [m046-cnot-underflow-ugt-fold](known-miscompiles/m046-cnot-underflow-ugt-fold/NOTES.md): Likely same root cause as m032; `cnot` feeding wrapped subtraction before an unsigned comparison selects the wrong arm. |
 | 13.2.78 | [m033-not-xor-branch-fold](known-miscompiles/m033-not-xor-branch-fold/NOTES.md): Branch-specialized `not` / `xor` path folds the wrong value into the store. |
 | 13.2.78 | [m035-xor-not-predicate-fold](known-miscompiles/m035-xor-not-predicate-fold/NOTES.md): Likely same root cause as m033; `xor.b32` by `0xffffffff` feeding a predicate selects the wrong arm. |
 | 13.2.78 | [m034-bfind-zero-branch-fold](known-miscompiles/m034-bfind-zero-branch-fold/NOTES.md): Branch fold treats `bfind.u32 0` as `0` instead of `0xffffffff`. |
