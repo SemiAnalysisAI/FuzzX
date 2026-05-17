@@ -16,14 +16,16 @@ integer division except nonzero-denominator `udiv` / `urem`, only masked or
 constant shift amounts, and only the fixed skeleton input load/output store.
 Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
 `i64` subexpressions truncated to `i32`, `<2 x i32>` / `<4 x i32>` vector
-subexpressions reduced back to `i32`, and LLVM bit, min/max, saturation,
-absolute-value, and funnel-shift intrinsics. The mutator can also wrap the
-current result in structured two-way branches, small multi-way switches, and
-deeper bounded nested acyclic subgraphs with `i32` phi joins. It also generates
-small counted loops whose bodies can contain nested diamonds and switches, so
-corpus entries exercise both expression simplification and CFG and loop
-transforms. CFG arms include the same scalar integer, bit, narrowing,
-saturating, funnel-shift, and vector expression families as the linear mutator.
+subexpressions reduced back to `i32`, explicit `i1` boolean subexpressions
+reduced back to `i32`, and LLVM bit, min/max, saturation, absolute-value, and
+funnel-shift intrinsics. The mutator can also wrap the current result in
+structured two-way branches, wider multi-way switches, and deeper bounded
+nested acyclic subgraphs with `i32` phi joins. It also generates counted loops
+with small bounded trip counts whose bodies can contain nested diamonds and
+switches, so corpus entries exercise both expression simplification and CFG and
+loop transforms. CFG arms include the same scalar integer, bit, boolean,
+narrowing, saturating, funnel-shift, and vector expression families as the
+linear mutator.
 Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Requirements

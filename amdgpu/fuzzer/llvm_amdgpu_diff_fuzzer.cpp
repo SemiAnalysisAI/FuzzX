@@ -59,7 +59,7 @@ namespace {
 
 constexpr unsigned ThreadsPerBlock = 256;
 constexpr unsigned InputCount = 256;
-constexpr unsigned MaxIRCFGBlocks = 320;
+constexpr unsigned MaxIRCFGBlocks = 512;
 
 constexpr StringRef DataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
@@ -543,7 +543,7 @@ bool isSmallLoopTripCount(const Value *V) {
   if (!C || !C->getType()->isIntegerTy(32))
     return false;
   uint64_t Trip = C->getZExtValue();
-  return Trip >= 1 && Trip <= 4;
+  return Trip >= 1 && Trip <= 8;
 }
 
 bool hasI32ConstantValue(const Value *V, uint32_t Expected) {
@@ -1575,6 +1575,50 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   }
 }
 
+Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                    std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *P =
+      B.CreateICmp(randomICmpPredicate(Gen), A, Bv, Twine(NamePrefix) + ".cmp0");
+  Value *Q =
+      B.CreateICmp(randomICmpPredicate(Gen), Bv,
+                   (Gen() % 2) == 0 ? A : interestingI32(Ctx, Gen),
+                   Twine(NamePrefix) + ".cmp1");
+  Value *R = nullptr;
+  switch (Gen() % 5) {
+  case 0:
+    R = B.CreateAnd(P, Q, Twine(NamePrefix) + ".and");
+    break;
+  case 1:
+    R = B.CreateOr(P, Q, Twine(NamePrefix) + ".or");
+    break;
+  case 2:
+    R = B.CreateXor(P, Q, Twine(NamePrefix) + ".xor");
+    break;
+  case 3:
+    R = B.CreateSelect(P, Q, ConstantInt::getFalse(Ctx),
+                       Twine(NamePrefix) + ".select");
+    break;
+  default:
+    R = B.CreateXor(P, ConstantInt::getTrue(Ctx), Twine(NamePrefix) + ".not");
+    break;
+  }
+
+  Value *Z = B.CreateZExt(R, I32, Twine(NamePrefix) + ".zext");
+  switch (Gen() % 4) {
+  case 0:
+    return Z;
+  case 1:
+    return B.CreateSelect(R, A, Bv, Twine(NamePrefix) + ".i32.select");
+  case 2:
+    return B.CreateXor(A, Z, Twine(NamePrefix) + ".xor.i32");
+  default:
+    return B.CreateSub(A, Z, Twine(NamePrefix) + ".sub.i32");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -1584,7 +1628,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 48) {
+  switch (Gen() % 56) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -1706,6 +1750,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 38:
   case 39:
     return emitRandomI64Instruction(B, M, A, Bv, Gen);
+  case 40:
+  case 41:
+  case 42:
+  case 43:
+  case 44:
+  case 45:
+    return emitRandomBoolI32Instruction(B, A, Bv, Gen, "fuzz.bool");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -1730,7 +1781,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 36) {
+  switch (Gen() % 42) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -1839,6 +1890,13 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 31:
     return B.CreateSExt(B.CreateTrunc(A, I16, "fuzz.cfg.trunc.i16"), I32,
                         "fuzz.cfg.sext.i16");
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+    return emitRandomBoolI32Instruction(B, A, Bv, Gen, "fuzz.cfg.bool");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -1848,7 +1906,7 @@ Value *emitRandomCFGLinearArm(IRBuilder<NoFolder> &B, Module &M,
                               Value *Current, Value *Other,
                               std::minstd_rand &Gen) {
   Value *Result = Current;
-  unsigned Steps = 1 + (Gen() % 4);
+  unsigned Steps = 1 + (Gen() % 6);
   for (unsigned I = 0; I < Steps; ++I) {
     Value *Bv = (Gen() % 2) == 0 ? Other : interestingI32(M.getContext(), Gen);
     Result = emitRandomCFGArmInstruction(B, M, Result, Bv, Gen);
@@ -1864,15 +1922,17 @@ struct CFGFragment {
 unsigned chooseCFGDepth(const Function &F, unsigned HardMax,
                         std::minstd_rand &Gen) {
   unsigned MaxDepth = HardMax;
-  if (F.size() >= MaxIRCFGBlocks - 32)
+  if (F.size() >= MaxIRCFGBlocks - 64)
     MaxDepth = 1;
-  else if (F.size() >= 192)
+  else if (F.size() >= 384)
     MaxDepth = std::min(MaxDepth, 2u);
-  else if (F.size() >= 96)
+  else if (F.size() >= 192)
     MaxDepth = std::min(MaxDepth, 3u);
+  else if (F.size() >= 96)
+    MaxDepth = std::min(MaxDepth, 4u);
 
   unsigned Depth = 1;
-  while (Depth < MaxDepth && (Gen() % 3) != 0)
+  while (Depth < MaxDepth && (Gen() % 4) != 0)
     ++Depth;
   return Depth;
 }
@@ -1936,7 +1996,7 @@ CFGFragment emitRandomNestedSwitch(IRBuilder<NoFolder> &B, Module &M,
       BasicBlock::Create(Ctx, "fuzz.nested.switch.join", F, InsertBefore);
   BasicBlock *Default =
       BasicBlock::Create(Ctx, "fuzz.nested.switch.default", F, Join);
-  unsigned NumCases = 3 + (Gen() % 4);
+  unsigned NumCases = 4 + (Gen() % 5);
   uint32_t Mask = NumCases <= 4 ? 3 : 7;
 
   Value *Key = B.CreateAnd(Current, ci32(Ctx, Mask),
@@ -2011,13 +2071,13 @@ void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> ThenB(Then);
   CFGFragment ThenFrag = emitRandomCFGSubgraph(
-      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 5, Gen), Gen);
+      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 6, Gen), Gen);
   IRBuilder<NoFolder> ThenTailB(ThenFrag.Tail);
   ThenTailB.CreateBr(Join);
 
   IRBuilder<NoFolder> ElseB(Else);
   CFGFragment ElseFrag = emitRandomCFGSubgraph(
-      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 5, Gen), Gen);
+      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 6, Gen), Gen);
   IRBuilder<NoFolder> ElseTailB(ElseFrag.Tail);
   ElseTailB.CreateBr(Join);
 
@@ -2040,7 +2100,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
-  unsigned NumCases = 3 + (Gen() % 4);
+  unsigned NumCases = 4 + (Gen() % 5);
   uint32_t Mask = NumCases <= 4 ? 3 : 7;
 
   BasicBlock *Head = Store->getParent();
@@ -2066,7 +2126,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
     Value *CaseOther =
         (I % 2) == 0 ? Other : ci32(Ctx, randomInteresting64(Gen));
     CFGFragment CaseFrag = emitRandomCFGSubgraph(
-        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 4, Gen), Gen);
+        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 5, Gen), Gen);
     IRBuilder<NoFolder> CaseTailB(CaseFrag.Tail);
     CaseTailB.CreateBr(Join);
     Phi->addIncoming(CaseFrag.Result, CaseFrag.Tail);
@@ -2074,7 +2134,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> DefaultB(Default);
   CFGFragment DefaultFrag = emitRandomCFGSubgraph(
-      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 4, Gen), Gen);
+      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 5, Gen), Gen);
   IRBuilder<NoFolder> DefaultTailB(DefaultFrag.Tail);
   DefaultTailB.CreateBr(Join);
   Phi->addIncoming(DefaultFrag.Result, DefaultFrag.Tail);
@@ -2093,7 +2153,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
-  unsigned TripCount = 1 + (Gen() % 4);
+  unsigned TripCount = 1 + (Gen() % 8);
 
   BasicBlock *Preheader = Store->getParent();
   BasicBlock *Exit =
@@ -2118,7 +2178,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> BodyB(Body);
   CFGFragment BodyFrag = emitRandomCFGSubgraph(
-      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 3, Gen), Gen);
+      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 4, Gen), Gen);
   IRBuilder<NoFolder> BodyTailB(BodyFrag.Tail);
   Value *NextIndex =
       BodyTailB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
@@ -2190,7 +2250,7 @@ void mutateIRRemoveInstruction(Module &M, std::minstd_rand &Gen) {
 
 void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   unsigned NumMutations = 1;
-  while (NumMutations < 16 && (Gen() % 4) == 0)
+  while (NumMutations < 24 && (Gen() % 4) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
     switch (Gen() % 15) {
