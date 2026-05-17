@@ -55,6 +55,7 @@ pub struct GenConfig {
     pub control_flow: ControlFlowMode,
     pub emit_lop3: bool,
     pub emit_minmax: bool,
+    pub emit_selp: bool,
     pub emit_sub: bool,
     pub emit_mul_lo: bool,
     pub emit_mulhi: bool,
@@ -117,6 +118,7 @@ impl Default for GenConfig {
             control_flow: ControlFlowMode::Arbitrary,
             emit_lop3: true,
             emit_minmax: true,
+            emit_selp: true,
             emit_sub: true,
             emit_mul_lo: true,
             emit_mulhi: true,
@@ -1066,14 +1068,14 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_set && u.arbitrary::<bool>()? {
+            if self.cfg.emit_set && (!self.cfg.emit_selp || u.arbitrary::<bool>()?) {
                 Ok(Inst::Set {
                     dst: self.pick_dst(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     a: self.pick_operand(u)?,
                     b: self.pick_operand(u)?,
                 })
-            } else {
+            } else if self.cfg.emit_selp {
                 Ok(Inst::Sel {
                     dst: self.pick_dst(u)?,
                     a: self.pick_operand(u)?,
@@ -1082,6 +1084,13 @@ impl<'a> Generator<'a> {
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
                     pred: self.alloc_pred(),
+                })
+            } else {
+                Ok(Inst::Bin {
+                    op: BinOp::Add,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
                 })
             }
         } else if pick < 140 && (self.cfg.emit_shl || self.cfg.emit_shr || self.cfg.emit_signed_shr)
@@ -3519,6 +3528,20 @@ mod tests {
             }
         }
         assert!(saw_set, "no seed in sample emitted set");
+    }
+
+    #[test]
+    fn selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_selp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("selp.b32"), "seed {seed:x} emitted selp.b32");
+        }
     }
 
     #[test]

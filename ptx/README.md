@@ -92,6 +92,7 @@ Version | Description |
 | 13.2.78 | [m011-bfind-after-empty-loop](known-miscompiles/m011-bfind-after-empty-loop/NOTES.md): Empty-loop simplification folds a `bfind.u32`-derived value incorrectly. |
 | 13.2.78 | [m012-empty-loop-intmax-sub](known-miscompiles/m012-empty-loop-intmax-sub/NOTES.md): Counted empty-loop fold miscomputes an `INT_MAX` subtraction sequence. |
 | 13.2.78 | [m013-set-true-cmp-one](known-miscompiles/m013-set-true-cmp-one/NOTES.md): `set.eq` materialization is folded as a predicate instead of `0xffffffff`. |
+| 13.2.78 | [m047-selp-ge-zero-branch-fold](known-miscompiles/m047-selp-ge-zero-branch-fold/NOTES.md): `selp` materialization of `0xffffffff` feeding an unsigned `>= 0` branch fold skips an always-taken arm. |
 | 13.2.78 | [m014-vsub4-divergent-branch](known-miscompiles/m014-vsub4-divergent-branch/NOTES.md): `vsub4.u32.u32.u32` constant fold uses the wrong byte-lane intermediate. |
 | 13.2.78 | [m015-abs-loop-bmsk-fold](known-miscompiles/m015-abs-loop-bmsk-fold/NOTES.md): Loop deletion uses the pre-`abs.s32` live-out value in a `bmsk` expression. |
 | 13.2.78 | [m016-slct-s32-immediate-fold](known-miscompiles/m016-slct-s32-immediate-fold/NOTES.md): `slct.s32.s32` immediate fold selects the wrong arm for a positive value. |
@@ -212,6 +213,7 @@ that feature.
 | `DIV_DISABLE_ARBITRARY_LOOPS` | Backedge loop terminators in arbitrary CFG mode. |
 | `DIV_DISABLE_LOP3` | `lop3.b32`. |
 | `DIV_DISABLE_MINMAX` | `min.u32`, `max.u32`, `min.s32`, `max.s32`. |
+| `DIV_DISABLE_SELP` | `selp.b32`. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
 | `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
