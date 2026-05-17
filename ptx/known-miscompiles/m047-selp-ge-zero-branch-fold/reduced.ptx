@@ -3,31 +3,23 @@
 .address_size 64
 
 .visible .entry fuzz_kernel(
-    .param .u64 in_ptr,
-    .param .u64 out_ptr,
-    .param .u32 in_n
+    .param .u64 dummy_ptr,
+    .param .u64 out_ptr
 )
 {
-    .reg .pred  %p<2>;
-    .reg .b32   %r<3>;
-    .reg .b64   %rd<3>;
+    .reg .pred  %p<1>;
+    .reg .b32   %r<1>;
+    .reg .b64   %rd<1>;
 
     ld.param.u64    %rd0, [out_ptr];
     mov.u32         %r0, %tid.x;
-    mov.u32         %r2, 0;
 
     setp.ne.u32     %p0, 32, %r0;
-    selp.b32        %r1, 4294967295, 0, %p0;
-    setp.ge.u32     %p1, %r1, 0;
-    @%p1 bra        then_path;
-    bra             done;
-
-then_path:
-    mov.u32         %r2, 27;
+    selp.b32        %r0, 4294967295, 0, %p0;
+    setp.ge.u32     %p0, %r0, 0;
+    @!%p0 bra       done;
+    st.global.u32   [%rd0], 27;
 
 done:
-    mul.wide.u32    %rd2, %r0, 16;
-    add.s64         %rd1, %rd0, %rd2;
-    st.global.u32   [%rd1 + 8], %r2;
     ret;
 }

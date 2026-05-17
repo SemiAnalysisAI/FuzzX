@@ -18,7 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-constexpr int kThreads = 32;
+constexpr int kThreads = 1;
 constexpr int kOutputWords = 128;
 constexpr uint32_t kSentinel = 0xa5a5a5a5u;
 
@@ -32,24 +32,18 @@ static void check(cudaError_t err, const char* what) {
 __global__ void repro_kernel(uint32_t* out) {
     asm volatile(
         "{\n\t"
-        ".reg .pred p<2>;\n\t"
-        ".reg .b32 r<3>;\n\t"
-        ".reg .b64 rd<3>;\n\t"
+        ".reg .pred p<1>;\n\t"
+        ".reg .b32 r<1>;\n\t"
+        ".reg .b64 rd<1>;\n\t"
         "mov.u64 rd0, %0;\n\t"
         "mov.u32 r0, %%tid.x;\n\t"
-        "mov.u32 r2, 0;\n\t"
         "\n\t"
         "setp.ne.u32   p0, 32, r0;\n\t"
-        "selp.b32      r1, 4294967295, 0, p0;\n\t"
-        "setp.ge.u32   p1, r1, 0;\n\t"
-        "@p1 bra       then_path;\n\t"
-        "bra           done;\n\t"
-        "then_path:\n\t"
-        "mov.u32       r2, 27;\n\t"
+        "selp.b32      r0, 4294967295, 0, p0;\n\t"
+        "setp.ge.u32   p0, r0, 0;\n\t"
+        "@!p0 bra      done;\n\t"
+        "st.global.u32 [rd0], 27;\n\t"
         "done:\n\t"
-        "mul.wide.u32  rd2, r0, 16;\n\t"
-        "add.s64       rd1, rd0, rd2;\n\t"
-        "st.global.u32 [rd1 + 8], r2;\n\t"
         "}\n"
         :
         : "l"(out)

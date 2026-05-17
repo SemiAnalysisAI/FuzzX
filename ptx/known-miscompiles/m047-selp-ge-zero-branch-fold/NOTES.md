@@ -11,7 +11,9 @@ The original saved fuzzer program was:
 
 The automated reducer shrank the original 417-line program to 98 lines. Manual
 cleanup showed the core issue is `selp.b32` materializing `0xffffffff` before
-an unsigned comparison and branch.
+an unsigned comparison and branch. The final PTX keeps the extra first
+parameter only because the local `fuzzx-diff-test` launcher passes the fuzzer
+kernel ABI shape.
 
 ## Scalar Trace
 
@@ -19,13 +21,13 @@ The kernel is launched with 32 threads, so `%tid.x` is `0..31`.
 
 ```text
 %p0 = (32 != %tid.x) = true
-%r1 = selp(0xffffffff, 0, %p0) = 0xffffffff
-%p1 = (%r1 >= 0) = true, using unsigned comparison
+%r0 = selp(0xffffffff, 0, %p0) = 0xffffffff
+%p0 = (%r0 >= 0) = true, using unsigned comparison
 ```
 
-The `then_path` arm is therefore always taken and `ptxas -O0` stores
-`0x0000001b` in output slot 2 for every lane. Optimized ptxas skips the arm and
-stores `0x00000000`.
+The guarded store is therefore always executed. `ptxas -O0` stores
+`0x0000001b` in output slot 0. Optimized ptxas skips the store, leaving the
+zero-filled output unchanged.
 
 This is related to the materialized-boolean fold in `m013-set-true-cmp-one`,
 but the exact trigger is different: replacing `selp.b32` with a direct
