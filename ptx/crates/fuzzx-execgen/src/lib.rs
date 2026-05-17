@@ -2228,6 +2228,207 @@ fn pick_signed_divisor_imm32(u: &mut Unstructured, max_small: u32) -> Result<u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    const BIN_MNEMONICS: &[&str] = &[
+        "add.u32",
+        "sub.u32",
+        "mul.lo.u32",
+        "mul.hi.u32",
+        "mul.hi.s32",
+        "and.b32",
+        "or.b32",
+        "xor.b32",
+        "min.u32",
+        "max.u32",
+        "min.s32",
+        "max.s32",
+    ];
+    const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
+    const SHIFT_MNEMONICS: &[&str] = &["shl.b32", "shr.u32", "shr.s32"];
+    const UNARY_MNEMONICS: &[&str] = &[
+        "not.b32", "cnot.b32", "popc.b32", "clz.b32", "brev.b32", "abs.s32", "neg.s32",
+    ];
+    const POST_KNOWN_UNARY_MNEMONICS: &[&str] = &["popc.b32", "clz.b32"];
+    const CVT_MNEMONICS: &[&str] = &[
+        "cvt.u32.u8",
+        "cvt.u32.u16",
+        "cvt.s32.u8",
+        "cvt.s32.u16",
+        "cvt.u32.s8",
+        "cvt.u32.s16",
+        "cvt.s32.s8",
+        "cvt.s32.s16",
+    ];
+    const BFIND_MNEMONICS: &[&str] = &["bfind.u32", "bfind.shiftamt.u32"];
+    const BFE_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32"];
+    const DIVREM_MNEMONICS: &[&str] = &["div.u32", "rem.u32", "div.s32", "rem.s32"];
+    const MAD24_MNEMONICS: &[&str] = &[
+        "mad24.lo.u32",
+        "mad24.hi.u32",
+        "mad24.lo.s32",
+        "mad24.hi.s32",
+    ];
+    const MUL24_MNEMONICS: &[&str] = &[
+        "mul24.lo.u32",
+        "mul24.hi.u32",
+        "mul24.lo.s32",
+        "mul24.hi.s32",
+    ];
+    const MUL_WIDE_MNEMONICS: &[&str] = &["mul.wide.u32", "mul.wide.s32"];
+    const WIDE_INT_MNEMONICS: &[&str] = &[
+        "add.u64",
+        "sub.u64",
+        "mul.lo.u64",
+        "add.s64",
+        "sub.s64",
+        "mul.lo.s64",
+        "and.b64",
+        "or.b64",
+        "xor.b64",
+    ];
+    const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
+    const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.u32",
+        "setp.ne.u32",
+        "setp.lt.u32",
+        "setp.le.u32",
+        "setp.gt.u32",
+        "setp.ge.u32",
+    ];
+    const SIGNED_SETP_MNEMONICS: &[&str] =
+        &["setp.lt.s32", "setp.le.s32", "setp.gt.s32", "setp.ge.s32"];
+    const SET_MNEMONICS: &[&str] = &[
+        "set.eq.u32.u32",
+        "set.ne.u32.u32",
+        "set.lt.u32.u32",
+        "set.le.u32.u32",
+        "set.gt.u32.u32",
+        "set.ge.u32.u32",
+        "set.lt.u32.s32",
+        "set.le.u32.s32",
+        "set.gt.u32.s32",
+        "set.ge.u32.s32",
+    ];
+    const FUNNEL_MNEMONICS: &[&str] = &["shf.l.wrap.b32", "shf.r.wrap.b32"];
+    const SAD_MNEMONICS: &[&str] = &["sad.u32", "sad.s32"];
+    const SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.s32.s32", "slct.b32.s32"];
+    const POST_KNOWN_SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.b32.s32"];
+    const DP4A_MNEMONICS: &[&str] = &[
+        "dp4a.u32.u32",
+        "dp4a.u32.s32",
+        "dp4a.s32.u32",
+        "dp4a.s32.s32",
+    ];
+    const DP2A_MNEMONICS: &[&str] = &[
+        "dp2a.lo.u32.u32",
+        "dp2a.hi.u32.u32",
+        "dp2a.lo.u32.s32",
+        "dp2a.hi.u32.s32",
+        "dp2a.lo.s32.u32",
+        "dp2a.hi.s32.u32",
+        "dp2a.lo.s32.s32",
+        "dp2a.hi.s32.s32",
+    ];
+    const VIDEO_MNEMONICS: &[&str] = &[
+        "vadd2.u32.u32.u32",
+        "vsub2.u32.u32.u32",
+        "vavrg2.u32.u32.u32",
+        "vavrg2.u32.u32.u32.add",
+        "vabsdiff2.u32.u32.u32.add",
+        "vmin2.u32.u32.u32",
+        "vmin2.u32.u32.u32.add",
+        "vmax2.u32.u32.u32",
+        "vmax2.u32.u32.u32.add",
+        "vadd4.u32.u32.u32",
+        "vsub4.u32.u32.u32",
+        "vavrg4.u32.u32.u32",
+        "vavrg4.u32.u32.u32.add",
+        "vabsdiff4.u32.u32.u32.add",
+        "vmin4.u32.u32.u32",
+        "vmin4.u32.u32.u32.add",
+        "vmax4.u32.u32.u32",
+        "vmax4.u32.u32.u32.add",
+    ];
+    const POST_KNOWN_VIDEO_MNEMONICS: &[&str] = &[
+        "vadd2.u32.u32.u32",
+        "vsub2.u32.u32.u32",
+        "vavrg2.u32.u32.u32",
+        "vavrg2.u32.u32.u32.add",
+        "vabsdiff2.u32.u32.u32.add",
+        "vmin2.u32.u32.u32",
+        "vmin2.u32.u32.u32.add",
+        "vmax2.u32.u32.u32",
+        "vmax2.u32.u32.u32.add",
+        "vadd4.u32.u32.u32",
+        "vavrg4.u32.u32.u32",
+        "vavrg4.u32.u32.u32.add",
+        "vabsdiff4.u32.u32.u32.add",
+        "vmin4.u32.u32.u32",
+        "vmin4.u32.u32.u32.add",
+        "vmax4.u32.u32.u32",
+        "vmax4.u32.u32.u32.add",
+    ];
+
+    fn default_profile_mnemonics() -> Vec<&'static str> {
+        let mut mnemonics = Vec::new();
+        for group in [
+            BIN_MNEMONICS,
+            SHIFT_MNEMONICS,
+            UNARY_MNEMONICS,
+            CVT_MNEMONICS,
+            BFIND_MNEMONICS,
+            BFE_MNEMONICS,
+            DIVREM_MNEMONICS,
+            MUL_WIDE_MNEMONICS,
+            WIDE_INT_MNEMONICS,
+            CARRY_MNEMONICS,
+            UNSIGNED_SETP_MNEMONICS,
+            SIGNED_SETP_MNEMONICS,
+            SET_MNEMONICS,
+            FUNNEL_MNEMONICS,
+            SAD_MNEMONICS,
+            SLCT_MNEMONICS,
+            DP4A_MNEMONICS,
+            DP2A_MNEMONICS,
+            VIDEO_MNEMONICS,
+        ] {
+            mnemonics.extend_from_slice(group);
+        }
+        mnemonics.extend_from_slice(&[
+            "selp.b32",
+            "lop3.b32",
+            "prmt.b32",
+            "bmsk.clamp.b32",
+            "bfi.b32",
+        ]);
+        mnemonics
+    }
+
+    fn post_known_bug_suppression_mnemonics() -> Vec<&'static str> {
+        let mut mnemonics = Vec::new();
+        for group in [
+            POST_KNOWN_BIN_MNEMONICS,
+            POST_KNOWN_UNARY_MNEMONICS,
+            CVT_MNEMONICS,
+            BFE_MNEMONICS,
+            DIVREM_MNEMONICS,
+            MAD24_MNEMONICS,
+            MUL24_MNEMONICS,
+            MUL_WIDE_MNEMONICS,
+            WIDE_INT_MNEMONICS,
+            UNSIGNED_SETP_MNEMONICS,
+            SAD_MNEMONICS,
+            POST_KNOWN_SLCT_MNEMONICS,
+            DP4A_MNEMONICS,
+            DP2A_MNEMONICS,
+            POST_KNOWN_VIDEO_MNEMONICS,
+        ] {
+            mnemonics.extend_from_slice(group);
+        }
+        mnemonics.push("bmsk.clamp.b32");
+        mnemonics
+    }
 
     fn has_mnemonic(ptx: &str, mnemonic: &str) -> bool {
         ptx.lines()
@@ -2246,8 +2447,12 @@ mod tests {
         for seed in 0..n_seeds {
             let bytes = bytes_from_seed(seed, program_bytes);
             let ptx = generate_from_bytes_with_config(&bytes, cfg).unwrap();
+            let seen: HashSet<_> = ptx
+                .lines()
+                .filter_map(|line| line.trim_start().split_whitespace().next())
+                .collect();
             for (i, mnemonic) in mnemonics.iter().enumerate() {
-                found[i] |= has_mnemonic(&ptx, mnemonic);
+                found[i] |= seen.contains(mnemonic);
             }
             if found.iter().all(|seen| *seen) {
                 return;
@@ -2347,66 +2552,7 @@ mod tests {
     #[test]
     fn default_profile_covers_broad_instruction_surface() {
         let cfg = coverage_heavy_config();
-        let mnemonics = [
-            "add.u32",
-            "sub.u32",
-            "mul.lo.u32",
-            "mul.hi.u32",
-            "mul.hi.s32",
-            "and.b32",
-            "or.b32",
-            "xor.b32",
-            "min.u32",
-            "max.u32",
-            "min.s32",
-            "max.s32",
-            "selp.b32",
-            "set.eq.u32.u32",
-            "set.lt.u32.s32",
-            "shl.b32",
-            "shr.u32",
-            "shr.s32",
-            "not.b32",
-            "cnot.b32",
-            "popc.b32",
-            "clz.b32",
-            "brev.b32",
-            "abs.s32",
-            "neg.s32",
-            "lop3.b32",
-            "prmt.b32",
-            "shf.l.wrap.b32",
-            "shf.r.wrap.b32",
-            "bfe.u32",
-            "bfe.s32",
-            "bmsk.clamp.b32",
-            "bfi.b32",
-            "cvt.u32.u8",
-            "cvt.s32.s16",
-            "add.cc.u32",
-            "addc.u32",
-            "sub.cc.u32",
-            "subc.u32",
-            "bfind.u32",
-            "bfind.shiftamt.u32",
-            "mul.wide.s32",
-            "add.u64",
-            "mul.lo.s64",
-            "div.u32",
-            "rem.s32",
-            "sad.u32",
-            "sad.s32",
-            "slct.u32.s32",
-            "slct.s32.s32",
-            "slct.b32.s32",
-            "dp4a.u32.u32",
-            "dp4a.s32.s32",
-            "dp2a.lo.u32.u32",
-            "dp2a.hi.s32.s32",
-            "vadd2.u32.u32.u32",
-            "vsub4.u32.u32.u32",
-            "vmax4.u32.u32.u32.add",
-        ];
+        let mnemonics = default_profile_mnemonics();
 
         assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
     }
@@ -2426,17 +2572,7 @@ mod tests {
             emit_mul24: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(
-            &mad24_cfg,
-            32768,
-            1024,
-            &[
-                "mad24.lo.u32",
-                "mad24.hi.u32",
-                "mad24.lo.s32",
-                "mad24.hi.s32",
-            ],
-        );
+        assert_mnemonic_coverage(&mad24_cfg, 32768, 1024, MAD24_MNEMONICS);
 
         let mul24_cfg = GenConfig {
             emit_addc: false,
@@ -2445,95 +2581,13 @@ mod tests {
             emit_mad24: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(
-            &mul24_cfg,
-            32768,
-            1024,
-            &[
-                "mul24.lo.u32",
-                "mul24.hi.u32",
-                "mul24.lo.s32",
-                "mul24.hi.s32",
-            ],
-        );
+        assert_mnemonic_coverage(&mul24_cfg, 32768, 1024, MUL24_MNEMONICS);
     }
 
     #[test]
     fn post_known_bug_suppression_profile_still_covers_remaining_instructions() {
         let cfg = post_known_bug_suppression_config();
-        let mnemonics = [
-            "add.u32",
-            "sub.u32",
-            "and.b32",
-            "popc.b32",
-            "clz.b32",
-            "bfe.u32",
-            "bfe.s32",
-            "bmsk.clamp.b32",
-            "cvt.u32.u8",
-            "cvt.u32.u16",
-            "cvt.s32.u8",
-            "cvt.s32.u16",
-            "cvt.u32.s8",
-            "cvt.u32.s16",
-            "cvt.s32.s8",
-            "cvt.s32.s16",
-            "mad24.lo.u32",
-            "mad24.hi.u32",
-            "mad24.lo.s32",
-            "mad24.hi.s32",
-            "mul24.lo.u32",
-            "mul24.hi.u32",
-            "mul24.lo.s32",
-            "mul24.hi.s32",
-            "add.u64",
-            "sub.u64",
-            "mul.lo.u64",
-            "add.s64",
-            "sub.s64",
-            "mul.lo.s64",
-            "and.b64",
-            "or.b64",
-            "xor.b64",
-            "mul.wide.s32",
-            "div.u32",
-            "rem.u32",
-            "div.s32",
-            "rem.s32",
-            "sad.u32",
-            "sad.s32",
-            "slct.u32.s32",
-            "slct.b32.s32",
-            "dp4a.u32.u32",
-            "dp4a.u32.s32",
-            "dp4a.s32.u32",
-            "dp4a.s32.s32",
-            "dp2a.lo.u32.u32",
-            "dp2a.hi.u32.u32",
-            "dp2a.lo.u32.s32",
-            "dp2a.hi.u32.s32",
-            "dp2a.lo.s32.u32",
-            "dp2a.hi.s32.u32",
-            "dp2a.lo.s32.s32",
-            "dp2a.hi.s32.s32",
-            "vadd2.u32.u32.u32",
-            "vsub2.u32.u32.u32",
-            "vavrg2.u32.u32.u32",
-            "vavrg2.u32.u32.u32.add",
-            "vabsdiff2.u32.u32.u32.add",
-            "vmin2.u32.u32.u32",
-            "vmin2.u32.u32.u32.add",
-            "vmax2.u32.u32.u32",
-            "vmax2.u32.u32.u32.add",
-            "vadd4.u32.u32.u32",
-            "vavrg4.u32.u32.u32",
-            "vavrg4.u32.u32.u32.add",
-            "vabsdiff4.u32.u32.u32.add",
-            "vmin4.u32.u32.u32",
-            "vmin4.u32.u32.u32.add",
-            "vmax4.u32.u32.u32",
-            "vmax4.u32.u32.u32.add",
-        ];
+        let mnemonics = post_known_bug_suppression_mnemonics();
 
         assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
     }
