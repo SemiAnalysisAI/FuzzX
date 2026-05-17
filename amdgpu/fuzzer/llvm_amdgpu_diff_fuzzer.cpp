@@ -494,6 +494,28 @@ bool isFixedIntVectorType(Type *Ty, unsigned BitWidth) {
          (VT->getNumElements() == 2 || VT->getNumElements() == 4);
 }
 
+bool isAllowedIntVectorType(Type *Ty) {
+  auto *VT = dyn_cast<FixedVectorType>(Ty);
+  if (!VT)
+    return false;
+  Type *EltTy = VT->getElementType();
+  unsigned Lanes = VT->getNumElements();
+  if (EltTy->isIntegerTy(32))
+    return Lanes == 2 || Lanes == 4;
+  if (EltTy->isIntegerTy(16))
+    return Lanes == 4 || Lanes == 8;
+  if (EltTy->isIntegerTy(8))
+    return Lanes == 4 || Lanes == 8;
+  return false;
+}
+
+bool isMatchingI1VectorType(Type *CondTy, Type *ValueTy) {
+  auto *CondVT = dyn_cast<FixedVectorType>(CondTy);
+  auto *ValueVT = dyn_cast<FixedVectorType>(ValueTy);
+  return CondVT && ValueVT && CondVT->getElementType()->isIntegerTy(1) &&
+         CondVT->getNumElements() == ValueVT->getNumElements();
+}
+
 bool isValidVectorLaneIndex(Type *VecTy, const Value *Index) {
   auto *VT = dyn_cast<FixedVectorType>(VecTy);
   auto *C = dyn_cast<ConstantInt>(Index);
@@ -502,35 +524,40 @@ bool isValidVectorLaneIndex(Type *VecTy, const Value *Index) {
 
 bool isValidVectorInstruction(const Instruction &I) {
   if (const auto *Insert = dyn_cast<InsertElementInst>(&I)) {
-    return isFixedIntVectorType(Insert->getType(), 32) &&
-           Insert->getOperand(1)->getType()->isIntegerTy(32) &&
+    auto *VT = dyn_cast<FixedVectorType>(Insert->getType());
+    return VT && isAllowedIntVectorType(Insert->getType()) &&
+           Insert->getOperand(1)->getType() == VT->getElementType() &&
            isValidVectorLaneIndex(Insert->getType(), Insert->getOperand(2));
   }
   if (const auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
-    return Extract->getType()->isIntegerTy(32) &&
-           isFixedIntVectorType(Extract->getVectorOperandType(), 32) &&
+    auto *VT = dyn_cast<FixedVectorType>(Extract->getVectorOperandType());
+    return VT && Extract->getType() == VT->getElementType() &&
+           isAllowedIntVectorType(Extract->getVectorOperandType()) &&
            isValidVectorLaneIndex(Extract->getVectorOperandType(),
                                   Extract->getIndexOperand());
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(&I)) {
     if (!BO->getType()->isVectorTy())
       return true;
-    if (!isFixedIntVectorType(BO->getType(), 32))
+    if (!isAllowedIntVectorType(BO->getType()))
       return false;
     if (BO->isShift())
-      return isConstantIntOrVectorBelow(BO->getOperand(1), 32);
+      return isConstantIntOrVectorBelow(BO->getOperand(1),
+                                        integerScalarWidth(BO->getType()));
   }
   if (const auto *Cmp = dyn_cast<ICmpInst>(&I)) {
     if (!Cmp->getOperand(0)->getType()->isVectorTy())
       return true;
-    return isFixedIntVectorType(Cmp->getOperand(0)->getType(), 32) &&
-           isFixedIntVectorType(Cmp->getType(), 1);
+    return isAllowedIntVectorType(Cmp->getOperand(0)->getType()) &&
+           isMatchingI1VectorType(Cmp->getType(),
+                                  Cmp->getOperand(0)->getType());
   }
   if (const auto *Sel = dyn_cast<SelectInst>(&I)) {
     if (!Sel->getType()->isVectorTy())
       return true;
-    return isFixedIntVectorType(Sel->getType(), 32) &&
-           isFixedIntVectorType(Sel->getCondition()->getType(), 1);
+    return isAllowedIntVectorType(Sel->getType()) &&
+           isMatchingI1VectorType(Sel->getCondition()->getType(),
+                                  Sel->getType());
   }
   return true;
 }
@@ -1575,6 +1602,14 @@ Constant *randomShiftVector(LLVMContext &Ctx, unsigned Lanes,
   return ConstantVector::get(Elements);
 }
 
+Constant *randomShiftVector(LLVMContext &Ctx, Type *ElemTy, unsigned Lanes,
+                            unsigned Width, std::minstd_rand &Gen) {
+  SmallVector<Constant *, 8> Elements;
+  for (unsigned I = 0; I != Lanes; ++I)
+    Elements.push_back(ConstantInt::get(ElemTy, Gen() % Width));
+  return ConstantVector::get(Elements);
+}
+
 Value *emitVectorBuild(IRBuilder<NoFolder> &B, Type *VecTy,
                        ArrayRef<Value *> Elements) {
   Value *Result = Constant::getNullValue(VecTy);
@@ -1656,6 +1691,97 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     return B.CreateOr(E0, E1, "fuzz.vec.reduce.or");
   default:
     return B.CreateSub(E0, E1, "fuzz.vec.reduce.sub");
+  }
+}
+
+Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  bool UseI8 = (Gen() % 2) == 0;
+  Type *ElemTy = UseI8 ? Type::getInt8Ty(Ctx) : Type::getInt16Ty(Ctx);
+  unsigned Width = UseI8 ? 8 : 16;
+  unsigned Lanes = (Gen() % 2) == 0 ? 4 : 8;
+  auto *VecTy = FixedVectorType::get(ElemTy, Lanes);
+  SmallVector<Value *, 8> AElements;
+  SmallVector<Value *, 8> BElements;
+  for (unsigned I = 0; I != Lanes; ++I) {
+    Value *ASeed = (I % 2) == 0 ? A : Bv;
+    Value *BSeed = nullptr;
+    if ((Gen() % 3) == 0)
+      BSeed = interestingI32(Ctx, Gen);
+    else
+      BSeed = (I % 2) == 0 ? Bv : A;
+    AElements.push_back(
+        B.CreateTrunc(ASeed, ElemTy, "fuzz.vec.narrow.trunc"));
+    BElements.push_back(
+        B.CreateTrunc(BSeed, ElemTy, "fuzz.vec.narrow.trunc"));
+  }
+
+  Value *VA = emitVectorBuild(B, VecTy, AElements);
+  Value *VB = emitVectorBuild(B, VecTy, BElements);
+  Value *Result = nullptr;
+  switch (Gen() % 10) {
+  case 0:
+    Result = B.CreateAdd(VA, VB, "fuzz.vec.narrow.add");
+    break;
+  case 1:
+    Result = B.CreateSub(VA, VB, "fuzz.vec.narrow.sub");
+    break;
+  case 2:
+    Result = B.CreateMul(VA, VB, "fuzz.vec.narrow.mul");
+    break;
+  case 3:
+    Result = B.CreateXor(VA, VB, "fuzz.vec.narrow.xor");
+    break;
+  case 4:
+    Result = B.CreateAnd(VA, VB, "fuzz.vec.narrow.and");
+    break;
+  case 5:
+    Result = B.CreateOr(VA, VB, "fuzz.vec.narrow.or");
+    break;
+  case 6:
+    Result = B.CreateShl(VA, randomShiftVector(Ctx, ElemTy, Lanes, Width, Gen),
+                         "fuzz.vec.narrow.shl");
+    break;
+  case 7:
+    Result = B.CreateLShr(VA, randomShiftVector(Ctx, ElemTy, Lanes, Width, Gen),
+                          "fuzz.vec.narrow.lshr");
+    break;
+  case 8:
+    Result = B.CreateAShr(VA, randomShiftVector(Ctx, ElemTy, Lanes, Width, Gen),
+                          "fuzz.vec.narrow.ashr");
+    break;
+  default: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
+                              "fuzz.vec.narrow.cmp");
+    Result = B.CreateSelect(Cmp, VA, VB, "fuzz.vec.narrow.select");
+    break;
+  }
+  }
+
+  unsigned Lane0 = Gen() % Lanes;
+  unsigned Lane1 = Gen() % Lanes;
+  Value *E0 =
+      B.CreateExtractElement(Result, ci32(Ctx, Lane0), "fuzz.vec.narrow.ext");
+  Value *E1 =
+      B.CreateExtractElement(Result, ci32(Ctx, Lane1), "fuzz.vec.narrow.ext");
+  Value *E0I32 = (Gen() % 2) == 0
+                     ? B.CreateZExt(E0, I32, "fuzz.vec.narrow.zext")
+                     : B.CreateSExt(E0, I32, "fuzz.vec.narrow.sext");
+  Value *E1I32 = (Gen() % 2) == 0
+                     ? B.CreateZExt(E1, I32, "fuzz.vec.narrow.zext")
+                     : B.CreateSExt(E1, I32, "fuzz.vec.narrow.sext");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(E0I32, E1I32, "fuzz.vec.narrow.reduce.xor");
+  case 1:
+    return B.CreateAdd(E0I32, E1I32, "fuzz.vec.narrow.reduce.add");
+  case 2:
+    return B.CreateOr(E0I32, E1I32, "fuzz.vec.narrow.reduce.or");
+  default:
+    return B.CreateSub(E0I32, E1I32, "fuzz.vec.narrow.reduce.sub");
   }
 }
 
@@ -2018,6 +2144,8 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.fp.signed");
   default:
+    if ((Gen() % 3) == 0)
+      return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
@@ -2175,6 +2303,8 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.cfg.fp.signed");
   default:
+    if ((Gen() % 3) == 0)
+      return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
