@@ -1315,6 +1315,18 @@ bool triggersM032LoopVectorSelect(const Instruction &I) {
   return false;
 }
 
+bool isI1ZExtToI32(const Value *V) {
+  const auto *ZExt = dyn_cast<ZExtInst>(V);
+  return ZExt && ZExt->getType()->isIntegerTy(32) &&
+         ZExt->getOperand(0)->getType()->isIntegerTy(1);
+}
+
+bool triggersM033SubZExtBool(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  return BO && BO->getOpcode() == Instruction::Sub &&
+         BO->getType()->isIntegerTy(32) && isI1ZExtToI32(BO->getOperand(1));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1408,6 +1420,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
+  bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1438,7 +1451,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM029 && triggersM029FshlSelectPhi(I)) ||
               (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
-              (!AllowM032 && triggersM032LoopVectorSelect(I)))
+              (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
+              (!AllowM033 && triggersM033SubZExtBool(I)))
             return false;
       continue;
     }
