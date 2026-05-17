@@ -96,7 +96,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M023_AND_XOR_IDENTITY=1` | unset | Re-enable the `(x & y) ^ x` shape for [m023](known-miscompiles/m023-and-xor-identity/NOTES.md). |
 | `FUZZX_ALLOW_M024_UDIV_SEXT_OR=1` | unset | Re-enable unsigned division by odd `or` denominators for [m024](known-miscompiles/m024-udiv-or-one/NOTES.md). |
 | `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` | unset | Re-enable unsigned remainder by odd `or` denominators for [m025](known-miscompiles/m025-urem-or-one/NOTES.md). |
-| `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable high-bit extraction from `(umax(a, b) ^ b) & umax(a, b)` for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
+| `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
 
 ## Layout
 

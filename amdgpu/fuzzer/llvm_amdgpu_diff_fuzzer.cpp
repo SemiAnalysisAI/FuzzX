@@ -696,21 +696,13 @@ bool isM026UMaxXorAndOperandPair(const Value *MaybeAndOperand,
          isUnsignedMaxWithOperand(MaybeAndOperand, Other);
 }
 
-bool triggersM026UMaxXorAndHighBit(const Instruction &I) {
+bool triggersM026UMaxXorAnd(const Instruction &I) {
   const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::AShr ||
+  if (!BO || BO->getOpcode() != Instruction::And ||
       !BO->getType()->isIntegerTy(32))
     return false;
-  const auto *Shift = dyn_cast<ConstantInt>(BO->getOperand(1));
-  if (!Shift || Shift->getZExtValue() != 31)
-    return false;
-
-  const auto *And = dyn_cast<BinaryOperator>(BO->getOperand(0));
-  if (!And || And->getOpcode() != Instruction::And ||
-      !And->getType()->isIntegerTy(32))
-    return false;
-  return isM026UMaxXorAndOperandPair(And->getOperand(0), And->getOperand(1)) ||
-         isM026UMaxXorAndOperandPair(And->getOperand(1), And->getOperand(0));
+  return isM026UMaxXorAndOperandPair(BO->getOperand(0), BO->getOperand(1)) ||
+         isM026UMaxXorAndOperandPair(BO->getOperand(1), BO->getOperand(0));
 }
 
 bool hasName(const Value *V, StringRef Name) {
@@ -782,7 +774,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM023 && triggersM023AndXorIdentity(I)) ||
               (!AllowM024 && triggersM024UDivSExtOr(I)) ||
               (!AllowM025 && triggersM025URemSExtOr(I)) ||
-              (!AllowM026 && triggersM026UMaxXorAndHighBit(I)))
+              (!AllowM026 && triggersM026UMaxXorAnd(I)))
             return false;
       continue;
     }

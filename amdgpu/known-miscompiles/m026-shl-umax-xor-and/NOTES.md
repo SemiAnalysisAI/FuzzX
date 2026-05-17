@@ -73,7 +73,8 @@ stores zero. The optimized sequence stores `0xffffffff`.
 
 ## Fuzzer Follow-Up
 
-The IR-bitcode fuzzer now suppresses `ashr` high-bit extraction from
-`(umax(a, b) ^ b) & umax(a, b)` shapes by default. This catches both explicit
-`llvm.umax.i32` and the equivalent `select` over an unsigned compare. Set
+The IR-bitcode fuzzer now suppresses `(umax(a, b) ^ b) & umax(a, b)` shapes by
+default, before later instructions can consume the miscompiled value through a
+high-bit, byte, or other extraction. This catches both explicit `llvm.umax.i32`
+and the equivalent `select` over an unsigned compare. Set
 `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` to re-enable this shape.
