@@ -59,6 +59,7 @@ namespace {
 
 constexpr unsigned ThreadsPerBlock = 256;
 constexpr unsigned InputCount = 256;
+constexpr unsigned MaxIRCFGBlocks = 320;
 
 constexpr StringRef DataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
@@ -1142,6 +1143,38 @@ bool triggersM030CtlzShlOrBitop3(const Instruction &I) {
           isM030OrValueForBit(BO->getOperand(0), BO->getOperand(1)));
 }
 
+bool isI32ExtractOfVectorOr(const Value *V, const BinaryOperator **Or,
+                            uint64_t *Lane) {
+  const auto *Extract = dyn_cast<ExtractElementInst>(V);
+  if (!Extract || !Extract->getType()->isIntegerTy(32))
+    return false;
+  const auto *Index = dyn_cast<ConstantInt>(Extract->getIndexOperand());
+  const auto *BO = dyn_cast<BinaryOperator>(Extract->getVectorOperand());
+  if (!Index || !BO || BO->getOpcode() != Instruction::Or ||
+      !isFixedIntVectorType(BO->getType(), 32))
+    return false;
+  if (Or)
+    *Or = BO;
+  if (Lane)
+    *Lane = Index->getZExtValue();
+  return true;
+}
+
+bool triggersM031VectorOrExtractSub(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Sub ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  const BinaryOperator *LOr = nullptr;
+  const BinaryOperator *ROr = nullptr;
+  uint64_t LLane = 0;
+  uint64_t RLane = 0;
+  return isI32ExtractOfVectorOr(BO->getOperand(0), &LOr, &LLane) &&
+         isI32ExtractOfVectorOr(BO->getOperand(1), &ROr, &RLane) &&
+         LOr == ROr && LLane != RLane;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1193,6 +1226,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
   bool AllowM029 = envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", false);
   bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
+  bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1221,7 +1255,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
               (!AllowM029 && triggersM029FshlSelectPhi(I)) ||
-              (!AllowM030 && triggersM030CtlzShlOrBitop3(I)))
+              (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
+              (!AllowM031 && triggersM031VectorOrExtractSub(I)))
             return false;
       continue;
     }
@@ -1781,13 +1816,15 @@ struct CFGFragment {
 unsigned chooseCFGDepth(const Function &F, unsigned HardMax,
                         std::minstd_rand &Gen) {
   unsigned MaxDepth = HardMax;
-  if (F.size() >= 128)
+  if (F.size() >= MaxIRCFGBlocks - 32)
     MaxDepth = 1;
-  else if (F.size() >= 64)
+  else if (F.size() >= 192)
     MaxDepth = std::min(MaxDepth, 2u);
+  else if (F.size() >= 96)
+    MaxDepth = std::min(MaxDepth, 3u);
 
   unsigned Depth = 1;
-  while (Depth < MaxDepth && (Gen() % 2) == 0)
+  while (Depth < MaxDepth && (Gen() % 3) != 0)
     ++Depth;
   return Depth;
 }
@@ -1795,6 +1832,8 @@ unsigned chooseCFGDepth(const Function &F, unsigned HardMax,
 Value *chooseCFGValue(LLVMContext &Ctx, Value *Other, std::minstd_rand &Gen) {
   return (Gen() % 2) == 0 ? Other : interestingI32(Ctx, Gen);
 }
+
+bool canGrowCFG(const Function &F) { return F.size() < MaxIRCFGBlocks; }
 
 CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
                                   BasicBlock *InsertBefore, Value *Current,
@@ -1849,7 +1888,7 @@ CFGFragment emitRandomNestedSwitch(IRBuilder<NoFolder> &B, Module &M,
       BasicBlock::Create(Ctx, "fuzz.nested.switch.join", F, InsertBefore);
   BasicBlock *Default =
       BasicBlock::Create(Ctx, "fuzz.nested.switch.default", F, Join);
-  unsigned NumCases = 2 + (Gen() % 4);
+  unsigned NumCases = 3 + (Gen() % 4);
   uint32_t Mask = NumCases <= 4 ? 3 : 7;
 
   Value *Key = B.CreateAnd(Current, ci32(Ctx, Mask),
@@ -1888,11 +1927,12 @@ CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
                                   Value *Other, unsigned Depth,
                                   std::minstd_rand &Gen) {
   Value *Linear = emitRandomCFGLinearArm(B, M, Current, Other, Gen);
-  if (Depth == 0 || (Gen() % 3) == 0)
+  Function *F = B.GetInsertBlock()->getParent();
+  if (Depth == 0 || !canGrowCFG(*F) || (Gen() % 5) == 0)
     return {Linear, B.GetInsertBlock()};
 
   Value *NestedOther = chooseCFGValue(M.getContext(), Other, Gen);
-  if ((Gen() % 5) == 0)
+  if ((Gen() % 4) == 0)
     return emitRandomNestedSwitch(B, M, InsertBefore, Linear, NestedOther,
                                   Depth, Gen);
   return emitRandomNestedDiamond(B, M, InsertBefore, Linear, NestedOther,
@@ -1901,7 +1941,7 @@ CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
 
 void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
-  if (!F || F->size() >= 192)
+  if (!F || !canGrowCFG(*F))
     return;
   StoreInst *Store = findIRResultStore(*F);
   if (!Store)
@@ -1923,13 +1963,13 @@ void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> ThenB(Then);
   CFGFragment ThenFrag = emitRandomCFGSubgraph(
-      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 3, Gen), Gen);
+      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 5, Gen), Gen);
   IRBuilder<NoFolder> ThenTailB(ThenFrag.Tail);
   ThenTailB.CreateBr(Join);
 
   IRBuilder<NoFolder> ElseB(Else);
   CFGFragment ElseFrag = emitRandomCFGSubgraph(
-      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 3, Gen), Gen);
+      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 5, Gen), Gen);
   IRBuilder<NoFolder> ElseTailB(ElseFrag.Tail);
   ElseTailB.CreateBr(Join);
 
@@ -1942,7 +1982,7 @@ void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
 
 void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
-  if (!F || F->size() >= 192)
+  if (!F || !canGrowCFG(*F))
     return;
   StoreInst *Store = findIRResultStore(*F);
   if (!Store)
@@ -1952,7 +1992,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
-  unsigned NumCases = 3 + (Gen() % 3);
+  unsigned NumCases = 3 + (Gen() % 4);
   uint32_t Mask = NumCases <= 4 ? 3 : 7;
 
   BasicBlock *Head = Store->getParent();
@@ -1978,7 +2018,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
     Value *CaseOther =
         (I % 2) == 0 ? Other : ci32(Ctx, randomInteresting64(Gen));
     CFGFragment CaseFrag = emitRandomCFGSubgraph(
-        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 2, Gen), Gen);
+        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 4, Gen), Gen);
     IRBuilder<NoFolder> CaseTailB(CaseFrag.Tail);
     CaseTailB.CreateBr(Join);
     Phi->addIncoming(CaseFrag.Result, CaseFrag.Tail);
@@ -1986,7 +2026,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> DefaultB(Default);
   CFGFragment DefaultFrag = emitRandomCFGSubgraph(
-      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 2, Gen), Gen);
+      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 4, Gen), Gen);
   IRBuilder<NoFolder> DefaultTailB(DefaultFrag.Tail);
   DefaultTailB.CreateBr(Join);
   Phi->addIncoming(DefaultFrag.Result, DefaultFrag.Tail);
@@ -1995,7 +2035,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
 
 void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
-  if (!F || F->size() >= 192)
+  if (!F || !canGrowCFG(*F))
     return;
   StoreInst *Store = findIRResultStore(*F);
   if (!Store)
@@ -2030,7 +2070,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> BodyB(Body);
   CFGFragment BodyFrag = emitRandomCFGSubgraph(
-      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 2, Gen), Gen);
+      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 3, Gen), Gen);
   IRBuilder<NoFolder> BodyTailB(BodyFrag.Tail);
   Value *NextIndex =
       BodyTailB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
