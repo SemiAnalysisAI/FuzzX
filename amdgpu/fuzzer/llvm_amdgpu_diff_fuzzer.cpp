@@ -388,6 +388,7 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::ctpop:
   case Intrinsic::bswap:
   case Intrinsic::bitreverse:
+  case Intrinsic::abs:
   case Intrinsic::umin:
   case Intrinsic::umax:
   case Intrinsic::smin:
@@ -404,6 +405,20 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   }
 }
 
+bool isKnownNonZeroI32(const Value *V) {
+  if (const auto *C = dyn_cast<ConstantInt>(V))
+    return C->getType()->isIntegerTy(32) && !C->isZero();
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0)))
+    return !C->isZero();
+  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1)))
+    return !C->isZero();
+  return false;
+}
+
 bool isAllowedIRInstruction(const Instruction &I) {
   if (isa<BranchInst, ReturnInst, LoadInst, StoreInst, GetElementPtrInst,
           ZExtInst, SExtInst, TruncInst, ICmpInst, SelectInst>(&I))
@@ -417,6 +432,9 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::And:
     case Instruction::Or:
       return true;
+    case Instruction::UDiv:
+    case Instruction::URem:
+      return isKnownNonZeroI32(BO->getOperand(1));
     case Instruction::Shl:
     case Instruction::LShr:
     case Instruction::AShr:
@@ -734,10 +752,12 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
   LLVMContext &Ctx = M.getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 26) {
+  switch (Gen() % 34) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -816,10 +836,42 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
         {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.fshl");
-  default:
+  case 24:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
         {A, Bv, ci32(Ctx, Gen() & 31u)}, "fuzz.fshr");
+  case 25:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I32}),
+        {A, ConstantInt::getFalse(Ctx)}, "fuzz.abs");
+  case 26: {
+    Value *Den = B.CreateOr(Bv, ci32(Ctx, 1), "fuzz.nz");
+    return B.CreateUDiv(A, Den, "fuzz.udiv");
+  }
+  case 27: {
+    Value *Den = B.CreateOr(Bv, ci32(Ctx, 1), "fuzz.nz");
+    return B.CreateURem(A, Den, "fuzz.urem");
+  }
+  case 28:
+    return B.CreateZExt(B.CreateTrunc(A, I8, "fuzz.trunc.i8"), I32,
+                        "fuzz.zext.i8");
+  case 29:
+    return B.CreateSExt(B.CreateTrunc(A, I8, "fuzz.trunc.i8"), I32,
+                        "fuzz.sext.i8");
+  case 30:
+    return B.CreateZExt(B.CreateTrunc(A, I16, "fuzz.trunc.i16"), I32,
+                        "fuzz.zext.i16");
+  case 31:
+    return B.CreateSExt(B.CreateTrunc(A, I16, "fuzz.trunc.i16"), I32,
+                        "fuzz.sext.i16");
+  case 32:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I32}),
+        {A, Bv, chooseI32Value(InsertPt, Gen)}, "fuzz.fshl.dyn");
+  default:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I32}),
+        {A, Bv, chooseI32Value(InsertPt, Gen)}, "fuzz.fshr.dyn");
   }
 }
 
