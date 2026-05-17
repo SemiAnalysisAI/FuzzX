@@ -471,6 +471,30 @@ bool isKnownPositiveI32(const Value *V) {
           isKnownNonNegativeI32(BO->getOperand(0)));
 }
 
+bool isKnownUnsignedI32AtMost(const Value *V, uint64_t Limit) {
+  if (const auto *C = dyn_cast<ConstantInt>(V))
+    return C->getType()->isIntegerTy(32) && C->getValue().ule(Limit);
+
+  if (const auto *BO = dyn_cast<BinaryOperator>(V)) {
+    if (!BO->getType()->isIntegerTy(32))
+      return false;
+    if (BO->getOpcode() == Instruction::And) {
+      for (const Value *Op : BO->operands()) {
+        const auto *C = dyn_cast<ConstantInt>(Op);
+        if (C && C->getValue().ule(Limit))
+          return true;
+      }
+    }
+  }
+
+  if (const auto *Sel = dyn_cast<SelectInst>(V))
+    return Sel->getType()->isIntegerTy(32) &&
+           isKnownUnsignedI32AtMost(Sel->getTrueValue(), Limit) &&
+           isKnownUnsignedI32AtMost(Sel->getFalseValue(), Limit);
+
+  return false;
+}
+
 unsigned integerScalarWidth(Type *Ty) {
   if (Ty->isIntegerTy())
     return Ty->getIntegerBitWidth();
@@ -597,6 +621,20 @@ bool isValidVectorInstruction(const Instruction &I) {
                                   Sel->getType());
   }
   return true;
+}
+
+bool isValidFPConversionInstruction(const Instruction &I) {
+  const auto *UIToFP = dyn_cast<UIToFPInst>(&I);
+  if (!UIToFP)
+    return true;
+  if (!UIToFP->getOperand(0)->getType()->isIntegerTy(32))
+    return false;
+  Type *DestTy = UIToFP->getType();
+  if (DestTy->isHalfTy())
+    return isKnownUnsignedI32AtMost(UIToFP->getOperand(0), 127);
+  if (DestTy->isFloatTy())
+    return isKnownUnsignedI32AtMost(UIToFP->getOperand(0), 1023);
+  return false;
 }
 
 bool isAllowedIRInstruction(const Instruction &I) {
@@ -1446,6 +1484,7 @@ bool validateIRCorpusModule(Module &M) {
         for (Instruction &I : BB)
           if (!isAllowedIRInstruction(I) ||
               !isValidVectorInstruction(I) ||
+              !isValidFPConversionInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
               (!AllowM020 && triggersM020OrXorAnd(I)) ||
@@ -3364,7 +3403,9 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
       if (I.getName().starts_with("fuzz.vec."))
         continue;
       if (I.getName().starts_with("fuzz.fp.") ||
-          I.getName().starts_with("fuzz.cfg.fp."))
+          I.getName().starts_with("fuzz.fp16.") ||
+          I.getName().starts_with("fuzz.cfg.fp.") ||
+          I.getName().starts_with("fuzz.cfg.fp16."))
         continue;
       if (I.getName().starts_with("fuzz.sdiv.") ||
           I.getName().starts_with("fuzz.srem.") ||
