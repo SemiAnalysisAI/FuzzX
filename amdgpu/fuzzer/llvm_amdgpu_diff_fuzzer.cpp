@@ -509,9 +509,15 @@ bool isAllowedIntVectorType(Type *Ty) {
   return false;
 }
 
+bool isAllowedFPScalarType(Type *Ty) {
+  return Ty->isHalfTy() || Ty->isFloatTy() || Ty->isDoubleTy();
+}
+
 bool isAllowedFPVectorType(Type *Ty) {
   auto *VT = dyn_cast<FixedVectorType>(Ty);
-  return VT && VT->getElementType()->isFloatTy() &&
+  return VT &&
+         (VT->getElementType()->isHalfTy() ||
+          VT->getElementType()->isFloatTy()) &&
          (VT->getNumElements() == 2 || VT->getNumElements() == 4);
 }
 
@@ -604,7 +610,7 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::FAdd:
     case Instruction::FSub:
     case Instruction::FMul:
-      return BO->getType()->isFloatTy() || BO->getType()->isDoubleTy() ||
+      return isAllowedFPScalarType(BO->getType()) ||
              isAllowedFPVectorType(BO->getType());
     case Instruction::UDiv:
     case Instruction::URem:
@@ -1920,6 +1926,81 @@ Value *emitRandomVectorFPInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomVectorHalfFPInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F16 = Type::getHalfTy(Ctx);
+  unsigned Lanes = (Gen() % 2) == 0 ? 2 : 4;
+  auto *VecTy = FixedVectorType::get(F16, Lanes);
+  SmallVector<Value *, 4> AElements;
+  SmallVector<Value *, 4> BElements;
+  for (unsigned I = 0; I != Lanes; ++I) {
+    Value *ASeed = (I % 2) == 0 ? A : Bv;
+    Value *BSeed = nullptr;
+    if ((Gen() % 3) == 0)
+      BSeed = interestingI32(Ctx, Gen);
+    else
+      BSeed = (I % 2) == 0 ? Bv : A;
+    Value *AMasked =
+        B.CreateAnd(ASeed, ci32(Ctx, 127), "fuzz.vec.fp16.mask");
+    Value *BMasked =
+        B.CreateAnd(BSeed, ci32(Ctx, 127), "fuzz.vec.fp16.mask");
+    AElements.push_back(B.CreateUIToFP(AMasked, F16, "fuzz.vec.fp16.uitofp"));
+    BElements.push_back(B.CreateUIToFP(BMasked, F16, "fuzz.vec.fp16.uitofp"));
+  }
+
+  Value *VA = emitVectorBuild(B, VecTy, AElements);
+  Value *VB = emitVectorBuild(B, VecTy, BElements);
+  Value *Result = nullptr;
+  switch (Gen() % 5) {
+  case 0:
+    Result = B.CreateFAdd(VA, VB, "fuzz.vec.fp16.fadd");
+    break;
+  case 1:
+    Result = B.CreateFMul(VA, VB, "fuzz.vec.fp16.fmul");
+    break;
+  case 2: {
+    Value *Product = B.CreateFMul(VA, VB, "fuzz.vec.fp16.fmul");
+    Result = B.CreateFAdd(Product, VA, "fuzz.vec.fp16.fmaish");
+    break;
+  }
+  case 3: {
+    Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), VA, VB,
+                              "fuzz.vec.fp16.fcmp");
+    Result = B.CreateSelect(Cmp, VA, VB, "fuzz.vec.fp16.select");
+    break;
+  }
+  default: {
+    Value *Cmp = B.CreateFCmpOGE(VA, VB, "fuzz.vec.fp16.oge");
+    Value *Hi = B.CreateSelect(Cmp, VA, VB, "fuzz.vec.fp16.hi");
+    Value *Lo = B.CreateSelect(Cmp, VB, VA, "fuzz.vec.fp16.lo");
+    Result = B.CreateFSub(Hi, Lo, "fuzz.vec.fp16.fsub");
+    break;
+  }
+  }
+
+  unsigned Lane0 = Gen() % Lanes;
+  unsigned Lane1 = Gen() % Lanes;
+  Value *F0 =
+      B.CreateExtractElement(Result, ci32(Ctx, Lane0), "fuzz.vec.fp16.ext");
+  Value *F1 =
+      B.CreateExtractElement(Result, ci32(Ctx, Lane1), "fuzz.vec.fp16.ext");
+  Value *I0 = B.CreateFPToUI(F0, I32, "fuzz.vec.fp16.fptoui");
+  Value *I1 = B.CreateFPToUI(F1, I32, "fuzz.vec.fp16.fptoui");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(I0, I1, "fuzz.vec.fp16.reduce.xor");
+  case 1:
+    return B.CreateAdd(I0, I1, "fuzz.vec.fp16.reduce.add");
+  case 2:
+    return B.CreateOr(I0, I1, "fuzz.vec.fp16.reduce.or");
+  default:
+    return B.CreateSub(I0, I1, "fuzz.vec.fp16.reduce.sub");
+  }
+}
+
 Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
                                     std::minstd_rand &Gen,
                                     StringRef NamePrefix) {
@@ -2041,6 +2122,134 @@ Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
     return B.CreateAdd(IntResult, Bv, Twine(NamePrefix) + ".add");
   default:
     return B.CreateOr(IntResult, A, Twine(NamePrefix) + ".or");
+  }
+}
+
+Value *emitRandomFiniteHalfFPInstruction(IRBuilder<NoFolder> &B, Value *A,
+                                         Value *Bv, std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I4 = Type::getIntNTy(Ctx, 4);
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F16 = Type::getHalfTy(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  bool UseSigned = (Gen() % 3) == 0;
+
+  Value *IntResult = nullptr;
+  if (!UseSigned) {
+    Value *AMasked = B.CreateAnd(A, ci32(Ctx, 127),
+                                 Twine(NamePrefix) + ".mask.a");
+    Value *BMasked = B.CreateAnd(Bv, ci32(Ctx, 127),
+                                 Twine(NamePrefix) + ".mask.b");
+    Value *FA = B.CreateUIToFP(AMasked, F16, Twine(NamePrefix) + ".uitofp.a");
+    Value *FB = B.CreateUIToFP(BMasked, F16, Twine(NamePrefix) + ".uitofp.b");
+    Value *Small = B.CreateAnd(Bv, ci32(Ctx, 15),
+                               Twine(NamePrefix) + ".small");
+    Value *FSmall =
+        B.CreateUIToFP(Small, F16, Twine(NamePrefix) + ".uitofp.small");
+
+    Value *Result = nullptr;
+    switch (Gen() % 7) {
+    case 0:
+      Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
+      break;
+    case 1:
+      Result = B.CreateFMul(FA, FB, Twine(NamePrefix) + ".fmul");
+      break;
+    case 2: {
+      Value *Product = B.CreateFMul(FA, FSmall, Twine(NamePrefix) + ".fmul");
+      Result = B.CreateFAdd(Product, FB, Twine(NamePrefix) + ".fmaish");
+      break;
+    }
+    case 3: {
+      Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                                Twine(NamePrefix) + ".fcmp");
+      Result = B.CreateSelect(Cmp, FA, FB, Twine(NamePrefix) + ".select");
+      break;
+    }
+    case 4: {
+      Value *FA32 = B.CreateFPExt(FA, F32, Twine(NamePrefix) + ".fpext.a");
+      Value *FB32 = B.CreateFPExt(FB, F32, Twine(NamePrefix) + ".fpext.b");
+      Value *F32Result =
+          B.CreateFAdd(FA32, FB32, Twine(NamePrefix) + ".f32.add");
+      Result = B.CreateFPTrunc(F32Result, F16, Twine(NamePrefix) + ".fptrunc");
+      break;
+    }
+    case 5: {
+      Value *Cmp = B.CreateFCmpOGE(FA, FB, Twine(NamePrefix) + ".oge");
+      Value *Hi = B.CreateSelect(Cmp, FA, FB, Twine(NamePrefix) + ".hi");
+      Value *Lo = B.CreateSelect(Cmp, FB, FA, Twine(NamePrefix) + ".lo");
+      Result = B.CreateFSub(Hi, Lo, Twine(NamePrefix) + ".fsub");
+      break;
+    }
+    default: {
+      Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                                Twine(NamePrefix) + ".fcmp");
+      Value *Selected = B.CreateSelect(Cmp, AMasked, BMasked,
+                                       Twine(NamePrefix) + ".i32.select");
+      Result = B.CreateUIToFP(Selected, F16,
+                              Twine(NamePrefix) + ".uitofp.sel");
+      break;
+    }
+    }
+    IntResult = B.CreateFPToUI(Result, I32, Twine(NamePrefix) + ".fptoui");
+  } else {
+    Value *ASmall =
+        B.CreateSExt(B.CreateTrunc(A, I8, Twine(NamePrefix) + ".trunc.a"),
+                     I32, Twine(NamePrefix) + ".sext.a");
+    Value *BSmall =
+        B.CreateSExt(B.CreateTrunc(Bv, I8, Twine(NamePrefix) + ".trunc.b"),
+                     I32, Twine(NamePrefix) + ".sext.b");
+    Value *FA = B.CreateSIToFP(ASmall, F16, Twine(NamePrefix) + ".sitofp.a");
+    Value *FB = B.CreateSIToFP(BSmall, F16, Twine(NamePrefix) + ".sitofp.b");
+    Value *Tiny =
+        B.CreateSExt(B.CreateTrunc(Bv, I4, Twine(NamePrefix) + ".tiny.trunc"),
+                     I32, Twine(NamePrefix) + ".tiny.sext");
+    Value *FTiny =
+        B.CreateSIToFP(Tiny, F16, Twine(NamePrefix) + ".sitofp.tiny");
+
+    Value *Result = nullptr;
+    switch (Gen() % 6) {
+    case 0:
+      Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
+      break;
+    case 1:
+      Result = B.CreateFSub(FA, FB, Twine(NamePrefix) + ".fsub");
+      break;
+    case 2:
+      Result = B.CreateFMul(FA, FTiny, Twine(NamePrefix) + ".tinymul");
+      break;
+    case 3: {
+      Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                                Twine(NamePrefix) + ".fcmp");
+      Result = B.CreateSelect(Cmp, FA, FB, Twine(NamePrefix) + ".select");
+      break;
+    }
+    case 4: {
+      Value *FA32 = B.CreateFPExt(FA, F32, Twine(NamePrefix) + ".fpext.a");
+      Value *FB32 = B.CreateFPExt(FB, F32, Twine(NamePrefix) + ".fpext.b");
+      Value *F32Result =
+          B.CreateFSub(FA32, FB32, Twine(NamePrefix) + ".f32.sub");
+      Result = B.CreateFPTrunc(F32Result, F16, Twine(NamePrefix) + ".fptrunc");
+      break;
+    }
+    default:
+      Result = B.CreateFMul(FB, FTiny, Twine(NamePrefix) + ".tinymul");
+      break;
+    }
+    IntResult = B.CreateFPToSI(Result, I32, Twine(NamePrefix) + ".fptosi");
+  }
+
+  switch (Gen() % 4) {
+  case 0:
+    return IntResult;
+  case 1:
+    return B.CreateXor(IntResult, A, Twine(NamePrefix) + ".xor");
+  case 2:
+    return B.CreateAdd(IntResult, Bv, Twine(NamePrefix) + ".add");
+  default:
+    return B.CreateSub(A, IntResult, Twine(NamePrefix) + ".sub");
   }
 }
 
@@ -2177,7 +2386,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 74) {
+  switch (Gen() % 82) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -2328,12 +2537,21 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 60:
   case 61:
     return emitSafeInputLoadInstruction(B, M, A, Bv, Gen, "fuzz.load");
+  case 62:
+  case 63:
+  case 64:
+  case 65:
+  case 66:
+  case 67:
+    return emitRandomFiniteHalfFPInstruction(B, A, Bv, Gen, "fuzz.fp16");
   default:
-    switch (Gen() % 4) {
+    switch (Gen() % 5) {
     case 0:
       return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
     case 1:
       return emitRandomVectorFPInstruction(B, M, A, Bv, Gen);
+    case 2:
+      return emitRandomVectorHalfFPInstruction(B, M, A, Bv, Gen);
     default:
       break;
     }
@@ -2360,7 +2578,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 60) {
+  switch (Gen() % 68) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2498,12 +2716,21 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 52:
   case 53:
     return emitSafeInputLoadInstruction(B, M, A, Bv, Gen, "fuzz.load");
+  case 54:
+  case 55:
+  case 56:
+  case 57:
+  case 58:
+  case 59:
+    return emitRandomFiniteHalfFPInstruction(B, A, Bv, Gen, "fuzz.cfg.fp16");
   default:
-    switch (Gen() % 4) {
+    switch (Gen() % 5) {
     case 0:
       return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
     case 1:
       return emitRandomVectorFPInstruction(B, M, A, Bv, Gen);
+    case 2:
+      return emitRandomVectorHalfFPInstruction(B, M, A, Bv, Gen);
     default:
       break;
     }
