@@ -747,6 +747,68 @@ bool triggersM026UMaxXorAnd(const Instruction &I) {
          isM026UMaxXorAndOperandPair(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool isI32NotOf(const Value *MaybeNot, const Value **Base = nullptr) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeNot);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0))) {
+    if (C->isMinusOne()) {
+      if (Base)
+        *Base = BO->getOperand(1);
+      return true;
+    }
+  }
+  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1))) {
+    if (C->isMinusOne()) {
+      if (Base)
+        *Base = BO->getOperand(0);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isM028UMaxOfMaskedNot(const Value *MaybeUMax, const Value *Not) {
+  const auto *Call = dyn_cast<CallInst>(MaybeUMax);
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic() ||
+      Callee->getIntrinsicID() != Intrinsic::umax || Call->arg_size() != 2 ||
+      !Call->getType()->isIntegerTy(32))
+    return false;
+  return isAndWithOperand(Call->getArgOperand(0), Not) ||
+         isAndWithOperand(Call->getArgOperand(1), Not);
+}
+
+bool isM028AndOfBaseAndUMax(const Value *MaybeAnd, const Value *Base,
+                            const Value *Not) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (BO->getOperand(0) == Base &&
+          isM028UMaxOfMaskedNot(BO->getOperand(1), Not)) ||
+         (BO->getOperand(1) == Base &&
+          isM028UMaxOfMaskedNot(BO->getOperand(0), Not));
+}
+
+bool isM028AndPair(const Value *MaybeAnd, const Value *MaybeNot) {
+  const Value *Base = nullptr;
+  return isI32NotOf(MaybeNot, &Base) &&
+         isM028AndOfBaseAndUMax(MaybeAnd, Base, MaybeNot);
+}
+
+bool triggersM028UMaxAndNot(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isM028AndPair(BO->getOperand(0), BO->getOperand(1)) ||
+         isM028AndPair(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -795,6 +857,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM025 = envFlag("FUZZX_ALLOW_M025_UREM_SEXT_OR", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
+  bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -818,7 +881,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM024 && triggersM024UDivSExtOr(I)) ||
               (!AllowM025 && triggersM025URemSExtOr(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
-              (!AllowM027 && triggersM027XorAndOr(I)))
+              (!AllowM027 && triggersM027XorAndOr(I)) ||
+              (!AllowM028 && triggersM028UMaxAndNot(I)))
             return false;
       continue;
     }

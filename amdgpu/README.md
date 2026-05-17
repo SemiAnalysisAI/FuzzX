@@ -102,6 +102,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` | unset | Re-enable unsigned remainder by odd `or` denominators for [m025](known-miscompiles/m025-urem-or-one/NOTES.md). |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
 | `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) | base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
+| `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
 
 ## Layout
 
@@ -162,6 +163,7 @@ Tested toolchains as of 2026-05-16:
 | [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x | 1` through the same imprecise reciprocal path. |
 | [m026-shl-umax-xor-and](known-miscompiles/m026-shl-umax-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O2` combines a shifted `umax` high-bit extraction into `v_bitop3_b32` using the input and salt instead of their xor. |
 | [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(((y ^ x) & x) | base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`. |
+| [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 
