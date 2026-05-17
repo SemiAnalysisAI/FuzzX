@@ -421,8 +421,9 @@ bool isKnownNonZeroI32(const Value *V) {
 }
 
 bool isAllowedIRInstruction(const Instruction &I) {
-  if (isa<BranchInst, ReturnInst, LoadInst, StoreInst, GetElementPtrInst,
-          ZExtInst, SExtInst, TruncInst, ICmpInst, PHINode, SelectInst>(&I))
+  if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
+          GetElementPtrInst, ZExtInst, SExtInst, TruncInst, ICmpInst, PHINode,
+          SelectInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
     switch (BO->getOpcode()) {
@@ -1064,7 +1065,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
 Value *emitRandomCFGArm(IRBuilder<NoFolder> &B, Module &M, Value *Current,
                         Value *Other, std::minstd_rand &Gen) {
   Value *Result = Current;
-  unsigned Steps = 1 + (Gen() % 3);
+  unsigned Steps = 1 + (Gen() % 4);
   for (unsigned I = 0; I < Steps; ++I) {
     Value *Bv = (Gen() % 2) == 0 ? Other : interestingI32(M.getContext(), Gen);
     Result = emitRandomCFGArmInstruction(B, M, Result, Bv, Gen);
@@ -1106,6 +1107,55 @@ void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
                                  "fuzz.phi", Join->begin());
   Phi->addIncoming(ThenValue, Then);
   Phi->addIncoming(ElseValue, Else);
+  Store->setOperand(0, Phi);
+}
+
+void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || F->size() >= 96)
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+  unsigned NumCases = 3 + (Gen() % 3);
+  uint32_t Mask = NumCases <= 4 ? 3 : 7;
+
+  BasicBlock *Head = Store->getParent();
+  BasicBlock *Join =
+      Head->splitBasicBlock(Store->getIterator(), "fuzz.switch.join");
+  BasicBlock *Default =
+      BasicBlock::Create(Ctx, "fuzz.switch.default", F, Join);
+
+  Instruction *OldTerm = Head->getTerminator();
+  IRBuilder<NoFolder> HeadB(OldTerm);
+  Value *Key = HeadB.CreateAnd(Current, ci32(Ctx, Mask), "fuzz.switch.key");
+  SwitchInst *Sw = HeadB.CreateSwitch(Key, Default, NumCases);
+  OldTerm->eraseFromParent();
+
+  PHINode *Phi = PHINode::Create(I32, NumCases + 1, "fuzz.switch.phi",
+                                 Join->begin());
+  for (unsigned I = 0; I < NumCases; ++I) {
+    BasicBlock *Case =
+        BasicBlock::Create(Ctx, "fuzz.switch.case", F, Join);
+    Sw->addCase(ci32(Ctx, I), Case);
+
+    IRBuilder<NoFolder> CaseB(Case);
+    Value *CaseOther =
+        (I % 2) == 0 ? Other : ci32(Ctx, randomInteresting64(Gen));
+    Value *CaseValue = emitRandomCFGArm(CaseB, M, Current, CaseOther, Gen);
+    CaseB.CreateBr(Join);
+    Phi->addIncoming(CaseValue, Case);
+  }
+
+  IRBuilder<NoFolder> DefaultB(Default);
+  Value *DefaultValue = emitRandomCFGArm(DefaultB, M, Current, Other, Gen);
+  DefaultB.CreateBr(Join);
+  Phi->addIncoming(DefaultValue, Default);
   Store->setOperand(0, Phi);
 }
 
@@ -1169,7 +1219,7 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 16 && (Gen() % 4) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 7) {
+    switch (Gen() % 9) {
     case 0:
     case 1:
     case 2:
@@ -1180,6 +1230,10 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
       mutateIRAddDiamond(M, Gen);
       break;
     case 5:
+    case 6:
+      mutateIRAddSwitch(M, Gen);
+      break;
+    case 7:
       mutateIRModifyConstant(M, Gen);
       break;
     default:
