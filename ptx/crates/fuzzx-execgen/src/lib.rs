@@ -2235,6 +2235,92 @@ mod tests {
             .any(|token| token == mnemonic)
     }
 
+    fn assert_mnemonic_coverage(
+        cfg: &GenConfig,
+        program_bytes: usize,
+        n_seeds: u64,
+        mnemonics: &[&'static str],
+    ) {
+        let mut found = vec![false; mnemonics.len()];
+
+        for seed in 0..n_seeds {
+            let bytes = bytes_from_seed(seed, program_bytes);
+            let ptx = generate_from_bytes_with_config(&bytes, cfg).unwrap();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    fn coverage_heavy_config() -> GenConfig {
+        GenConfig {
+            min_blocks: 16,
+            max_blocks: 24,
+            min_insts_per_block: 16,
+            max_insts_per_block: 24,
+            n_working_regs: 24,
+            max_immediate: 65536,
+            ..GenConfig::default()
+        }
+    }
+
+    fn post_known_bug_suppression_config() -> GenConfig {
+        GenConfig {
+            control_flow: ControlFlowMode::Structured,
+            min_blocks: 16,
+            max_blocks: 24,
+            min_insts_per_block: 16,
+            max_insts_per_block: 24,
+            n_working_regs: 24,
+            max_immediate: 65536,
+            max_structured_depth: 6,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_lop3: false,
+            emit_minmax: false,
+            emit_selp: false,
+            emit_mul_lo: false,
+            emit_mulhi: false,
+            emit_or: false,
+            emit_xor: false,
+            emit_prmt: false,
+            emit_not: false,
+            emit_brev: false,
+            emit_cnot: false,
+            emit_abs: false,
+            emit_signed_cmp: false,
+            emit_funnel: false,
+            emit_neg: false,
+            emit_shl: false,
+            emit_shr: false,
+            emit_signed_shr: false,
+            emit_bfind: false,
+            emit_bfi: false,
+            emit_bmsk: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_mul_wide: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_i32_boundary_immediates: false,
+            emit_dp2a: false,
+            emit_set: false,
+            emit_s32_slct: false,
+            emit_vsub4: false,
+            ..GenConfig::default()
+        }
+    }
+
     #[test]
     fn empty_bytes_does_not_panic() {
         // `arbitrary` is happy to keep handing back default values when out of
@@ -2261,6 +2347,182 @@ mod tests {
         assert!(ptx.contains("ret;"));
         assert!(ptx.contains("ld.param.u64"));
         assert!(ptx.contains("st.global.u32"));
+    }
+
+    #[test]
+    fn default_profile_covers_broad_instruction_surface() {
+        let cfg = coverage_heavy_config();
+        let mnemonics = [
+            "add.u32",
+            "sub.u32",
+            "mul.lo.u32",
+            "mul.hi.u32",
+            "mul.hi.s32",
+            "and.b32",
+            "or.b32",
+            "xor.b32",
+            "min.u32",
+            "max.u32",
+            "min.s32",
+            "max.s32",
+            "selp.b32",
+            "set.eq.u32.u32",
+            "set.lt.u32.s32",
+            "shl.b32",
+            "shr.u32",
+            "shr.s32",
+            "not.b32",
+            "cnot.b32",
+            "popc.b32",
+            "clz.b32",
+            "brev.b32",
+            "abs.s32",
+            "neg.s32",
+            "lop3.b32",
+            "prmt.b32",
+            "shf.l.wrap.b32",
+            "shf.r.wrap.b32",
+            "bfe.u32",
+            "bfe.s32",
+            "bmsk.clamp.b32",
+            "bfi.b32",
+            "cvt.u32.u8",
+            "cvt.s32.s16",
+            "add.cc.u32",
+            "addc.u32",
+            "sub.cc.u32",
+            "subc.u32",
+            "bfind.u32",
+            "bfind.shiftamt.u32",
+            "mul.wide.s32",
+            "add.u64",
+            "mul.lo.s64",
+            "div.u32",
+            "rem.s32",
+            "sad.u32",
+            "sad.s32",
+            "slct.u32.s32",
+            "slct.s32.s32",
+            "slct.b32.s32",
+            "dp4a.u32.u32",
+            "dp4a.s32.s32",
+            "dp2a.lo.u32.u32",
+            "dp2a.hi.s32.s32",
+            "vadd2.u32.u32.u32",
+            "vsub4.u32.u32.u32",
+            "vmax4.u32.u32.u32.add",
+        ];
+
+        assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
+    }
+
+    #[test]
+    fn fallback_profiles_cover_mad_and_24bit_instruction_forms() {
+        let mad_cfg = GenConfig {
+            emit_lop3: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&mad_cfg, 32768, 128, &["mad.lo.u32"]);
+
+        let mad24_cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(
+            &mad24_cfg,
+            32768,
+            1024,
+            &[
+                "mad24.lo.u32",
+                "mad24.hi.u32",
+                "mad24.lo.s32",
+                "mad24.hi.s32",
+            ],
+        );
+
+        let mul24_cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_mad24: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(
+            &mul24_cfg,
+            32768,
+            1024,
+            &[
+                "mul24.lo.u32",
+                "mul24.hi.u32",
+                "mul24.lo.s32",
+                "mul24.hi.s32",
+            ],
+        );
+    }
+
+    #[test]
+    fn post_known_bug_suppression_profile_still_covers_remaining_instructions() {
+        let cfg = post_known_bug_suppression_config();
+        let mnemonics = [
+            "add.u32",
+            "sub.u32",
+            "and.b32",
+            "popc.b32",
+            "clz.b32",
+            "bfe.u32",
+            "bfe.s32",
+            "cvt.u32.u8",
+            "cvt.u32.u16",
+            "cvt.s32.u8",
+            "cvt.s32.u16",
+            "cvt.u32.s8",
+            "cvt.u32.s16",
+            "cvt.s32.s8",
+            "cvt.s32.s16",
+            "add.u64",
+            "sub.u64",
+            "mul.lo.u64",
+            "add.s64",
+            "sub.s64",
+            "mul.lo.s64",
+            "and.b64",
+            "or.b64",
+            "xor.b64",
+            "div.u32",
+            "rem.u32",
+            "div.s32",
+            "rem.s32",
+            "sad.u32",
+            "sad.s32",
+            "slct.u32.s32",
+            "slct.b32.s32",
+            "dp4a.u32.u32",
+            "dp4a.u32.s32",
+            "dp4a.s32.u32",
+            "dp4a.s32.s32",
+            "vadd2.u32.u32.u32",
+            "vsub2.u32.u32.u32",
+            "vavrg2.u32.u32.u32",
+            "vavrg2.u32.u32.u32.add",
+            "vabsdiff2.u32.u32.u32.add",
+            "vmin2.u32.u32.u32",
+            "vmin2.u32.u32.u32.add",
+            "vmax2.u32.u32.u32",
+            "vmax2.u32.u32.u32.add",
+            "vadd4.u32.u32.u32",
+            "vavrg4.u32.u32.u32",
+            "vavrg4.u32.u32.u32.add",
+            "vabsdiff4.u32.u32.u32.add",
+            "vmin4.u32.u32.u32",
+            "vmin4.u32.u32.u32.add",
+            "vmax4.u32.u32.u32",
+            "vmax4.u32.u32.u32.add",
+        ];
+
+        assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
     }
 
     #[test]
