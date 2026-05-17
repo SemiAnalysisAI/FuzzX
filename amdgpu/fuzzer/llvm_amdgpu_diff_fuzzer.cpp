@@ -60,7 +60,7 @@ namespace {
 
 constexpr unsigned ThreadsPerBlock = 256;
 constexpr unsigned InputCount = 256;
-constexpr unsigned MaxIRCFGBlocks = 640;
+constexpr unsigned MaxIRCFGBlocks = 1024;
 
 constexpr StringRef DataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
@@ -2058,13 +2058,13 @@ struct CFGFragment {
 unsigned chooseCFGDepth(const Function &F, unsigned HardMax,
                         std::minstd_rand &Gen) {
   unsigned MaxDepth = HardMax;
-  if (F.size() >= MaxIRCFGBlocks - 80)
+  if (F.size() >= MaxIRCFGBlocks - 96)
     MaxDepth = 1;
-  else if (F.size() >= 480)
+  else if (F.size() >= 768)
     MaxDepth = std::min(MaxDepth, 2u);
-  else if (F.size() >= 320)
+  else if (F.size() >= 512)
     MaxDepth = std::min(MaxDepth, 3u);
-  else if (F.size() >= 160)
+  else if (F.size() >= 256)
     MaxDepth = std::min(MaxDepth, 4u);
 
   unsigned Depth = 1;
@@ -2077,7 +2077,11 @@ Value *chooseCFGValue(LLVMContext &Ctx, Value *Other, std::minstd_rand &Gen) {
   return (Gen() % 2) == 0 ? Other : interestingI32(Ctx, Gen);
 }
 
-bool canGrowCFG(const Function &F) { return F.size() < MaxIRCFGBlocks; }
+bool canAddCFGBlocks(const Function &F, unsigned Blocks) {
+  return F.size() + Blocks <= MaxIRCFGBlocks;
+}
+
+bool canGrowCFG(const Function &F) { return canAddCFGBlocks(F, 16); }
 
 CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
                                   BasicBlock *InsertBefore, Value *Current,
@@ -2091,6 +2095,8 @@ CFGFragment emitRandomNestedDiamond(IRBuilder<NoFolder> &B, Module &M,
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   Function *F = B.GetInsertBlock()->getParent();
+  if (!canAddCFGBlocks(*F, 3))
+    return {Current, B.GetInsertBlock()};
   BasicBlock *Then =
       BasicBlock::Create(Ctx, "fuzz.nested.then", F, InsertBefore);
   BasicBlock *Else =
@@ -2121,6 +2127,58 @@ CFGFragment emitRandomNestedDiamond(IRBuilder<NoFolder> &B, Module &M,
   return {Phi, Join};
 }
 
+CFGFragment emitRandomNestedCascade(IRBuilder<NoFolder> &B, Module &M,
+                                    BasicBlock *InsertBefore, Value *Current,
+                                    Value *Other, unsigned Depth,
+                                    std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Function *F = B.GetInsertBlock()->getParent();
+  BasicBlock *Head = B.GetInsertBlock();
+  Value *Result = Current;
+  unsigned Stages = 2 + (Gen() % 3);
+
+  for (unsigned Stage = 0; Stage < Stages; ++Stage) {
+    if (Depth == 0 || !canAddCFGBlocks(*F, 3))
+      return {Result, Head};
+
+    BasicBlock *Then =
+        BasicBlock::Create(Ctx, "fuzz.cascade.then", F, InsertBefore);
+    BasicBlock *Else =
+        BasicBlock::Create(Ctx, "fuzz.cascade.else", F, InsertBefore);
+    BasicBlock *Join =
+        BasicBlock::Create(Ctx, "fuzz.cascade.join", F, InsertBefore);
+
+    Value *StageOther = Stage == 0 ? Other : chooseCFGValue(Ctx, Other, Gen);
+    IRBuilder<NoFolder> HeadB(Head);
+    Value *Cond = HeadB.CreateICmp(randomICmpPredicate(Gen), Result,
+                                   StageOther, "fuzz.cascade.branch");
+    HeadB.CreateCondBr(Cond, Then, Else);
+
+    IRBuilder<NoFolder> ThenB(Then);
+    CFGFragment ThenFrag = emitRandomCFGSubgraph(
+        ThenB, M, Join, Result, StageOther, Depth - 1, Gen);
+    IRBuilder<NoFolder> ThenTailB(ThenFrag.Tail);
+    ThenTailB.CreateBr(Join);
+
+    IRBuilder<NoFolder> ElseB(Else);
+    Value *ElseOther = chooseCFGValue(Ctx, StageOther, Gen);
+    CFGFragment ElseFrag = emitRandomCFGSubgraph(
+        ElseB, M, Join, Result, ElseOther, Depth - 1, Gen);
+    IRBuilder<NoFolder> ElseTailB(ElseFrag.Tail);
+    ElseTailB.CreateBr(Join);
+
+    PHINode *Phi =
+        PHINode::Create(I32, 2, "fuzz.cascade.phi", Join->begin());
+    Phi->addIncoming(ThenFrag.Result, ThenFrag.Tail);
+    Phi->addIncoming(ElseFrag.Result, ElseFrag.Tail);
+    Result = Phi;
+    Head = Join;
+  }
+
+  return {Result, Head};
+}
+
 CFGFragment emitRandomNestedSwitch(IRBuilder<NoFolder> &B, Module &M,
                                    BasicBlock *InsertBefore, Value *Current,
                                    Value *Other, unsigned Depth,
@@ -2128,11 +2186,13 @@ CFGFragment emitRandomNestedSwitch(IRBuilder<NoFolder> &B, Module &M,
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   Function *F = B.GetInsertBlock()->getParent();
+  unsigned NumCases = 4 + (Gen() % 5);
+  if (!canAddCFGBlocks(*F, NumCases + 2))
+    return {Current, B.GetInsertBlock()};
   BasicBlock *Join =
       BasicBlock::Create(Ctx, "fuzz.nested.switch.join", F, InsertBefore);
   BasicBlock *Default =
       BasicBlock::Create(Ctx, "fuzz.nested.switch.default", F, Join);
-  unsigned NumCases = 4 + (Gen() % 5);
   uint32_t Mask = NumCases <= 4 ? 3 : 7;
 
   Value *Key = B.CreateAnd(Current, ci32(Ctx, Mask),
@@ -2174,6 +2234,9 @@ CFGFragment emitRandomNestedCountedLoop(IRBuilder<NoFolder> &B, Module &M,
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
   Function *F = B.GetInsertBlock()->getParent();
+  bool UseEarlyExit = (Gen() % 4) == 0;
+  if (!canAddCFGBlocks(*F, UseEarlyExit ? 4 : 3))
+    return {Current, B.GetInsertBlock()};
   BasicBlock *Preheader = B.GetInsertBlock();
   BasicBlock *Header =
       BasicBlock::Create(Ctx, "fuzz.nested.loop.header", F, InsertBefore);
@@ -2181,7 +2244,6 @@ CFGFragment emitRandomNestedCountedLoop(IRBuilder<NoFolder> &B, Module &M,
       BasicBlock::Create(Ctx, "fuzz.nested.loop.body", F, InsertBefore);
   BasicBlock *Exit =
       BasicBlock::Create(Ctx, "fuzz.nested.loop.exit", F, InsertBefore);
-  bool UseEarlyExit = (Gen() % 4) == 0;
 
   Value *TripCount = nullptr;
   if ((Gen() % 2) == 0) {
@@ -2246,16 +2308,19 @@ CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
                                   std::minstd_rand &Gen) {
   Value *Linear = emitRandomCFGLinearArm(B, M, Current, Other, Gen);
   Function *F = B.GetInsertBlock()->getParent();
-  if (Depth == 0 || !canGrowCFG(*F) || (Gen() % 5) == 0)
+  if (Depth == 0 || !canGrowCFG(*F) || (Gen() % 7) == 0)
     return {Linear, B.GetInsertBlock()};
 
   Value *NestedOther = chooseCFGValue(M.getContext(), Other, Gen);
-  switch (Gen() % 5) {
+  switch (Gen() % 7) {
   case 0:
     return emitRandomNestedSwitch(B, M, InsertBefore, Linear, NestedOther,
                                   Depth, Gen);
   case 1:
-    if (Depth == 1)
+    return emitRandomNestedCascade(B, M, InsertBefore, Linear, NestedOther,
+                                   Depth, Gen);
+  case 2:
+    if (Depth <= 2)
       return emitRandomNestedCountedLoop(B, M, InsertBefore, Linear,
                                          NestedOther, Depth, Gen);
     [[fallthrough]];
@@ -2469,6 +2534,30 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   }
 }
 
+void mutateIRAddCascade(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || !canGrowCFG(*F))
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+  BasicBlock *Head = Store->getParent();
+  BasicBlock *Join =
+      Head->splitBasicBlock(Store->getIterator(), "fuzz.cascade.outer.join");
+
+  Instruction *OldTerm = Head->getTerminator();
+  IRBuilder<NoFolder> HeadB(OldTerm);
+  CFGFragment Frag = emitRandomNestedCascade(
+      HeadB, M, Join, Current, Other, chooseCFGDepth(*F, 6, Gen), Gen);
+  IRBuilder<NoFolder> TailB(Frag.Tail);
+  TailB.CreateBr(Join);
+  OldTerm->eraseFromParent();
+  Store->setOperand(0, Frag.Result);
+}
+
 void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
   if (!F)
@@ -2536,7 +2625,7 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 24 && (Gen() % 4) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 17) {
+    switch (Gen() % 21) {
     case 0:
     case 1:
     case 2:
@@ -2561,8 +2650,15 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
       break;
     case 14:
     case 15:
+    case 16:
+      mutateIRAddCascade(M, Gen);
+      break;
+    case 17:
+    case 18:
       mutateIRModifyConstant(M, Gen);
       break;
+    case 19:
+    case 20:
     default:
       mutateIRRemoveInstruction(M, Gen);
       break;
