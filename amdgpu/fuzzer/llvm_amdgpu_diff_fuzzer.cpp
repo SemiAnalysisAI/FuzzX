@@ -509,6 +509,16 @@ bool isAllowedIntVectorType(Type *Ty) {
   return false;
 }
 
+bool isAllowedFPVectorType(Type *Ty) {
+  auto *VT = dyn_cast<FixedVectorType>(Ty);
+  return VT && VT->getElementType()->isFloatTy() &&
+         (VT->getNumElements() == 2 || VT->getNumElements() == 4);
+}
+
+bool isAllowedVectorValueType(Type *Ty) {
+  return isAllowedIntVectorType(Ty) || isAllowedFPVectorType(Ty);
+}
+
 bool isMatchingI1VectorType(Type *CondTy, Type *ValueTy) {
   auto *CondVT = dyn_cast<FixedVectorType>(CondTy);
   auto *ValueVT = dyn_cast<FixedVectorType>(ValueTy);
@@ -525,25 +535,30 @@ bool isValidVectorLaneIndex(Type *VecTy, const Value *Index) {
 bool isValidVectorInstruction(const Instruction &I) {
   if (const auto *Insert = dyn_cast<InsertElementInst>(&I)) {
     auto *VT = dyn_cast<FixedVectorType>(Insert->getType());
-    return VT && isAllowedIntVectorType(Insert->getType()) &&
+    return VT && isAllowedVectorValueType(Insert->getType()) &&
            Insert->getOperand(1)->getType() == VT->getElementType() &&
            isValidVectorLaneIndex(Insert->getType(), Insert->getOperand(2));
   }
   if (const auto *Extract = dyn_cast<ExtractElementInst>(&I)) {
     auto *VT = dyn_cast<FixedVectorType>(Extract->getVectorOperandType());
     return VT && Extract->getType() == VT->getElementType() &&
-           isAllowedIntVectorType(Extract->getVectorOperandType()) &&
+           isAllowedVectorValueType(Extract->getVectorOperandType()) &&
            isValidVectorLaneIndex(Extract->getVectorOperandType(),
                                   Extract->getIndexOperand());
   }
   if (const auto *BO = dyn_cast<BinaryOperator>(&I)) {
     if (!BO->getType()->isVectorTy())
       return true;
-    if (!isAllowedIntVectorType(BO->getType()))
-      return false;
-    if (BO->isShift())
-      return isConstantIntOrVectorBelow(BO->getOperand(1),
-                                        integerScalarWidth(BO->getType()));
+    if (isAllowedIntVectorType(BO->getType())) {
+      if (BO->isShift())
+        return isConstantIntOrVectorBelow(BO->getOperand(1),
+                                          integerScalarWidth(BO->getType()));
+      return true;
+    }
+    return isAllowedFPVectorType(BO->getType()) &&
+           (BO->getOpcode() == Instruction::FAdd ||
+            BO->getOpcode() == Instruction::FSub ||
+            BO->getOpcode() == Instruction::FMul);
   }
   if (const auto *Cmp = dyn_cast<ICmpInst>(&I)) {
     if (!Cmp->getOperand(0)->getType()->isVectorTy())
@@ -552,10 +567,17 @@ bool isValidVectorInstruction(const Instruction &I) {
            isMatchingI1VectorType(Cmp->getType(),
                                   Cmp->getOperand(0)->getType());
   }
+  if (const auto *Cmp = dyn_cast<FCmpInst>(&I)) {
+    if (!Cmp->getOperand(0)->getType()->isVectorTy())
+      return true;
+    return isAllowedFPVectorType(Cmp->getOperand(0)->getType()) &&
+           isMatchingI1VectorType(Cmp->getType(),
+                                  Cmp->getOperand(0)->getType());
+  }
   if (const auto *Sel = dyn_cast<SelectInst>(&I)) {
     if (!Sel->getType()->isVectorTy())
       return true;
-    return isAllowedIntVectorType(Sel->getType()) &&
+    return isAllowedVectorValueType(Sel->getType()) &&
            isMatchingI1VectorType(Sel->getCondition()->getType(),
                                   Sel->getType());
   }
@@ -582,7 +604,8 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::FAdd:
     case Instruction::FSub:
     case Instruction::FMul:
-      return BO->getType()->isFloatTy() || BO->getType()->isDoubleTy();
+      return BO->getType()->isFloatTy() || BO->getType()->isDoubleTy() ||
+             isAllowedFPVectorType(BO->getType());
     case Instruction::UDiv:
     case Instruction::URem:
       return isKnownNonZeroI32(BO->getOperand(1));
@@ -1785,6 +1808,76 @@ Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+FCmpInst::Predicate randomFCmpPredicate(std::minstd_rand &Gen);
+
+Value *emitRandomVectorFPInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                     Value *A, Value *Bv,
+                                     std::minstd_rand &Gen) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  unsigned Lanes = (Gen() % 2) == 0 ? 2 : 4;
+  auto *VecTy = FixedVectorType::get(F32, Lanes);
+  SmallVector<Value *, 4> AElements;
+  SmallVector<Value *, 4> BElements;
+  for (unsigned I = 0; I != Lanes; ++I) {
+    Value *ASeed = (I % 2) == 0 ? A : Bv;
+    Value *BSeed = nullptr;
+    if ((Gen() % 3) == 0)
+      BSeed = interestingI32(Ctx, Gen);
+    else
+      BSeed = (I % 2) == 0 ? Bv : A;
+    Value *AMasked =
+        B.CreateAnd(ASeed, ci32(Ctx, 255), "fuzz.vec.fp.mask");
+    Value *BMasked =
+        B.CreateAnd(BSeed, ci32(Ctx, 255), "fuzz.vec.fp.mask");
+    AElements.push_back(B.CreateUIToFP(AMasked, F32, "fuzz.vec.fp.uitofp"));
+    BElements.push_back(B.CreateUIToFP(BMasked, F32, "fuzz.vec.fp.uitofp"));
+  }
+
+  Value *VA = emitVectorBuild(B, VecTy, AElements);
+  Value *VB = emitVectorBuild(B, VecTy, BElements);
+  Value *Result = nullptr;
+  switch (Gen() % 5) {
+  case 0:
+    Result = B.CreateFAdd(VA, VB, "fuzz.vec.fp.fadd");
+    break;
+  case 1:
+    Result = B.CreateFMul(VA, VB, "fuzz.vec.fp.fmul");
+    break;
+  case 2: {
+    Value *Product = B.CreateFMul(VA, VB, "fuzz.vec.fp.fmul");
+    Result = B.CreateFAdd(Product, VA, "fuzz.vec.fp.fmaish");
+    break;
+  }
+  default: {
+    Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), VA, VB,
+                              "fuzz.vec.fp.fcmp");
+    Result = B.CreateSelect(Cmp, VA, VB, "fuzz.vec.fp.select");
+    break;
+  }
+  }
+
+  unsigned Lane0 = Gen() % Lanes;
+  unsigned Lane1 = Gen() % Lanes;
+  Value *F0 = B.CreateExtractElement(Result, ci32(Ctx, Lane0),
+                                     "fuzz.vec.fp.ext");
+  Value *F1 = B.CreateExtractElement(Result, ci32(Ctx, Lane1),
+                                     "fuzz.vec.fp.ext");
+  Value *I0 = B.CreateFPToUI(F0, I32, "fuzz.vec.fp.fptoui");
+  Value *I1 = B.CreateFPToUI(F1, I32, "fuzz.vec.fp.fptoui");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(I0, I1, "fuzz.vec.fp.reduce.xor");
+  case 1:
+    return B.CreateAdd(I0, I1, "fuzz.vec.fp.reduce.add");
+  case 2:
+    return B.CreateOr(I0, I1, "fuzz.vec.fp.reduce.or");
+  default:
+    return B.CreateSub(I0, I1, "fuzz.vec.fp.reduce.sub");
+  }
+}
+
 Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
                                     std::minstd_rand &Gen,
                                     StringRef NamePrefix) {
@@ -2144,8 +2237,14 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.fp.signed");
   default:
-    if ((Gen() % 3) == 0)
+    switch (Gen() % 4) {
+    case 0:
       return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
+    case 1:
+      return emitRandomVectorFPInstruction(B, M, A, Bv, Gen);
+    default:
+      break;
+    }
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
@@ -2303,8 +2402,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
                                                "fuzz.cfg.fp.signed");
   default:
-    if ((Gen() % 3) == 0)
+    switch (Gen() % 4) {
+    case 0:
       return emitRandomNarrowVectorInstruction(B, M, A, Bv, Gen);
+    case 1:
+      return emitRandomVectorFPInstruction(B, M, A, Bv, Gen);
+    default:
+      break;
+    }
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
 }
