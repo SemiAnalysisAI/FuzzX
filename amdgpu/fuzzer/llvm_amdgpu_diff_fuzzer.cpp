@@ -610,6 +610,46 @@ bool triggersM023AndXorIdentity(const Instruction &I) {
          isAndWithOperand(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool isI32XorWithOperand(const Value *MaybeXor, const Value *Operand) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
+}
+
+bool isM027MaskedBase(const Value *MaybeMasked, const Value *Base) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeMasked);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (BO->getOperand(0) == Base &&
+          isI32XorWithOperand(BO->getOperand(1), Base)) ||
+         (BO->getOperand(1) == Base &&
+          isI32XorWithOperand(BO->getOperand(0), Base));
+}
+
+bool isM027AndOfXorWithMaskedBase(const Value *MaybeAnd,
+                                  const Value *Base) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (isM027MaskedBase(BO->getOperand(0), Base) &&
+          isI32XorWithOperand(BO->getOperand(1), BO->getOperand(0))) ||
+         (isM027MaskedBase(BO->getOperand(1), Base) &&
+          isI32XorWithOperand(BO->getOperand(0), BO->getOperand(1)));
+}
+
+bool triggersM027XorAndOr(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isM027AndOfXorWithMaskedBase(BO->getOperand(0), BO->getOperand(1)) ||
+         isM027AndOfXorWithMaskedBase(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool isOrWithNonZeroI32Constant(const Value *V) {
   const auto *BO = dyn_cast<BinaryOperator>(V);
   if (!BO || BO->getOpcode() != Instruction::Or ||
@@ -754,6 +794,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM024 = envFlag("FUZZX_ALLOW_M024_UDIV_SEXT_OR", false);
   bool AllowM025 = envFlag("FUZZX_ALLOW_M025_UREM_SEXT_OR", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
+  bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -776,7 +817,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM023 && triggersM023AndXorIdentity(I)) ||
               (!AllowM024 && triggersM024UDivSExtOr(I)) ||
               (!AllowM025 && triggersM025URemSExtOr(I)) ||
-              (!AllowM026 && triggersM026UMaxXorAnd(I)))
+              (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
+              (!AllowM027 && triggersM027XorAndOr(I)))
             return false;
       continue;
     }
