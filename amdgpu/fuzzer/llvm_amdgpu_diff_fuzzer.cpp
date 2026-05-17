@@ -540,8 +540,8 @@ bool isAllowedIRInstruction(const Instruction &I) {
     return true;
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
-          FPToUIInst, FPExtInst, FPTruncInst, ICmpInst, FCmpInst, PHINode,
-          SelectInst>(&I))
+          SIToFPInst, FPToUIInst, FPToSIInst, FPExtInst, FPTruncInst,
+          ICmpInst, FCmpInst, PHINode, SelectInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
     switch (BO->getOpcode()) {
@@ -553,6 +553,7 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::Or:
       return true;
     case Instruction::FAdd:
+    case Instruction::FSub:
     case Instruction::FMul:
       return BO->getType()->isFloatTy() || BO->getType()->isDoubleTy();
     case Instruction::UDiv:
@@ -1782,6 +1783,73 @@ Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomFiniteSignedFPInstruction(IRBuilder<NoFolder> &B, Value *A,
+                                           Value *Bv, std::minstd_rand &Gen,
+                                           StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  Type *F64 = Type::getDoubleTy(Ctx);
+  Value *ASmall =
+      B.CreateSExt(B.CreateTrunc(A, I8, Twine(NamePrefix) + ".trunc.a"), I32,
+                   Twine(NamePrefix) + ".sext.a");
+  Value *BSmall =
+      B.CreateSExt(B.CreateTrunc(Bv, I8, Twine(NamePrefix) + ".trunc.b"), I32,
+                   Twine(NamePrefix) + ".sext.b");
+  Value *FA = B.CreateSIToFP(ASmall, F32, Twine(NamePrefix) + ".sitofp.a");
+  Value *FB = B.CreateSIToFP(BSmall, F32, Twine(NamePrefix) + ".sitofp.b");
+
+  Value *Result = nullptr;
+  switch (Gen() % 6) {
+  case 0:
+    Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
+    break;
+  case 1:
+    Result = B.CreateFSub(FA, FB, Twine(NamePrefix) + ".fsub");
+    break;
+  case 2:
+    Result = B.CreateFMul(FA, FB, Twine(NamePrefix) + ".fmul");
+    break;
+  case 3: {
+    Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                              Twine(NamePrefix) + ".fcmp");
+    Result = B.CreateSelect(Cmp, FA, FB, Twine(NamePrefix) + ".select");
+    break;
+  }
+  case 4: {
+    Value *FA64 = B.CreateFPExt(FA, F64, Twine(NamePrefix) + ".fpext.a");
+    Value *FB64 = B.CreateFPExt(FB, F64, Twine(NamePrefix) + ".fpext.b");
+    Value *F64Result =
+        B.CreateFSub(FA64, FB64, Twine(NamePrefix) + ".f64.sub");
+    Result = B.CreateFPTrunc(F64Result, F32, Twine(NamePrefix) + ".fptrunc");
+    break;
+  }
+  default: {
+    Value *Tiny =
+        B.CreateSExt(B.CreateTrunc(Bv, Type::getIntNTy(Ctx, 4),
+                                   Twine(NamePrefix) + ".tiny.trunc"),
+                     I32, Twine(NamePrefix) + ".tiny.sext");
+    Value *FTiny = B.CreateSIToFP(Tiny, F32, Twine(NamePrefix) + ".sitofp.tiny");
+    Result = B.CreateFMul(FA, FTiny, Twine(NamePrefix) + ".tinymul");
+    break;
+  }
+  }
+
+  Value *IntResult =
+      B.CreateFPToSI(Result, I32, Twine(NamePrefix) + ".fptosi");
+  switch (Gen() % 4) {
+  case 0:
+    return IntResult;
+  case 1:
+    return B.CreateXor(IntResult, A, Twine(NamePrefix) + ".xor");
+  case 2:
+    return B.CreateAdd(IntResult, Bv, Twine(NamePrefix) + ".add");
+  default:
+    return B.CreateSub(A, IntResult, Twine(NamePrefix) + ".sub");
+  }
+}
+
 Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
                                        Value *Bv, bool IsRem,
                                        StringRef NamePrefix) {
@@ -1803,7 +1871,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 66) {
+  switch (Gen() % 70) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -1943,6 +2011,12 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     return emitSafeSignedDivRemInstruction(B, A, Bv, false, "fuzz.sdiv");
   case 53:
     return emitSafeSignedDivRemInstruction(B, A, Bv, true, "fuzz.srem");
+  case 54:
+  case 55:
+  case 56:
+  case 57:
+    return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
+                                               "fuzz.fp.signed");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -1967,7 +2041,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 52) {
+  switch (Gen() % 56) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2094,6 +2168,12 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
     return emitSafeSignedDivRemInstruction(B, A, Bv, false, "fuzz.cfg.sdiv");
   case 45:
     return emitSafeSignedDivRemInstruction(B, A, Bv, true, "fuzz.cfg.srem");
+  case 46:
+  case 47:
+  case 48:
+  case 49:
+    return emitRandomFiniteSignedFPInstruction(B, A, Bv, Gen,
+                                               "fuzz.cfg.fp.signed");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }

@@ -22,7 +22,9 @@ reduced back to `i32`, and LLVM bit, min/max, saturation, absolute-value, and
 funnel-shift intrinsics. It also emits a finite scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
-`fptoui`. The mutator can also wrap the current result in structured two-way
+`fptoui`; a signed variant uses small sign-extended integers, `sitofp`,
+`fadd` / `fsub` / `fmul`, and in-range `fptosi`. The mutator can also wrap the
+current result in structured two-way
 branches, wider multi-way switches, branch/PHI cascades, and deeper bounded CFG
 subgraphs with `i32` phi joins. Those subgraphs can nest more diamonds, switches,
 cascades, and small counted loops with optional guarded early exits. The mutator
