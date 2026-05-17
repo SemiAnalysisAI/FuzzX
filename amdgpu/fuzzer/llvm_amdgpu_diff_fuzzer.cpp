@@ -5,6 +5,7 @@
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -809,6 +810,134 @@ bool triggersM028UMaxAndNot(const Instruction &I) {
          isM028AndPair(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool isI32Fshl(const Value *V) {
+  const auto *Call = dyn_cast<CallInst>(V);
+  if (!Call || !Call->getType()->isIntegerTy(32))
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::fshl;
+}
+
+bool isAndWithFshl(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isI32Fshl(BO->getOperand(0)) || isI32Fshl(BO->getOperand(1));
+}
+
+bool isM029ComplementedFshlMask(const Value *V) {
+  const Value *Base = nullptr;
+  return isI32NotOf(V, &Base) && isAndWithFshl(Base);
+}
+
+bool isExtOf(const Value *MaybeExt, const Value *Base) {
+  const auto *Ext = dyn_cast<CastInst>(MaybeExt);
+  return Ext && (isa<SExtInst>(Ext) || isa<ZExtInst>(Ext)) &&
+         Ext->getOperand(0) == Base;
+}
+
+bool isM029XorWithComplement(const Value *Y, const Value *X) {
+  if (isXorWithOperand(Y, X))
+    return true;
+  const auto *Trunc = dyn_cast<TruncInst>(Y);
+  if (!Trunc || !Trunc->getType()->isIntegerTy(32))
+    return false;
+  const auto *BO = dyn_cast<BinaryOperator>(Trunc->getOperand(0));
+  if (!BO || BO->getOpcode() != Instruction::Xor)
+    return false;
+  return isExtOf(BO->getOperand(0), X) || isExtOf(BO->getOperand(1), X);
+}
+
+bool isM029AndOfYAndX(const Value *MaybeAnd, const Value **Y = nullptr,
+                      const Value **X = nullptr) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const Value *MaybeX = BO->getOperand(I);
+    const Value *MaybeY = BO->getOperand(1 - I);
+    if (isM029ComplementedFshlMask(MaybeX) &&
+        isM029XorWithComplement(MaybeY, MaybeX)) {
+      if (Y)
+        *Y = MaybeY;
+      if (X)
+        *X = MaybeX;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isM029CompareForAndPath(const Value *Cond, const Value *Y, const Value *X,
+                             bool AndOnTrue) {
+  const auto *Cmp = dyn_cast<ICmpInst>(Cond);
+  if (!Cmp || !Cmp->isSigned())
+    return false;
+  ICmpInst::Predicate Pred = Cmp->getPredicate();
+  const Value *LHS = Cmp->getOperand(0);
+  const Value *RHS = Cmp->getOperand(1);
+  if (LHS == Y && RHS == X) {
+    if (Pred == ICmpInst::ICMP_SLE || Pred == ICmpInst::ICMP_SLT)
+      return AndOnTrue;
+    if (Pred == ICmpInst::ICMP_SGT || Pred == ICmpInst::ICMP_SGE)
+      return !AndOnTrue;
+  }
+  if (LHS == X && RHS == Y) {
+    if (Pred == ICmpInst::ICMP_SGE || Pred == ICmpInst::ICMP_SGT)
+      return AndOnTrue;
+    if (Pred == ICmpInst::ICMP_SLT || Pred == ICmpInst::ICMP_SLE)
+      return !AndOnTrue;
+  }
+  return false;
+}
+
+bool isM029Select(const SelectInst &Sel) {
+  const Value *Y = nullptr;
+  const Value *X = nullptr;
+  if (isM029AndOfYAndX(Sel.getTrueValue(), &Y, &X) &&
+      isM029CompareForAndPath(Sel.getCondition(), Y, X, true))
+    return true;
+  if (isM029AndOfYAndX(Sel.getFalseValue(), &Y, &X) &&
+      isM029CompareForAndPath(Sel.getCondition(), Y, X, false))
+    return true;
+  return false;
+}
+
+bool isM029Phi(const PHINode &Phi) {
+  if (!Phi.getType()->isIntegerTy(32) || Phi.getNumIncomingValues() != 2)
+    return false;
+  for (unsigned I = 0; I != 2; ++I) {
+    const Value *Y = nullptr;
+    const Value *X = nullptr;
+    if (!isM029AndOfYAndX(Phi.getIncomingValue(I), &Y, &X))
+      continue;
+    BasicBlock *AndBB = Phi.getIncomingBlock(I);
+    BasicBlock *OtherBB = Phi.getIncomingBlock(1 - I);
+    BasicBlock *Pred = AndBB->getSinglePredecessor();
+    if (!Pred || OtherBB->getSinglePredecessor() != Pred)
+      continue;
+    const auto *Br = dyn_cast<BranchInst>(Pred->getTerminator());
+    if (!Br || !Br->isConditional())
+      continue;
+    bool AndOnTrue = Br->getSuccessor(0) == AndBB;
+    if ((AndOnTrue || Br->getSuccessor(1) == AndBB) &&
+        isM029CompareForAndPath(Br->getCondition(), Y, X, AndOnTrue))
+      return true;
+  }
+  return false;
+}
+
+bool triggersM029FshlSelectPhi(const Instruction &I) {
+  if (const auto *Sel = dyn_cast<SelectInst>(&I))
+    return isM029Select(*Sel);
+  if (const auto *Phi = dyn_cast<PHINode>(&I))
+    return isM029Phi(*Phi);
+  return false;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -858,6 +987,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
+  bool AllowM029 = envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -882,7 +1012,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM025 && triggersM025URemSExtOr(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
               (!AllowM027 && triggersM027XorAndOr(I)) ||
-              (!AllowM028 && triggersM028UMaxAndNot(I)))
+              (!AllowM028 && triggersM028UMaxAndNot(I)) ||
+              (!AllowM029 && triggersM029FshlSelectPhi(I)))
             return false;
       continue;
     }
