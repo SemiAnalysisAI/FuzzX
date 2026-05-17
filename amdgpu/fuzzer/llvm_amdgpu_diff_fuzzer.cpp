@@ -574,6 +574,22 @@ bool triggersM022AndXorConstant(const Instruction &I) {
   return isXorWithConstantOf(LHS, RHS) || isXorWithConstantOf(RHS, LHS);
 }
 
+bool isAndWithOperand(const Value *MaybeAnd, const Value *Operand) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
+  if (!BO || BO->getOpcode() != Instruction::And)
+    return false;
+  return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
+}
+
+bool triggersM023AndXorIdentity(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Xor ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isAndWithOperand(BO->getOperand(0), BO->getOperand(1)) ||
+         isAndWithOperand(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -617,6 +633,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM020 = envFlag("FUZZX_ALLOW_M020_OR_XOR_AND", false);
   bool AllowM021 = envFlag("FUZZX_ALLOW_M021_OR_XOR", false);
   bool AllowM022 = envFlag("FUZZX_ALLOW_M022_AND_XOR_CONSTANT", false);
+  bool AllowM023 = envFlag("FUZZX_ALLOW_M023_AND_XOR_IDENTITY", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -635,7 +652,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
               (!AllowM020 && triggersM020OrXorAnd(I)) ||
               (!AllowM021 && triggersM021OrXor(I)) ||
-              (!AllowM022 && triggersM022AndXorConstant(I)))
+              (!AllowM022 && triggersM022AndXorConstant(I)) ||
+              (!AllowM023 && triggersM023AndXorIdentity(I)))
             return false;
       continue;
     }
