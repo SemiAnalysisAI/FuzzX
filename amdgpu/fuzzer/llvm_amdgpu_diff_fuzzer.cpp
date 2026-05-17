@@ -1851,11 +1851,14 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   HeaderB.CreateCondBr(Done, Body, Exit);
 
   IRBuilder<NoFolder> BodyB(Body);
-  Value *Next = emitRandomCFGLinearArm(BodyB, M, Acc, Other, Gen);
-  Value *NextIndex = BodyB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
-  BodyB.CreateBr(Header);
-  Index->addIncoming(NextIndex, Body);
-  Acc->addIncoming(Next, Body);
+  CFGFragment BodyFrag = emitRandomCFGSubgraph(
+      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 2, Gen), Gen);
+  IRBuilder<NoFolder> BodyTailB(BodyFrag.Tail);
+  Value *NextIndex =
+      BodyTailB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.next");
+  BodyTailB.CreateBr(Header);
+  Index->addIncoming(NextIndex, BodyFrag.Tail);
+  Acc->addIncoming(BodyFrag.Result, BodyFrag.Tail);
 
   Store->setOperand(0, Acc);
 }

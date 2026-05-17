@@ -19,10 +19,9 @@ Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
 absolute-value, and funnel-shift intrinsics. The mutator can also wrap the
 current result in structured two-way branches, small multi-way switches, and
 bounded nested acyclic subgraphs with `i32` phi joins. It also generates small
-counted loops with loop-carried `i32` phis, so corpus entries exercise both
-expression simplification and CFG and loop transforms. Corpus files can be
-inspected directly with
-`opt -S corpus-entry -o -`.
+counted loops whose bodies can contain nested diamonds and switches, so corpus
+entries exercise both expression simplification and CFG and loop transforms.
+Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Requirements
 
