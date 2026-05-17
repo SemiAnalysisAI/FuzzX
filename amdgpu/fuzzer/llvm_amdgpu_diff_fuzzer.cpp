@@ -501,7 +501,8 @@ bool isAllowedIRInstruction(const Instruction &I) {
   if (isa<InsertElementInst, ExtractElementInst>(&I))
     return true;
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
-          GetElementPtrInst, ZExtInst, SExtInst, TruncInst, ICmpInst, PHINode,
+          GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
+          FPToUIInst, FPExtInst, FPTruncInst, ICmpInst, FCmpInst, PHINode,
           SelectInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
@@ -513,6 +514,9 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::And:
     case Instruction::Or:
       return true;
+    case Instruction::FAdd:
+    case Instruction::FMul:
+      return BO->getType()->isFloatTy() || BO->getType()->isDoubleTy();
     case Instruction::UDiv:
     case Instruction::URem:
       return isKnownNonZeroI32(BO->getOperand(1));
@@ -1657,6 +1661,86 @@ Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+FCmpInst::Predicate randomFCmpPredicate(std::minstd_rand &Gen) {
+  static constexpr std::array<FCmpInst::Predicate, 6> Predicates = {
+      FCmpInst::FCMP_OEQ, FCmpInst::FCMP_ONE, FCmpInst::FCMP_OGT,
+      FCmpInst::FCMP_OGE, FCmpInst::FCMP_OLT, FCmpInst::FCMP_OLE};
+  return Predicates[Gen() % Predicates.size()];
+}
+
+Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
+                                     Value *Bv, std::minstd_rand &Gen,
+                                     StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  Type *F64 = Type::getDoubleTy(Ctx);
+  Value *AMasked = B.CreateAnd(A, ci32(Ctx, 1023),
+                               Twine(NamePrefix) + ".mask.a");
+  Value *BMasked = B.CreateAnd(Bv, ci32(Ctx, 1023),
+                               Twine(NamePrefix) + ".mask.b");
+  Value *FA = B.CreateUIToFP(AMasked, F32, Twine(NamePrefix) + ".uitofp.a");
+  Value *FB = B.CreateUIToFP(BMasked, F32, Twine(NamePrefix) + ".uitofp.b");
+
+  Value *Result = nullptr;
+  switch (Gen() % 7) {
+  case 0:
+    Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
+    break;
+  case 1:
+    Result = B.CreateFMul(FA, FB, Twine(NamePrefix) + ".fmul");
+    break;
+  case 2: {
+    Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                              Twine(NamePrefix) + ".fcmp");
+    Result = B.CreateSelect(Cmp, FA, FB, Twine(NamePrefix) + ".select");
+    break;
+  }
+  case 3: {
+    Value *Product = B.CreateFMul(FA, FB, Twine(NamePrefix) + ".fmul");
+    Result = B.CreateFAdd(Product, FA, Twine(NamePrefix) + ".fmaish");
+    break;
+  }
+  case 4: {
+    Value *FA64 = B.CreateFPExt(FA, F64, Twine(NamePrefix) + ".fpext.a");
+    Value *FB64 = B.CreateFPExt(FB, F64, Twine(NamePrefix) + ".fpext.b");
+    Value *F64Result =
+        B.CreateFAdd(FA64, FB64, Twine(NamePrefix) + ".f64.add");
+    Result = B.CreateFPTrunc(F64Result, F32, Twine(NamePrefix) + ".fptrunc");
+    break;
+  }
+  case 5: {
+    Value *Small = B.CreateAnd(Bv, ci32(Ctx, 15),
+                               Twine(NamePrefix) + ".small");
+    Value *FSmall =
+        B.CreateUIToFP(Small, F32, Twine(NamePrefix) + ".uitofp.small");
+    Result = B.CreateFMul(FA, FSmall, Twine(NamePrefix) + ".smallmul");
+    break;
+  }
+  default: {
+    Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
+                              Twine(NamePrefix) + ".fcmp");
+    Value *Selected = B.CreateSelect(Cmp, AMasked, BMasked,
+                                     Twine(NamePrefix) + ".i32.select");
+    Result = B.CreateUIToFP(Selected, F32, Twine(NamePrefix) + ".uitofp.sel");
+    break;
+  }
+  }
+
+  Value *IntResult =
+      B.CreateFPToUI(Result, I32, Twine(NamePrefix) + ".fptoui");
+  switch (Gen() % 4) {
+  case 0:
+    return IntResult;
+  case 1:
+    return B.CreateXor(IntResult, A, Twine(NamePrefix) + ".xor");
+  case 2:
+    return B.CreateAdd(IntResult, Bv, Twine(NamePrefix) + ".add");
+  default:
+    return B.CreateOr(IntResult, A, Twine(NamePrefix) + ".or");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -1666,7 +1750,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 56) {
+  switch (Gen() % 62) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -1795,6 +1879,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 44:
   case 45:
     return emitRandomBoolI32Instruction(B, A, Bv, Gen, "fuzz.bool");
+  case 46:
+  case 47:
+  case 48:
+  case 49:
+  case 50:
+  case 51:
+    return emitRandomFiniteFPInstruction(B, A, Bv, Gen, "fuzz.fp");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -1819,7 +1910,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 42) {
+  switch (Gen() % 48) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -1935,6 +2026,13 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 36:
   case 37:
     return emitRandomBoolI32Instruction(B, A, Bv, Gen, "fuzz.cfg.bool");
+  case 38:
+  case 39:
+  case 40:
+  case 41:
+  case 42:
+  case 43:
+    return emitRandomFiniteFPInstruction(B, A, Bv, Gen, "fuzz.cfg.fp");
   default:
     return emitRandomVectorInstruction(B, M, A, Bv, Gen);
   }
@@ -2383,6 +2481,9 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
       if (I.getName().starts_with("fuzz.loop."))
         continue;
       if (I.getName().starts_with("fuzz.vec."))
+        continue;
+      if (I.getName().starts_with("fuzz.fp.") ||
+          I.getName().starts_with("fuzz.cfg.fp."))
         continue;
       for (unsigned IOp = 0; IOp < I.getNumOperands(); ++IOp) {
         if (auto *Call = dyn_cast<CallBase>(&I)) {
