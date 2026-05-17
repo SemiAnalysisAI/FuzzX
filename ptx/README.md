@@ -122,6 +122,7 @@ Version | Description |
 | 13.2.78 | [m038-structured-empty-else-fold](known-miscompiles/m038-structured-empty-else-fold/NOTES.md): Always-false structured branch with an empty else arm folds as if the untaken then arm executed. |
 | 13.2.78 | [m039-else-redefinition-fold](known-miscompiles/m039-else-redefinition-fold/NOTES.md): Branch fold drops the executed else-path redefinition of a value initialized before the branch. |
 | 13.2.78 | [m040-mulwide-neg-shr-fold](known-miscompiles/m040-mulwide-neg-shr-fold/NOTES.md): `mul.wide` low word feeding wrapped negation and logical shift loses the shifted high-bit contribution. |
+| 13.2.78 | [m049-wide-or-shift-mask-fold](known-miscompiles/m049-wide-or-shift-mask-fold/NOTES.md): Likely related to m040; `or.b64` low word feeding a shift/add mask fold computes the wrong mask. |
 | 13.2.78 | [m041-or-shifted-square-fold](known-miscompiles/m041-or-shifted-square-fold/NOTES.md): `or.b32` after a square known to have zero low 32 bits folds with a missing output bit. |
 | 13.2.78 | [m044-mul-lo-square-fold](known-miscompiles/m044-mul-lo-square-fold/NOTES.md): Likely same root cause as m041; square of a shifted `mul.lo` value folds to `0x80000000` instead of zero. |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
@@ -235,6 +236,7 @@ that feature.
 | `DIV_DISABLE_SHL` | `shl.b32`. |
 | `DIV_DISABLE_SHR` | `shr.u32`. |
 | `DIV_DISABLE_SIGNED_SHR` | `shr.s32`. |
+| `DIV_DISABLE_REG_SHIFTS` | Masked register-count shifts. |
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
@@ -246,6 +248,7 @@ that feature.
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
+| `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |

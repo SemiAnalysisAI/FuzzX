@@ -66,6 +66,8 @@
 //!                         PTX shr.u32 generation
 //!   DIV_DISABLE_SIGNED_SHR default: false; set 1/true/yes/on to suppress
 //!                         PTX shr.s32 generation
+//!   DIV_DISABLE_REG_SHIFTS default: false; set 1/true/yes/on to suppress
+//!                         masked register-count shift generation
 //!   DIV_DISABLE_BFIND     default: false; set 1/true/yes/on to suppress
 //!                         PTX bfind.u32/bfind.shiftamt.u32 generation
 //!   DIV_DISABLE_BFI       default: false; set 1/true/yes/on to suppress
@@ -88,6 +90,8 @@
 //!                         suppress immediate 0x7fffffff/0x80000000 generation
 //!   DIV_DISABLE_DP2A      default: false; set 1/true/yes/on to suppress
 //!                         PTX dp2a.{lo,hi}.u32.u32 generation
+//!   DIV_DISABLE_PREDICATED_ALU default: false; set 1/true/yes/on to suppress
+//!                         predicated ALU instruction generation
 //!   DIV_DISABLE_SET       default: false; set 1/true/yes/on to suppress
 //!                         PTX set.{cmp}.u32.{u32,s32} generation
 //!   DIV_DISABLE_S32_SLCT  default: false; set 1/true/yes/on to suppress
@@ -235,6 +239,8 @@ struct Args {
     #[arg(long)]
     disable_signed_shr: bool,
     #[arg(long)]
+    disable_reg_shifts: bool,
+    #[arg(long)]
     disable_bfind: bool,
     #[arg(long)]
     disable_bfi: bool,
@@ -256,6 +262,8 @@ struct Args {
     disable_i32_boundary_imms: bool,
     #[arg(long)]
     disable_dp2a: bool,
+    #[arg(long)]
+    disable_predicated_alu: bool,
     #[arg(long)]
     disable_set: bool,
     #[arg(long)]
@@ -330,6 +338,7 @@ impl Args {
         set_bool!(self.disable_shl, "DIV_DISABLE_SHL");
         set_bool!(self.disable_shr, "DIV_DISABLE_SHR");
         set_bool!(self.disable_signed_shr, "DIV_DISABLE_SIGNED_SHR");
+        set_bool!(self.disable_reg_shifts, "DIV_DISABLE_REG_SHIFTS");
         set_bool!(self.disable_bfind, "DIV_DISABLE_BFIND");
         set_bool!(self.disable_bfi, "DIV_DISABLE_BFI");
         set_bool!(self.disable_bmsk, "DIV_DISABLE_BMSK");
@@ -344,6 +353,7 @@ impl Args {
             "DIV_DISABLE_I32_BOUNDARY_IMMS"
         );
         set_bool!(self.disable_dp2a, "DIV_DISABLE_DP2A");
+        set_bool!(self.disable_predicated_alu, "DIV_DISABLE_PREDICATED_ALU");
         set_bool!(self.disable_set, "DIV_DISABLE_SET");
         set_bool!(self.disable_s32_slct, "DIV_DISABLE_S32_SLCT");
         set_bool!(self.disable_video, "DIV_DISABLE_VIDEO");
@@ -436,6 +446,7 @@ impl Config {
         let disable_shl = env_bool("DIV_DISABLE_SHL")?.unwrap_or(false);
         let disable_shr = env_bool("DIV_DISABLE_SHR")?.unwrap_or(false);
         let disable_signed_shr = env_bool("DIV_DISABLE_SIGNED_SHR")?.unwrap_or(false);
+        let disable_reg_shifts = env_bool("DIV_DISABLE_REG_SHIFTS")?.unwrap_or(false);
         let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
         let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
@@ -447,6 +458,7 @@ impl Config {
         let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
         let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
         let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
+        let disable_predicated_alu = env_bool("DIV_DISABLE_PREDICATED_ALU")?.unwrap_or(false);
         let disable_set = env_bool("DIV_DISABLE_SET")?.unwrap_or(false);
         let disable_s32_slct = env_bool("DIV_DISABLE_S32_SLCT")?.unwrap_or(false);
         let disable_video = env_bool("DIV_DISABLE_VIDEO")?.unwrap_or(false);
@@ -482,6 +494,7 @@ impl Config {
             emit_shl: !disable_shl,
             emit_shr: !disable_shr,
             emit_signed_shr: !disable_signed_shr,
+            emit_reg_shifts: !disable_reg_shifts && !disable_bitwise_binops,
             emit_bfind: !disable_bfind,
             emit_bfi: !disable_bfi,
             emit_bmsk: !disable_bmsk,
@@ -493,6 +506,7 @@ impl Config {
             emit_subc: !disable_subc,
             emit_i32_boundary_immediates: !disable_i32_boundary_imms,
             emit_dp2a: !disable_dp2a,
+            emit_predicated_alu: !disable_predicated_alu,
             emit_set: !disable_set,
             emit_s32_slct: !disable_s32_slct,
             emit_video: !disable_video,
@@ -681,7 +695,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_predicated_alu={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -722,6 +736,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_shl,
         cfg.gen_config.emit_shr,
         cfg.gen_config.emit_signed_shr,
+        cfg.gen_config.emit_reg_shifts,
         cfg.gen_config.emit_bfind,
         cfg.gen_config.emit_bfi,
         cfg.gen_config.emit_bmsk,
@@ -733,6 +748,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_subc,
         cfg.gen_config.emit_i32_boundary_immediates,
         cfg.gen_config.emit_dp2a,
+        cfg.gen_config.emit_predicated_alu,
         cfg.gen_config.emit_set,
         cfg.gen_config.emit_s32_slct,
         cfg.gen_config.emit_video,

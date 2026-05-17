@@ -166,6 +166,11 @@ fn setp_output_pred(trimmed_line: &str) -> Option<String> {
         .filter(|token| token.starts_with("%p"))
 }
 
+fn line_mentions_body_wide_scratch(line: &str) -> bool {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
+        .any(|token| matches!(token, "%rd6" | "%rd7"))
+}
+
 /// Both opt levels compile + launch + are deterministic across two runs, and
 /// their outputs differ. Returns the divergent (o0, o3) on success.
 fn diverges_deterministically(
@@ -464,6 +469,13 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         }) {
             continue;
         }
+        // The generator uses `%rd6`/`%rd7` as a scratch pair for 64-bit body
+        // instructions, then extracts the low half with `mov.b64`. Removing
+        // only part of that sequence can leave an undefined `%rd6` read that
+        // still looks deterministic on one machine.
+        if line_mentions_body_wide_scratch(t) {
+            continue;
+        }
         out.push(i);
     }
     // Epilogue: store lines only; address arithmetic and `ret;` stay put.
@@ -477,12 +489,25 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{line_mentions_pred, removable_indices};
+    use super::{line_mentions_body_wide_scratch, line_mentions_pred, removable_indices};
 
     #[test]
     fn predicate_matching_does_not_confuse_prefixes() {
         assert!(line_mentions_pred("@%p1 bra label;", "%p1"));
         assert!(!line_mentions_pred("@%p10 bra label;", "%p1"));
+    }
+
+    #[test]
+    fn wide_scratch_matching_does_not_confuse_prefixes() {
+        assert!(line_mentions_body_wide_scratch(
+            "    mov.b64       {%r16, %r33}, %rd6;"
+        ));
+        assert!(line_mentions_body_wide_scratch(
+            "    xor.b64       %rd6, %rd6, %rd7;"
+        ));
+        assert!(!line_mentions_body_wide_scratch(
+            "    mov.b64       {%r16, %r33}, %rd60;"
+        ));
     }
 
     #[test]
@@ -504,6 +529,10 @@ mod tests {
     setp.ne.u32   %p1, %r3, %r4;
 keep:
     add.u32       %r5, %r5, %r6;
+    cvt.u64.u32   %rd6, %r1;
+    cvt.u64.u32   %rd7, %r2;
+    xor.b64       %rd6, %rd6, %rd7;
+    mov.b64       {%r5, %r6}, %rd6;
 
     cvta.to.global.u64 %rd4, %rd1;
     mul.wide.u32    %rd5, %r7, 16;
@@ -523,6 +552,8 @@ keep:
         assert!(removable
             .iter()
             .any(|&i| lines[i].trim().starts_with("add.u32")));
+        assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd6")));
+        assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd7")));
         assert!(!removable
             .iter()
             .any(|&i| lines[i].trim().starts_with("cvta.to.global.u64")));

@@ -76,6 +76,7 @@ pub struct GenConfig {
     pub emit_shl: bool,
     pub emit_shr: bool,
     pub emit_signed_shr: bool,
+    pub emit_reg_shifts: bool,
     pub emit_bfind: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
@@ -87,6 +88,7 @@ pub struct GenConfig {
     pub emit_subc: bool,
     pub emit_i32_boundary_immediates: bool,
     pub emit_dp2a: bool,
+    pub emit_predicated_alu: bool,
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_video: bool,
@@ -139,6 +141,7 @@ impl Default for GenConfig {
             emit_shl: true,
             emit_shr: true,
             emit_signed_shr: true,
+            emit_reg_shifts: true,
             emit_bfind: true,
             emit_bfi: true,
             emit_bmsk: true,
@@ -150,6 +153,7 @@ impl Default for GenConfig {
             emit_subc: true,
             emit_i32_boundary_immediates: true,
             emit_dp2a: true,
+            emit_predicated_alu: true,
             emit_set: true,
             emit_s32_slct: true,
             emit_video: true,
@@ -692,6 +696,17 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred <binop> dst, a, b;`.
+    PredicatedBin {
+        op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `set.<cmp>.u32.{u32,s32} dst, a, b;` — materialize comparison result.
     Set {
         dst: u32,
@@ -706,6 +721,13 @@ enum Inst {
         dst: u32,
         src: Operand,
         amount: u32,
+    },
+    /// `<op>.b32 dst, src, (amount & 31);` using a scratch register.
+    RegShift {
+        op: ShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: Operand,
     },
     /// `<op>.b32 dst, src;`
     Unary { op: UnaryOp, dst: u32, src: Operand },
@@ -1068,7 +1090,29 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_set && (!self.cfg.emit_selp || u.arbitrary::<bool>()?) {
+            if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+                let op = pick_binop(
+                    u,
+                    self.cfg.emit_minmax,
+                    self.cfg.emit_sub,
+                    self.cfg.emit_mul_lo,
+                    self.cfg.emit_mulhi,
+                    self.cfg.emit_signed_mulhi,
+                    self.cfg.emit_bitwise_binops,
+                    self.cfg.emit_or,
+                    self.cfg.emit_xor,
+                )?;
+                Ok(Inst::PredicatedBin {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_bin_operand(u, op)?,
+                    b: self.pick_bin_operand(u, op)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            } else if self.cfg.emit_set && (!self.cfg.emit_selp || u.arbitrary::<bool>()?) {
                 Ok(Inst::Set {
                     dst: self.pick_dst(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
@@ -1095,17 +1139,27 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 140 && (self.cfg.emit_shl || self.cfg.emit_shr || self.cfg.emit_signed_shr)
         {
-            Ok(Inst::Shift {
-                op: pick_shift(
-                    u,
-                    self.cfg.emit_shl,
-                    self.cfg.emit_shr,
-                    self.cfg.emit_signed_shr,
-                )?,
-                dst: self.pick_dst(u)?,
-                src: self.pick_operand(u)?,
-                amount: u.int_in_range(0..=31)?,
-            })
+            let op = pick_shift(
+                u,
+                self.cfg.emit_shl,
+                self.cfg.emit_shr,
+                self.cfg.emit_signed_shr,
+            )?;
+            if self.cfg.emit_reg_shifts && self.cfg.emit_bitwise_binops && u.arbitrary::<bool>()? {
+                Ok(Inst::RegShift {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    amount: self.pick_operand(u)?,
+                })
+            } else {
+                Ok(Inst::Shift {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    amount: u.int_in_range(0..=31)?,
+                })
+            }
         } else if pick < 160 {
             Ok(Inst::Unary {
                 op: pick_unary(
@@ -1577,6 +1631,27 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ", %p{pred};").unwrap();
             }
+            Inst::PredicatedBin {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Set { dst, cmp, a, b } => {
                 write!(s, "    {:<17} %r{dst}, ", cmp.set_mnemonic()).unwrap();
                 a.emit(s);
@@ -1593,6 +1668,20 @@ impl<'a> Generator<'a> {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {amount};").unwrap();
+            }
+            Inst::RegShift {
+                op,
+                dst,
+                src,
+                amount,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                amount.emit(s);
+                writeln!(s, ", 31;").unwrap();
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", %r{scratch};").unwrap();
             }
             Inst::Unary { op, dst, src } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
@@ -2440,6 +2529,41 @@ mod tests {
             .any(|token| token == mnemonic)
     }
 
+    fn has_register_shift(ptx: &str) -> bool {
+        let lines: Vec<_> = ptx.lines().map(str::trim_start).collect();
+        lines.windows(2).any(|pair| {
+            let mask = pair[0];
+            let shift = pair[1];
+            if !mask.starts_with("and.b32") || !mask.ends_with(", 31;") {
+                return false;
+            }
+            let Some(mask_dst) = mask
+                .split_whitespace()
+                .nth(1)
+                .map(|token| token.trim_end_matches(','))
+            else {
+                return false;
+            };
+            ["shl.b32", "shr.u32", "shr.s32"]
+                .iter()
+                .any(|mnemonic| shift.starts_with(mnemonic))
+                && shift.ends_with(&format!(", {mask_dst};"))
+        })
+    }
+
+    fn has_predicated_alu(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let mut tokens = line.trim_start().split_whitespace();
+            let Some(pred) = tokens.next() else {
+                return false;
+            };
+            let Some(op) = tokens.next() else {
+                return false;
+            };
+            pred.starts_with("@%p") && BIN_MNEMONICS.contains(&op)
+        })
+    }
+
     fn assert_mnemonic_coverage(
         cfg: &GenConfig,
         program_bytes: usize,
@@ -3102,6 +3226,43 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("shr.s32"), "seed {seed:x} emitted shr.s32");
+        }
+    }
+
+    #[test]
+    fn register_shift_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_register_shift = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_register_shift |= has_register_shift(&ptx);
+            if saw_register_shift {
+                break;
+            }
+        }
+
+        assert!(
+            saw_register_shift,
+            "no seed in sample emitted a masked register-count shift"
+        );
+    }
+
+    #[test]
+    fn register_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_register_shift(&ptx),
+                "seed {seed:x} emitted a masked register-count shift"
+            );
         }
     }
 
@@ -3957,6 +4118,43 @@ mod tests {
             }
         }
         assert!(saw_set, "no seed in sample emitted set");
+    }
+
+    #[test]
+    fn predicated_alu_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_alu = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_alu |= has_predicated_alu(&ptx);
+            if saw_predicated_alu {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_alu,
+            "no seed in sample emitted predicated ALU"
+        );
+    }
+
+    #[test]
+    fn predicated_alu_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_alu: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_alu(&ptx),
+                "seed {seed:x} emitted predicated ALU"
+            );
+        }
     }
 
     #[test]
