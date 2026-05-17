@@ -121,6 +121,7 @@ Version | Description |
 | 13.2.78 | [m040-mulwide-neg-shr-fold](known-miscompiles/m040-mulwide-neg-shr-fold/NOTES.md): `mul.wide` low word feeding wrapped negation and logical shift loses the shifted high-bit contribution. |
 | 13.2.78 | [m041-or-shifted-square-fold](known-miscompiles/m041-or-shifted-square-fold/NOTES.md): `or.b32` after a square known to have zero low 32 bits folds with a missing output bit. |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
+| 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
 
 ## Running
 
@@ -224,6 +225,7 @@ that feature.
 | `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_NEG` | `neg.s32`. |
 | `DIV_DISABLE_SHL` | `shl.b32`. |
+| `DIV_DISABLE_SHR` | `shr.u32`. |
 | `DIV_DISABLE_SIGNED_SHR` | `shr.s32`. |
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |

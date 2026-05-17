@@ -56,6 +56,8 @@
 //!                         PTX neg.s32 generation
 //!   DIV_DISABLE_SHL       default: false; set 1/true/yes/on to suppress
 //!                         PTX shl.b32 generation
+//!   DIV_DISABLE_SHR       default: false; set 1/true/yes/on to suppress
+//!                         PTX shr.u32 generation
 //!   DIV_DISABLE_SIGNED_SHR default: false; set 1/true/yes/on to suppress
 //!                         PTX shr.s32 generation
 //!   DIV_DISABLE_BFIND     default: false; set 1/true/yes/on to suppress
@@ -217,6 +219,8 @@ struct Args {
     #[arg(long)]
     disable_shl: bool,
     #[arg(long)]
+    disable_shr: bool,
+    #[arg(long)]
     disable_signed_shr: bool,
     #[arg(long)]
     disable_bfind: bool,
@@ -309,6 +313,7 @@ impl Args {
         set_bool!(self.disable_funnel, "DIV_DISABLE_FUNNEL");
         set_bool!(self.disable_neg, "DIV_DISABLE_NEG");
         set_bool!(self.disable_shl, "DIV_DISABLE_SHL");
+        set_bool!(self.disable_shr, "DIV_DISABLE_SHR");
         set_bool!(self.disable_signed_shr, "DIV_DISABLE_SIGNED_SHR");
         set_bool!(self.disable_bfind, "DIV_DISABLE_BFIND");
         set_bool!(self.disable_bfi, "DIV_DISABLE_BFI");
@@ -411,6 +416,7 @@ impl Config {
         let disable_funnel = env_bool("DIV_DISABLE_FUNNEL")?.unwrap_or(false);
         let disable_neg = env_bool("DIV_DISABLE_NEG")?.unwrap_or(false);
         let disable_shl = env_bool("DIV_DISABLE_SHL")?.unwrap_or(false);
+        let disable_shr = env_bool("DIV_DISABLE_SHR")?.unwrap_or(false);
         let disable_signed_shr = env_bool("DIV_DISABLE_SIGNED_SHR")?.unwrap_or(false);
         let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
@@ -453,6 +459,7 @@ impl Config {
             emit_funnel: !disable_funnel,
             emit_neg: !disable_neg,
             emit_shl: !disable_shl,
+            emit_shr: !disable_shr,
             emit_signed_shr: !disable_signed_shr,
             emit_bfind: !disable_bfind,
             emit_bfi: !disable_bfi,
@@ -653,7 +660,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_sub={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_sub={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -689,6 +696,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_funnel,
         cfg.gen_config.emit_neg,
         cfg.gen_config.emit_shl,
+        cfg.gen_config.emit_shr,
         cfg.gen_config.emit_signed_shr,
         cfg.gen_config.emit_bfind,
         cfg.gen_config.emit_bfi,

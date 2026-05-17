@@ -71,6 +71,7 @@ pub struct GenConfig {
     pub emit_funnel: bool,
     pub emit_neg: bool,
     pub emit_shl: bool,
+    pub emit_shr: bool,
     pub emit_signed_shr: bool,
     pub emit_bfind: bool,
     pub emit_bfi: bool,
@@ -130,6 +131,7 @@ impl Default for GenConfig {
             emit_funnel: true,
             emit_neg: true,
             emit_shl: true,
+            emit_shr: true,
             emit_signed_shr: true,
             emit_bfind: true,
             emit_bfi: true,
@@ -1059,9 +1061,15 @@ impl<'a> Generator<'a> {
                     pred: self.alloc_pred(),
                 })
             }
-        } else if pick < 140 {
+        } else if pick < 140 && (self.cfg.emit_shl || self.cfg.emit_shr || self.cfg.emit_signed_shr)
+        {
             Ok(Inst::Shift {
-                op: pick_shift(u, self.cfg.emit_shl, self.cfg.emit_signed_shr)?,
+                op: pick_shift(
+                    u,
+                    self.cfg.emit_shl,
+                    self.cfg.emit_shr,
+                    self.cfg.emit_signed_shr,
+                )?,
                 dst: self.pick_dst(u)?,
                 src: self.pick_operand(u)?,
                 amount: u.int_in_range(0..=31)?,
@@ -1881,16 +1889,30 @@ fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_shift(u: &mut Unstructured, emit_shl: bool, emit_signed_shr: bool) -> Result<ShiftOp> {
+fn pick_shift(
+    u: &mut Unstructured,
+    emit_shl: bool,
+    emit_shr: bool,
+    emit_signed_shr: bool,
+) -> Result<ShiftOp> {
     let ops_all = [ShiftOp::Shl, ShiftOp::Shr, ShiftOp::ShrS];
-    let ops_no_signed_shr = [ShiftOp::Shl, ShiftOp::Shr];
-    let ops_no_shl = [ShiftOp::Shr, ShiftOp::ShrS];
-    let ops_unsigned_shr_only = [ShiftOp::Shr];
-    let ops: &[ShiftOp] = match (emit_shl, emit_signed_shr) {
-        (true, true) => &ops_all,
-        (true, false) => &ops_no_signed_shr,
-        (false, true) => &ops_no_shl,
-        (false, false) => &ops_unsigned_shr_only,
+    let ops_shl_shr = [ShiftOp::Shl, ShiftOp::Shr];
+    let ops_shl_signed_shr = [ShiftOp::Shl, ShiftOp::ShrS];
+    let ops_shr_signed_shr = [ShiftOp::Shr, ShiftOp::ShrS];
+    let ops_shl_only = [ShiftOp::Shl];
+    let ops_shr_only = [ShiftOp::Shr];
+    let ops_signed_shr_only = [ShiftOp::ShrS];
+    let ops: &[ShiftOp] = match (emit_shl, emit_shr, emit_signed_shr) {
+        (true, true, true) => &ops_all,
+        (true, true, false) => &ops_shl_shr,
+        (true, false, true) => &ops_shl_signed_shr,
+        (true, false, false) => &ops_shl_only,
+        (false, true, true) => &ops_shr_signed_shr,
+        (false, true, false) => &ops_shr_only,
+        (false, false, true) => &ops_signed_shr_only,
+        (false, false, false) => {
+            unreachable!("shift generation requested with all shifts disabled")
+        }
     };
     Ok(*u.choose(&ops)?)
 }
@@ -2596,6 +2618,20 @@ mod tests {
     }
 
     #[test]
+    fn shr_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shr: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("shr.u32"), "seed {seed:x} emitted shr.u32");
+        }
+    }
+
+    #[test]
     fn signed_shr_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_signed_shr: false,
@@ -2605,6 +2641,24 @@ mod tests {
         for seed in 0..256 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("shr.s32"), "seed {seed:x} emitted shr.s32");
+        }
+    }
+
+    #[test]
+    fn all_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shl: false,
+            emit_shr: false,
+            emit_signed_shr: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("shl.b32"), "seed {seed:x} emitted shl.b32");
+            assert!(!ptx.contains("shr.u32"), "seed {seed:x} emitted shr.u32");
             assert!(!ptx.contains("shr.s32"), "seed {seed:x} emitted shr.s32");
         }
     }
