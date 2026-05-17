@@ -123,6 +123,7 @@ Version | Description |
 | 13.2.78 | [m044-mul-lo-square-fold](known-miscompiles/m044-mul-lo-square-fold/NOTES.md): Likely same root cause as m041; square of a shifted `mul.lo` value folds to `0x80000000` instead of zero. |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
 | 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
+| 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
 
 ## Running
 
@@ -220,6 +221,7 @@ that feature.
 | `DIV_DISABLE_PRMT` | `prmt.b32`. |
 | `DIV_DISABLE_NOT` | `not.b32` and xor-by-`0xffffffff` forms. |
 | `DIV_DISABLE_CLZ` | `clz.b32`. |
+| `DIV_DISABLE_BREV` | `brev.b32`. |
 | `DIV_DISABLE_CNOT` | `cnot.b32`. |
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |

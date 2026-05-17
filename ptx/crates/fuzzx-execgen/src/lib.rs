@@ -65,6 +65,7 @@ pub struct GenConfig {
     pub emit_prmt: bool,
     pub emit_not: bool,
     pub emit_clz: bool,
+    pub emit_brev: bool,
     pub emit_cnot: bool,
     pub emit_abs: bool,
     pub emit_signed_cmp: bool,
@@ -126,6 +127,7 @@ impl Default for GenConfig {
             emit_prmt: true,
             emit_not: true,
             emit_clz: true,
+            emit_brev: true,
             emit_cnot: true,
             emit_abs: true,
             emit_signed_cmp: true,
@@ -1101,6 +1103,7 @@ impl<'a> Generator<'a> {
                     u,
                     self.cfg.emit_not,
                     self.cfg.emit_clz,
+                    self.cfg.emit_brev,
                     self.cfg.emit_neg,
                     self.cfg.emit_cnot,
                     self.cfg.emit_abs,
@@ -1921,6 +1924,7 @@ fn pick_unary(
     u: &mut Unstructured,
     emit_not: bool,
     emit_clz: bool,
+    emit_brev: bool,
     emit_neg: bool,
     emit_cnot: bool,
     emit_abs: bool,
@@ -1942,7 +1946,8 @@ fn pick_unary(
             UnaryOp::Cnot => emit_cnot,
             UnaryOp::AbsS => emit_abs,
             UnaryOp::Clz => emit_clz,
-            UnaryOp::Popc | UnaryOp::Brev => true,
+            UnaryOp::Brev => emit_brev,
+            UnaryOp::Popc => true,
         })
         .collect::<Vec<_>>();
     Ok(*u.choose(&ops)?)
@@ -2551,6 +2556,20 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("clz.b32"), "seed {seed:x} emitted clz.b32");
+        }
+    }
+
+    #[test]
+    fn brev_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_brev: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("brev.b32"), "seed {seed:x} emitted brev.b32");
         }
     }
 

@@ -44,6 +44,8 @@
 //!                         PTX not.b32 generation and xor.b32-by-0xffffffff
 //!   DIV_DISABLE_CLZ       default: false; set 1/true/yes/on to suppress
 //!                         PTX clz.b32 generation
+//!   DIV_DISABLE_BREV      default: false; set 1/true/yes/on to suppress
+//!                         PTX brev.b32 generation
 //!   DIV_DISABLE_CNOT      default: false; set 1/true/yes/on to suppress
 //!                         PTX cnot.b32 generation
 //!   DIV_DISABLE_ABS       default: false; set 1/true/yes/on to suppress
@@ -209,6 +211,8 @@ struct Args {
     #[arg(long)]
     disable_clz: bool,
     #[arg(long)]
+    disable_brev: bool,
+    #[arg(long)]
     disable_cnot: bool,
     #[arg(long)]
     disable_abs: bool,
@@ -311,6 +315,7 @@ impl Args {
         set_bool!(self.disable_prmt, "DIV_DISABLE_PRMT");
         set_bool!(self.disable_not, "DIV_DISABLE_NOT");
         set_bool!(self.disable_clz, "DIV_DISABLE_CLZ");
+        set_bool!(self.disable_brev, "DIV_DISABLE_BREV");
         set_bool!(self.disable_cnot, "DIV_DISABLE_CNOT");
         set_bool!(self.disable_abs, "DIV_DISABLE_ABS");
         set_bool!(self.disable_signed_cmp, "DIV_DISABLE_SIGNED_CMP");
@@ -415,6 +420,7 @@ impl Config {
         let disable_prmt = env_bool("DIV_DISABLE_PRMT")?.unwrap_or(false);
         let disable_not = env_bool("DIV_DISABLE_NOT")?.unwrap_or(false);
         let disable_clz = env_bool("DIV_DISABLE_CLZ")?.unwrap_or(false);
+        let disable_brev = env_bool("DIV_DISABLE_BREV")?.unwrap_or(false);
         let disable_cnot = env_bool("DIV_DISABLE_CNOT")?.unwrap_or(false);
         let disable_abs = env_bool("DIV_DISABLE_ABS")?.unwrap_or(false);
         let disable_signed_cmp = env_bool("DIV_DISABLE_SIGNED_CMP")?.unwrap_or(false);
@@ -459,6 +465,7 @@ impl Config {
             emit_prmt: !disable_prmt,
             emit_not: !disable_not,
             emit_clz: !disable_clz,
+            emit_brev: !disable_brev,
             emit_cnot: !disable_cnot,
             emit_abs: !disable_abs,
             emit_signed_cmp: !disable_signed_cmp,
@@ -667,7 +674,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -697,6 +704,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_prmt,
         cfg.gen_config.emit_not,
         cfg.gen_config.emit_clz,
+        cfg.gen_config.emit_brev,
         cfg.gen_config.emit_cnot,
         cfg.gen_config.emit_abs,
         cfg.gen_config.emit_signed_cmp,
