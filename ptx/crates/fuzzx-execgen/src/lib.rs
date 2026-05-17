@@ -56,6 +56,7 @@ pub struct GenConfig {
     pub emit_lop3: bool,
     pub emit_minmax: bool,
     pub emit_sub: bool,
+    pub emit_mul_lo: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_bitwise_binops: bool,
@@ -116,6 +117,7 @@ impl Default for GenConfig {
             emit_lop3: true,
             emit_minmax: true,
             emit_sub: true,
+            emit_mul_lo: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_bitwise_binops: true,
@@ -1004,6 +1006,24 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_mad_or_add(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        if self.cfg.emit_mul_lo {
+            Ok(Inst::Mad {
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+            })
+        } else {
+            Ok(Inst::Bin {
+                op: BinOp::Add,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+            })
+        }
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -1030,6 +1050,7 @@ impl<'a> Generator<'a> {
                 u,
                 self.cfg.emit_minmax,
                 self.cfg.emit_sub,
+                self.cfg.emit_mul_lo,
                 self.cfg.emit_mulhi,
                 self.cfg.emit_signed_mulhi,
                 self.cfg.emit_bitwise_binops,
@@ -1097,12 +1118,7 @@ impl<'a> Generator<'a> {
                     imm: u.arbitrary()?,
                 })
             } else {
-                Ok(Inst::Mad {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if pick < 215 {
             if self.cfg.emit_prmt {
@@ -1113,12 +1129,7 @@ impl<'a> Generator<'a> {
                     ctrl: u.int_in_range(0..=0xFFFF)?,
                 })
             } else {
-                Ok(Inst::Mad {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if pick < 225 {
             if self.cfg.emit_funnel {
@@ -1134,12 +1145,7 @@ impl<'a> Generator<'a> {
                     amount: u.int_in_range(0..=31)?,
                 })
             } else {
-                Ok(Inst::Mad {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if pick < 235 {
             if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
@@ -1167,12 +1173,7 @@ impl<'a> Generator<'a> {
                     len: u.int_in_range(0..=31)?,
                 })
             } else {
-                Ok(Inst::Mad {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if pick < 248 {
             Ok(Inst::Cvt {
@@ -1220,12 +1221,7 @@ impl<'a> Generator<'a> {
                     })
                 }
             } else {
-                Ok(Inst::Mad {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
             let wide_pick: u8 = u.int_in_range(0..=2)?;
@@ -1829,13 +1825,17 @@ fn pick_binop(
     u: &mut Unstructured,
     emit_minmax: bool,
     emit_sub: bool,
+    emit_mul_lo: bool,
     emit_mulhi: bool,
     emit_signed_mulhi: bool,
     emit_bitwise_binops: bool,
     emit_or: bool,
     emit_xor: bool,
 ) -> Result<BinOp> {
-    let mut ops = vec![BinOp::Add, BinOp::Mul];
+    let mut ops = vec![BinOp::Add];
+    if emit_mul_lo {
+        ops.push(BinOp::Mul);
+    }
     if emit_sub {
         ops.push(BinOp::Sub);
     }
@@ -2366,6 +2366,27 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("sub.u32"), "seed {seed:x} emitted sub.u32");
+        }
+    }
+
+    #[test]
+    fn mul_lo_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mul_lo: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("mul.lo.u32"),
+                "seed {seed:x} emitted mul.lo.u32"
+            );
+            assert!(
+                !ptx.contains("mad.lo.u32"),
+                "seed {seed:x} emitted mad.lo.u32"
+            );
         }
     }
 

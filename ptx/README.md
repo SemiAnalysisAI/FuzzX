@@ -120,6 +120,7 @@ Version | Description |
 | 13.2.78 | [m039-else-redefinition-fold](known-miscompiles/m039-else-redefinition-fold/NOTES.md): Branch fold drops the executed else-path redefinition of a value initialized before the branch. |
 | 13.2.78 | [m040-mulwide-neg-shr-fold](known-miscompiles/m040-mulwide-neg-shr-fold/NOTES.md): `mul.wide` low word feeding wrapped negation and logical shift loses the shifted high-bit contribution. |
 | 13.2.78 | [m041-or-shifted-square-fold](known-miscompiles/m041-or-shifted-square-fold/NOTES.md): `or.b32` after a square known to have zero low 32 bits folds with a missing output bit. |
+| 13.2.78 | [m044-mul-lo-square-fold](known-miscompiles/m044-mul-lo-square-fold/NOTES.md): Likely same root cause as m041; square of a shifted `mul.lo` value folds to `0x80000000` instead of zero. |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
 | 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
 
@@ -210,6 +211,7 @@ that feature.
 | `DIV_DISABLE_LOP3` | `lop3.b32`. |
 | `DIV_DISABLE_MINMAX` | `min.u32`, `max.u32`, `min.s32`, `max.s32`. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
+| `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
