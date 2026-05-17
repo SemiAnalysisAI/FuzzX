@@ -11,25 +11,25 @@ The original saved fuzzer program was:
 /tmp/fuzzx-bg-after-m041-20260515T224930Z/div-1778885399-18afded44bd77593
 ```
 
-The minimized PTX in `reduced.ptx` keeps the fuzzer input-buffer load. Only
-`%tid.x == 2` executes the else arm and differs between optimization levels.
+The minimized PTX in `reduced.ptx` keeps only the input-buffer load, the
+structured if/else shape, and the final store. Only `%tid.x == 2` executes the
+else arm and differs between optimization levels.
 
 ## Scalar Trace
 
 For `%tid.x == 2`:
 
 ```text
-%r15 = in_n = 32
-%r17 = %tid.x = 2
-%r9  = %tid.x = 2
-%p5  = 2 != %r17 = false
+%r0 = in_n = 32
+%r1 = %tid.x = 2
+%p0 = 2 != %r1 = false
 ```
 
-Because `%p5` is false, execution takes `structured_if_1_else`:
+Because `%p0` is false, execution takes `structured_if_1_else`:
 
 ```text
-%r4 = vsub4.u32.u32.u32 %r15, %r17, %r9
-%r1 = %r4 * in[2] + 46474
+%r3 = vsub4.u32.u32.u32 %r0, %r1, %r1
+%r3 = %r3 * in[2] + 46474
 ```
 
 With the saved input, `in[2] = 0x882a34e1`. `ptxas -O0` stores

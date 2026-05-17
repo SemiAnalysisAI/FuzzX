@@ -21,7 +21,6 @@ constexpr int kThreads = 32;
 constexpr int kInputWords = 32;
 constexpr int kOutputWords = 128;
 constexpr uint32_t kN = 32u;
-constexpr uint32_t kX = 0x00000000u;
 constexpr uint32_t kInput0 = 0x4bbb416fu;
 constexpr uint32_t kInput1 = 0xe9f2bb28u;
 constexpr uint32_t kInput2 = 0x882a34e1u;
@@ -34,59 +33,42 @@ static void check(cudaError_t err, const char* what) {
     }
 }
 
-__global__ void repro_kernel(const uint32_t* in, uint32_t* out, uint32_t n, uint32_t x) {
+__global__ void repro_kernel(const uint32_t* in, uint32_t* out, uint32_t n) {
     asm volatile(
         "{\n\t"
         "\n\t"
-        ".reg .pred  p<21>;\n\t"
-        ".reg .b32   r<22>;\n\t"
-        ".reg .b64   rd<8>;\n\t"
+        ".reg .pred  p<1>;\n\t"
+        ".reg .b32   r<4>;\n\t"
+        ".reg .b64   rd<6>;\n\t"
         "\n\t"
         "mov.u64 rd0, %0;\n\t"
         "mov.u64 rd1, %1;\n\t"
         "mov.u32 r0, %2;\n\t"
-        "mov.u32         r20, %%tid.x;\n\t"
+        "mov.u32         r1, %%tid.x;\n\t"
         "cvta.to.global.u64 rd2, rd0;\n\t"
-        "mul.wide.u32    rd3, r20, 4;\n\t"
+        "mul.wide.u32    rd3, r1, 4;\n\t"
         "add.s64         rd2, rd2, rd3;\n\t"
         "ld.global.u32   r2, [rd2];\n\t"
-        "mov.u32         r1, r20;\n\t"
-        "mov.u32         r3, r0;\n\t"
-        "mov.u32         r4, 4;\n\t"
-        "mov.u32         r5, r20;\n\t"
-        "mov.u32         r6, r2;\n\t"
-        "mov.u32         r7, r0;\n\t"
-        "mov.u32         r8, 8;\n\t"
-        "mov.u32         r9, r20;\n\t"
-        "mov.u32         r10, r2;\n\t"
-        "mov.u32         r11, r0;\n\t"
-        "mov.u32         r12, 12;\n\t"
-        "mov.u32         r13, r20;\n\t"
-        "mov.u32         r14, r2;\n\t"
-        "mov.u32         r15, r0;\n\t"
-        "mov.u32         r16, 16;\n\t"
-        "mov.u32         r17, r20;\n\t"
-        "mov.u32         r18, r2;\n\t"
-        "mov.u32         r19, r0;\n\t"
+        "mov.u32         r3, r1;\n\t"
         "\n\t"
-        "setp.ne.u32   p5, 2, r17;\n\t"
-        "@p5 bra   structured_if_1_then;\n\t"
+        "setp.ne.u32   p0, 2, r1;\n\t"
+        "@p0 bra   structured_if_1_then;\n\t"
         "bra             structured_if_1_else;\n\t"
         "structured_if_1_then:\n\t"
         "bra             structured_if_1_done;\n\t"
         "structured_if_1_else:\n\t"
-        "vsub4.u32.u32.u32        r4, r15, r17, r9;\n\t"
-        "mad.lo.u32    r1, r4, r2, 46474;\n\t"
+        "vsub4.u32.u32.u32        r3, r0, r1, r1;\n\t"
+        "mad.lo.u32    r3, r3, r2, 46474;\n\t"
         "structured_if_1_done:\n\t"
         "\n\t"
         "exit:\n\t"
         "cvta.to.global.u64 rd4, rd1;\n\t"
-        "mul.wide.u32    rd5, r20, 16;\n\t"
+        "mul.wide.u32    rd5, r1, 16;\n\t"
         "add.s64         rd4, rd4, rd5;\n\t"
-        "st.global.u32   [rd4 + 4], r1;\n\t"
+        "st.global.u32   [rd4 + 4], r3;\n\t"
         "}\n"
         :
-        : "l"(in), "l"(out), "r"(n), "r"(x)
+        : "l"(in), "l"(out), "r"(n)
         : "memory");
 }
 
@@ -119,14 +101,14 @@ int main() {
     check(cudaMemcpy(d_in, h_in, sizeof(h_in), cudaMemcpyHostToDevice), "cudaMemcpy input");
     check(cudaMemcpy(d_out, h_out, sizeof(h_out), cudaMemcpyHostToDevice), "cudaMemcpy output sentinel");
 
-    repro_kernel<<<1, kThreads>>>(d_in, d_out, kN, kX);
+    repro_kernel<<<1, kThreads>>>(d_in, d_out, kN);
     check(cudaGetLastError(), "repro_kernel launch");
     check(cudaDeviceSynchronize(), "cudaDeviceSynchronize");
     check(cudaMemcpy(h_out, d_out, sizeof(h_out), cudaMemcpyDeviceToHost), "cudaMemcpy output");
     check(cudaFree(d_out), "cudaFree output");
     check(cudaFree(d_in), "cudaFree input");
 
-    std::printf("threads=%d n=%u x=0x%08x input0=0x%08x input1=0x%08x input2=0x%08x\n", kThreads, kN, kX, kInput0, kInput1, kInput2);
+    std::printf("threads=%d n=%u input0=0x%08x input1=0x%08x input2=0x%08x\n", kThreads, kN, kInput0, kInput1, kInput2);
     bool any = false;
     for (int i = 0; i < kOutputWords; ++i) {
         if (h_out[i] != kSentinel) {
