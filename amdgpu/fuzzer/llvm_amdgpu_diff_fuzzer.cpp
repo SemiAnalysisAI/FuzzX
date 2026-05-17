@@ -974,7 +974,7 @@ Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Value *A64 = extendI32ToI64(B, A, Gen);
   Value *B64 = extendI32ToI64(B, Bv, Gen);
   Value *Result = nullptr;
-  switch (Gen() % 18) {
+  switch (Gen() % 28) {
   case 0:
     Result = B.CreateAdd(A64, B64, "fuzz.i64.add");
     break;
@@ -1045,11 +1045,66 @@ Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I64}),
         {A64, B64}, "fuzz.i64.smin");
     break;
-  default:
+  case 17:
     Result = B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I64}),
         {A64, B64}, "fuzz.i64.smax");
     break;
+  case 18:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::uadd_sat, {I64}),
+        {A64, B64}, "fuzz.i64.uadd_sat");
+    break;
+  case 19:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::usub_sat, {I64}),
+        {A64, B64}, "fuzz.i64.usub_sat");
+    break;
+  case 20:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {I64}),
+        {A64, B64}, "fuzz.i64.sadd_sat");
+    break;
+  case 21:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {I64}),
+        {A64, B64}, "fuzz.i64.ssub_sat");
+    break;
+  case 22:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I64}),
+        {A64, B64, ConstantInt::get(I64, Gen() & 63u)}, "fuzz.i64.fshl");
+    break;
+  case 23:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I64}),
+        {A64, B64, ConstantInt::get(I64, Gen() & 63u)}, "fuzz.i64.fshr");
+    break;
+  case 24:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {I64}),
+        {A64, B64, B.CreateAnd(B64, ConstantInt::get(I64, 63),
+                               "fuzz.i64.shift")},
+        "fuzz.i64.fshl.dyn");
+    break;
+  case 25:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {I64}),
+        {A64, B64, B.CreateAnd(A64, ConstantInt::get(I64, 63),
+                               "fuzz.i64.shift")},
+        "fuzz.i64.fshr.dyn");
+    break;
+  case 26:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I64}),
+        {A64, ConstantInt::getFalse(Ctx)}, "fuzz.i64.abs");
+    break;
+  default: {
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A64, B64,
+                              "fuzz.i64.cmp");
+    Result = B.CreateSelect(Cmp, A64, B64, "fuzz.i64.select");
+    break;
+  }
   }
   return B.CreateTrunc(Result, I32, "fuzz.trunc.i64");
 }
