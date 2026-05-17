@@ -541,10 +541,11 @@ bool hasExactName(const Value *V, StringRef Name) {
 
 bool isSmallLoopTripCount(const Value *V) {
   const auto *C = dyn_cast<ConstantInt>(V);
-  if (!C || !C->getType()->isIntegerTy(32))
-    return false;
-  uint64_t Trip = C->getZExtValue();
-  return Trip >= 1 && Trip <= 8;
+  if (C && C->getType()->isIntegerTy(32)) {
+    uint64_t Trip = C->getZExtValue();
+    return Trip >= 1 && Trip <= 8;
+  }
+  return hasExactName(V, "fuzz.loop.trip");
 }
 
 bool hasI32ConstantValue(const Value *V, uint32_t Expected) {
@@ -2190,7 +2191,6 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *Current = Store->getValueOperand();
   Value *Other = chooseI32Value(Store, Gen);
-  unsigned TripCount = 1 + (Gen() % 8);
 
   BasicBlock *Preheader = Store->getParent();
   BasicBlock *Exit =
@@ -2201,6 +2201,15 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
 
   Instruction *OldTerm = Preheader->getTerminator();
   IRBuilder<NoFolder> PreB(OldTerm);
+  Value *TripCount = nullptr;
+  if ((Gen() % 2) == 0) {
+    TripCount = ci32(Ctx, 1 + (Gen() % 8));
+  } else {
+    Value *TripSeed = (Gen() % 2) == 0 ? Current : Other;
+    Value *Masked =
+        PreB.CreateAnd(TripSeed, ci32(Ctx, 7), "fuzz.loop.trip.mask");
+    TripCount = PreB.CreateAdd(Masked, ci32(Ctx, 1), "fuzz.loop.trip");
+  }
   PreB.CreateBr(Header);
   OldTerm->eraseFromParent();
 
@@ -2210,7 +2219,7 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   Index->addIncoming(ci32(Ctx, 0), Preheader);
   Acc->addIncoming(Current, Preheader);
   Value *Done =
-      HeaderB.CreateICmpULT(Index, ci32(Ctx, TripCount), "fuzz.loop.cond");
+      HeaderB.CreateICmpULT(Index, TripCount, "fuzz.loop.cond");
   HeaderB.CreateCondBr(Done, Body, Exit);
 
   IRBuilder<NoFolder> BodyB(Body);
