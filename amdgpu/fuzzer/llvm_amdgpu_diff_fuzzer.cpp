@@ -608,16 +608,6 @@ bool triggersM023AndXorIdentity(const Instruction &I) {
          isAndWithOperand(BO->getOperand(1), BO->getOperand(0));
 }
 
-bool isSExtI16TruncToI32(const Value *V) {
-  const auto *SExt = dyn_cast<SExtInst>(V);
-  if (!SExt || !SExt->getType()->isIntegerTy(32) ||
-      !SExt->getSrcTy()->isIntegerTy(16))
-    return false;
-  const auto *Trunc = dyn_cast<TruncInst>(SExt->getOperand(0));
-  return Trunc && Trunc->getSrcTy()->isIntegerTy(32) &&
-         Trunc->getDestTy()->isIntegerTy(16);
-}
-
 bool isOrWithNonZeroI32Constant(const Value *V) {
   const auto *BO = dyn_cast<BinaryOperator>(V);
   if (!BO || BO->getOpcode() != Instruction::Or ||
@@ -630,38 +620,18 @@ bool isOrWithNonZeroI32Constant(const Value *V) {
   return false;
 }
 
-bool isOrWithNonZeroI32ConstantOf(const Value *MaybeOr, const Value *Operand) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
-  if (!BO || BO->getOpcode() != Instruction::Or ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  if (BO->getOperand(0) == Operand) {
-    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1)))
-      return !C->isZero();
-  }
-  if (BO->getOperand(1) == Operand) {
-    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0)))
-      return !C->isZero();
-  }
-  return false;
-}
-
 bool triggersM024UDivSExtOr(const Instruction &I) {
   const auto *BO = dyn_cast<BinaryOperator>(&I);
   return BO && BO->getOpcode() == Instruction::UDiv &&
          BO->getType()->isIntegerTy(32) &&
-         (isOrWithNonZeroI32ConstantOf(BO->getOperand(1), BO->getOperand(0)) ||
-          (isSExtI16TruncToI32(BO->getOperand(0)) &&
-           isOrWithNonZeroI32Constant(BO->getOperand(1))));
+         isOrWithNonZeroI32Constant(BO->getOperand(1));
 }
 
 bool triggersM025URemSExtOr(const Instruction &I) {
   const auto *BO = dyn_cast<BinaryOperator>(&I);
   return BO && BO->getOpcode() == Instruction::URem &&
          BO->getType()->isIntegerTy(32) &&
-         (isOrWithNonZeroI32ConstantOf(BO->getOperand(1), BO->getOperand(0)) ||
-          (isSExtI16TruncToI32(BO->getOperand(0)) &&
-           isOrWithNonZeroI32Constant(BO->getOperand(1))));
+         isOrWithNonZeroI32Constant(BO->getOperand(1));
 }
 
 bool hasName(const Value *V, StringRef Name) {

@@ -65,6 +65,5 @@ refined unsigned division sequence and returns `0xfffffffe`.
 ## Fuzzer Follow-Up
 
 The IR-bitcode fuzzer now suppresses unsigned remainder when the denominator is
-an `or` with a nonzero constant and either directly contains the numerator or
-the numerator is a sign-extended `i16` truncation. Set
-`FUZZX_ALLOW_M025_UREM_SEXT_OR=1` to re-enable this shape.
+an `or` with a nonzero constant. Set `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` to
+re-enable this shape.
