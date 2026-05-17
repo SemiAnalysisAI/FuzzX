@@ -60,7 +60,7 @@ namespace {
 
 constexpr unsigned ThreadsPerBlock = 256;
 constexpr unsigned InputCount = 256;
-constexpr unsigned MaxIRCFGBlocks = 768;
+constexpr unsigned MaxIRCFGBlocks = 640;
 
 constexpr StringRef DataLayout =
     "e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-"
@@ -1960,13 +1960,13 @@ struct CFGFragment {
 unsigned chooseCFGDepth(const Function &F, unsigned HardMax,
                         std::minstd_rand &Gen) {
   unsigned MaxDepth = HardMax;
-  if (F.size() >= MaxIRCFGBlocks - 96)
+  if (F.size() >= MaxIRCFGBlocks - 80)
     MaxDepth = 1;
-  else if (F.size() >= 576)
+  else if (F.size() >= 480)
     MaxDepth = std::min(MaxDepth, 2u);
-  else if (F.size() >= 384)
+  else if (F.size() >= 320)
     MaxDepth = std::min(MaxDepth, 3u);
-  else if (F.size() >= 192)
+  else if (F.size() >= 160)
     MaxDepth = std::min(MaxDepth, 4u);
 
   unsigned Depth = 1;
@@ -2083,16 +2083,16 @@ CFGFragment emitRandomNestedCountedLoop(IRBuilder<NoFolder> &B, Module &M,
       BasicBlock::Create(Ctx, "fuzz.nested.loop.body", F, InsertBefore);
   BasicBlock *Exit =
       BasicBlock::Create(Ctx, "fuzz.nested.loop.exit", F, InsertBefore);
-  bool UseEarlyExit = (Gen() % 5) == 0;
+  bool UseEarlyExit = (Gen() % 4) == 0;
 
   Value *TripCount = nullptr;
   if ((Gen() % 2) == 0) {
-    TripCount = ci32(Ctx, 1 + (Gen() % 4));
+    TripCount = ci32(Ctx, 1 + (Gen() % 2));
   } else {
     Value *TripSeed =
         (Gen() % 2) == 0 ? Current : chooseCFGValue(Ctx, Other, Gen);
     Value *Masked =
-        B.CreateAnd(TripSeed, ci32(Ctx, 3), "fuzz.loop.trip.inner.mask");
+        B.CreateAnd(TripSeed, ci32(Ctx, 1), "fuzz.loop.trip.inner.mask");
     TripCount = B.CreateAdd(Masked, ci32(Ctx, 1), "fuzz.loop.trip.inner");
   }
   B.CreateBr(Header);
@@ -2157,8 +2157,10 @@ CFGFragment emitRandomCFGSubgraph(IRBuilder<NoFolder> &B, Module &M,
     return emitRandomNestedSwitch(B, M, InsertBefore, Linear, NestedOther,
                                   Depth, Gen);
   case 1:
-    return emitRandomNestedCountedLoop(B, M, InsertBefore, Linear, NestedOther,
-                                       Depth, Gen);
+    if (Depth == 1)
+      return emitRandomNestedCountedLoop(B, M, InsertBefore, Linear,
+                                         NestedOther, Depth, Gen);
+    [[fallthrough]];
   default:
     return emitRandomNestedDiamond(B, M, InsertBefore, Linear, NestedOther,
                                    Depth, Gen);
@@ -2189,13 +2191,13 @@ void mutateIRAddDiamond(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> ThenB(Then);
   CFGFragment ThenFrag = emitRandomCFGSubgraph(
-      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 8, Gen), Gen);
+      ThenB, M, Join, Current, Other, chooseCFGDepth(*F, 7, Gen), Gen);
   IRBuilder<NoFolder> ThenTailB(ThenFrag.Tail);
   ThenTailB.CreateBr(Join);
 
   IRBuilder<NoFolder> ElseB(Else);
   CFGFragment ElseFrag = emitRandomCFGSubgraph(
-      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 8, Gen), Gen);
+      ElseB, M, Join, Current, Other, chooseCFGDepth(*F, 7, Gen), Gen);
   IRBuilder<NoFolder> ElseTailB(ElseFrag.Tail);
   ElseTailB.CreateBr(Join);
 
@@ -2244,7 +2246,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
     Value *CaseOther =
         (I % 2) == 0 ? Other : ci32(Ctx, randomInteresting64(Gen));
     CFGFragment CaseFrag = emitRandomCFGSubgraph(
-        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 7, Gen), Gen);
+        CaseB, M, Join, Current, CaseOther, chooseCFGDepth(*F, 6, Gen), Gen);
     IRBuilder<NoFolder> CaseTailB(CaseFrag.Tail);
     CaseTailB.CreateBr(Join);
     Phi->addIncoming(CaseFrag.Result, CaseFrag.Tail);
@@ -2252,7 +2254,7 @@ void mutateIRAddSwitch(Module &M, std::minstd_rand &Gen) {
 
   IRBuilder<NoFolder> DefaultB(Default);
   CFGFragment DefaultFrag = emitRandomCFGSubgraph(
-      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 7, Gen), Gen);
+      DefaultB, M, Join, Current, Other, chooseCFGDepth(*F, 6, Gen), Gen);
   IRBuilder<NoFolder> DefaultTailB(DefaultFrag.Tail);
   DefaultTailB.CreateBr(Join);
   Phi->addIncoming(DefaultFrag.Result, DefaultFrag.Tail);
