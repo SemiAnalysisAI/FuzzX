@@ -248,6 +248,8 @@ pub struct GenConfig {
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_f32_slct: bool,
+    pub emit_wide_slct: bool,
+    pub emit_f64_slct: bool,
     pub emit_video: bool,
     pub emit_signed_video: bool,
     pub emit_video_sat: bool,
@@ -465,6 +467,8 @@ impl Default for GenConfig {
             emit_set: true,
             emit_s32_slct: true,
             emit_f32_slct: true,
+            emit_wide_slct: true,
+            emit_f64_slct: true,
             emit_video: true,
             emit_signed_video: true,
             emit_video_sat: true,
@@ -2992,6 +2996,14 @@ enum SlctOp {
     B32F32,
     F32S32,
     F32F32,
+    U64S32,
+    S64S32,
+    B64S32,
+    U64F32,
+    S64F32,
+    B64F32,
+    F64S32,
+    F64F32,
 }
 
 impl SlctOp {
@@ -3005,18 +3017,53 @@ impl SlctOp {
             SlctOp::B32F32 => "slct.b32.f32",
             SlctOp::F32S32 => "slct.f32.s32",
             SlctOp::F32F32 => "slct.f32.f32",
+            SlctOp::U64S32 => "slct.u64.s32",
+            SlctOp::S64S32 => "slct.s64.s32",
+            SlctOp::B64S32 => "slct.b64.s32",
+            SlctOp::U64F32 => "slct.u64.f32",
+            SlctOp::S64F32 => "slct.s64.f32",
+            SlctOp::B64F32 => "slct.b64.f32",
+            SlctOp::F64S32 => "slct.f64.s32",
+            SlctOp::F64F32 => "slct.f64.f32",
         }
     }
 
     fn selector_is_f32(self) -> bool {
         matches!(
             self,
-            SlctOp::U32F32 | SlctOp::S32F32 | SlctOp::B32F32 | SlctOp::F32F32
+            SlctOp::U32F32
+                | SlctOp::S32F32
+                | SlctOp::B32F32
+                | SlctOp::F32F32
+                | SlctOp::U64F32
+                | SlctOp::S64F32
+                | SlctOp::B64F32
+                | SlctOp::F64F32
         )
     }
 
     fn dst_is_f32(self) -> bool {
         matches!(self, SlctOp::F32S32 | SlctOp::F32F32)
+    }
+
+    fn dst_is_wide(self) -> bool {
+        matches!(
+            self,
+            SlctOp::U64S32
+                | SlctOp::S64S32
+                | SlctOp::B64S32
+                | SlctOp::U64F32
+                | SlctOp::S64F32
+                | SlctOp::B64F32
+        )
+    }
+
+    fn dst_is_f64(self) -> bool {
+        matches!(self, SlctOp::F64S32 | SlctOp::F64F32)
+    }
+
+    fn wide_input_is_signed(self) -> bool {
+        matches!(self, SlctOp::S64S32 | SlctOp::S64F32)
     }
 }
 
@@ -8881,7 +8928,13 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 255 {
             if self.cfg.emit_slct {
-                let op = pick_slct(u, self.cfg.emit_s32_slct, self.cfg.emit_f32_slct)?;
+                let op = pick_slct(
+                    u,
+                    self.cfg.emit_s32_slct,
+                    self.cfg.emit_f32_slct,
+                    self.cfg.emit_wide_slct,
+                    self.cfg.emit_f64_slct,
+                )?;
                 if self.cfg.emit_predicated_slct && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedSlct {
                         op,
@@ -9677,6 +9730,24 @@ impl<'a> Generator<'a> {
             "cvt.rn.f32.u32"
         };
         write!(s, "    {cvt:<13} %f{freg}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ";").unwrap();
+    }
+
+    fn emit_raw_f64_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
+        let cvt = if signed {
+            "cvt.rn.f64.s32"
+        } else {
+            "cvt.rn.f64.u32"
+        };
+        write!(s, "    {cvt:<13} %fd{freg}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ";").unwrap();
+    }
+
+    fn emit_raw_wide_operand(&self, s: &mut String, wreg: u32, operand: Operand, signed: bool) {
+        let cvt = if signed { "cvt.s64.s32" } else { "cvt.u64.u32" };
+        write!(s, "    {cvt:<13} %rd{wreg}, ").unwrap();
         operand.emit(s);
         writeln!(s, ";").unwrap();
     }
@@ -12928,6 +12999,32 @@ impl<'a> Generator<'a> {
                         writeln!(s, ";").unwrap();
                     }
                     writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+                } else if op.dst_is_f64() {
+                    self.emit_raw_f64_operand(s, 0, a, true);
+                    self.emit_raw_f64_operand(s, 1, b, true);
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                        writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %f0;", op.mnemonic()).unwrap();
+                    } else {
+                        write!(s, "    {:<13} %fd3, %fd0, %fd1, ", op.mnemonic()).unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+                } else if op.dst_is_wide() {
+                    let signed = op.wide_input_is_signed();
+                    let scratch = self.wide_scratch_hi_reg();
+                    self.emit_raw_wide_operand(s, 6, a, signed);
+                    self.emit_raw_wide_operand(s, 7, b, signed);
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                        writeln!(s, "    {:<13} %rd5, %rd6, %rd7, %f0;", op.mnemonic()).unwrap();
+                    } else {
+                        write!(s, "    {:<13} %rd5, %rd6, %rd7, ", op.mnemonic()).unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd5;").unwrap();
                 } else {
                     if op.selector_is_f32() {
                         self.emit_raw_f32_operand(s, 0, c, true);
@@ -12982,6 +13079,58 @@ impl<'a> Generator<'a> {
                         writeln!(s, ";").unwrap();
                     }
                     writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+                } else if op.dst_is_f64() {
+                    self.emit_raw_f64_operand(s, 0, a, true);
+                    self.emit_raw_f64_operand(s, 1, b, true);
+                    writeln!(s, "    mov.f64       %fd3, %fd0;").unwrap();
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                        writeln!(
+                            s,
+                            "    {} {:<8} %fd3, %fd0, %fd1, %f0;",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            s,
+                            "    {} {:<8} %fd3, %fd0, %fd1, ",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+                } else if op.dst_is_wide() {
+                    let signed = op.wide_input_is_signed();
+                    let scratch = self.wide_scratch_hi_reg();
+                    self.emit_raw_wide_operand(s, 6, a, signed);
+                    self.emit_raw_wide_operand(s, 7, b, signed);
+                    writeln!(s, "    mov.b64       %rd5, %rd6;").unwrap();
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                        writeln!(
+                            s,
+                            "    {} {:<8} %rd5, %rd6, %rd7, %f0;",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            s,
+                            "    {} {:<8} %rd5, %rd6, %rd7, ",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd5;").unwrap();
                 } else {
                     if op.selector_is_f32() {
                         self.emit_raw_f32_operand(s, 0, c, true);
@@ -14454,35 +14603,52 @@ fn pick_sad(u: &mut Unstructured) -> Result<SadOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_slct(u: &mut Unstructured, emit_s32_slct: bool, emit_f32_slct: bool) -> Result<SlctOp> {
+fn pick_slct(
+    u: &mut Unstructured,
+    emit_s32_slct: bool,
+    emit_f32_slct: bool,
+    emit_wide_slct: bool,
+    emit_f64_slct: bool,
+) -> Result<SlctOp> {
     const BASE_OPS: &[SlctOp] = &[SlctOp::U32S32, SlctOp::B32S32];
-    const BASE_WITH_S32_OPS: &[SlctOp] = &[SlctOp::U32S32, SlctOp::S32S32, SlctOp::B32S32];
+    const S32_OPS: &[SlctOp] = &[SlctOp::S32S32];
     const F32_OPS: &[SlctOp] = &[
-        SlctOp::U32S32,
-        SlctOp::B32S32,
         SlctOp::U32F32,
         SlctOp::B32F32,
         SlctOp::F32S32,
         SlctOp::F32F32,
     ];
-    const F32_WITH_S32_OPS: &[SlctOp] = &[
-        SlctOp::U32S32,
-        SlctOp::S32S32,
-        SlctOp::B32S32,
-        SlctOp::U32F32,
-        SlctOp::S32F32,
-        SlctOp::B32F32,
-        SlctOp::F32S32,
-        SlctOp::F32F32,
-    ];
+    const S32_F32_OPS: &[SlctOp] = &[SlctOp::S32F32];
+    const WIDE_OPS: &[SlctOp] = &[SlctOp::U64S32, SlctOp::S64S32, SlctOp::B64S32];
+    const WIDE_F32_OPS: &[SlctOp] = &[SlctOp::U64F32, SlctOp::S64F32, SlctOp::B64F32];
+    const F64_OPS: &[SlctOp] = &[SlctOp::F64S32];
+    const F64_F32_OPS: &[SlctOp] = &[SlctOp::F64F32];
 
-    let ops = match (emit_s32_slct, emit_f32_slct) {
-        (false, false) => BASE_OPS,
-        (true, false) => BASE_WITH_S32_OPS,
-        (false, true) => F32_OPS,
-        (true, true) => F32_WITH_S32_OPS,
-    };
-    Ok(*u.choose(ops)?)
+    let mut ops = Vec::with_capacity(16);
+    ops.extend_from_slice(BASE_OPS);
+    if emit_s32_slct {
+        ops.extend_from_slice(S32_OPS);
+    }
+    if emit_f32_slct {
+        ops.extend_from_slice(F32_OPS);
+        if emit_s32_slct {
+            ops.extend_from_slice(S32_F32_OPS);
+        }
+    }
+    if emit_wide_slct {
+        ops.extend_from_slice(WIDE_OPS);
+        if emit_f32_slct {
+            ops.extend_from_slice(WIDE_F32_OPS);
+        }
+    }
+    if emit_f64_slct {
+        ops.extend_from_slice(F64_OPS);
+        if emit_f32_slct {
+            ops.extend_from_slice(F64_F32_OPS);
+        }
+    }
+
+    Ok(*u.choose(&ops)?)
 }
 
 fn pick_video(
@@ -15958,7 +16124,27 @@ mod tests {
         "slct.b32.f32",
         "slct.f32.s32",
         "slct.f32.f32",
+        "slct.u64.f32",
+        "slct.s64.f32",
+        "slct.b64.f32",
+        "slct.f64.f32",
     ];
+    const LEGACY_F32_SLCT_MNEMONICS: &[&str] = &[
+        "slct.u32.f32",
+        "slct.s32.f32",
+        "slct.b32.f32",
+        "slct.f32.s32",
+        "slct.f32.f32",
+    ];
+    const WIDE_SLCT_MNEMONICS: &[&str] = &[
+        "slct.u64.s32",
+        "slct.s64.s32",
+        "slct.b64.s32",
+        "slct.u64.f32",
+        "slct.s64.f32",
+        "slct.b64.f32",
+    ];
+    const F64_SLCT_MNEMONICS: &[&str] = &["slct.f64.s32", "slct.f64.f32"];
     const POST_KNOWN_SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.b32.s32"];
     const DP4A_MNEMONICS: &[&str] = &[
         "dp4a.u32.u32",
@@ -17059,7 +17245,10 @@ mod tests {
     }
 
     fn is_slct_mnemonic(mnemonic: &str) -> bool {
-        SLCT_MNEMONICS.contains(&mnemonic) || F32_SLCT_MNEMONICS.contains(&mnemonic)
+        SLCT_MNEMONICS.contains(&mnemonic)
+            || F32_SLCT_MNEMONICS.contains(&mnemonic)
+            || WIDE_SLCT_MNEMONICS.contains(&mnemonic)
+            || F64_SLCT_MNEMONICS.contains(&mnemonic)
     }
 
     fn is_s32_slct_mnemonic(mnemonic: &str) -> bool {
@@ -17074,6 +17263,18 @@ mod tests {
         ptx.lines()
             .filter_map(body_mnemonic)
             .any(|op| F32_SLCT_MNEMONICS.contains(&op))
+    }
+
+    fn has_wide_slct_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(|op| WIDE_SLCT_MNEMONICS.contains(&op))
+    }
+
+    fn has_f64_slct_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(|op| F64_SLCT_MNEMONICS.contains(&op))
     }
 
     fn has_s32_slct_mnemonic(ptx: &str) -> bool {
@@ -17390,6 +17591,8 @@ mod tests {
             n_working_regs: 24,
             max_immediate: 65536,
             emit_f32_slct: false,
+            emit_wide_slct: false,
+            emit_f64_slct: false,
             emit_signed_video: false,
             emit_video_sat: false,
             ..GenConfig::default()
@@ -17440,6 +17643,8 @@ mod tests {
             emit_set: false,
             emit_s32_slct: false,
             emit_f32_slct: false,
+            emit_wide_slct: false,
+            emit_f64_slct: false,
             emit_vsub4: false,
             ..GenConfig::default()
         }
@@ -17494,6 +17699,8 @@ mod tests {
             emit_set: false,
             emit_s32_slct: false,
             emit_f32_slct: false,
+            emit_wide_slct: false,
+            emit_f64_slct: false,
             emit_video: true,
             emit_signed_video: false,
             emit_video_sat: false,
@@ -24109,10 +24316,12 @@ mod tests {
             emit_slct: true,
             emit_s32_slct: true,
             emit_f32_slct: true,
+            emit_wide_slct: false,
+            emit_f64_slct: false,
             emit_predicated_slct: false,
             ..GenConfig::default()
         };
-        assert_mnemonic_coverage(&cfg, 32768, 2048, F32_SLCT_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 32768, 2048, LEGACY_F32_SLCT_MNEMONICS);
     }
 
     #[test]
@@ -24128,6 +24337,86 @@ mod tests {
             assert!(
                 !has_f32_slct_mnemonic(&ptx),
                 "seed {seed:x} emitted f32 slct"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_slct_generation_is_reachable() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 1024,
+            max_insts_per_block: 1024,
+            n_working_regs: 96,
+            max_immediate: u32::MAX,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_slct: true,
+            emit_s32_slct: true,
+            emit_f32_slct: true,
+            emit_wide_slct: true,
+            emit_f64_slct: false,
+            emit_predicated_slct: false,
+            ..GenConfig::default()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 2048, WIDE_SLCT_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_wide_slct_mnemonic(&ptx),
+                "seed {seed:x} emitted wide slct"
+            );
+        }
+    }
+
+    #[test]
+    fn f64_slct_generation_is_reachable() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 1024,
+            max_insts_per_block: 1024,
+            n_working_regs: 96,
+            max_immediate: u32::MAX,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_slct: true,
+            emit_s32_slct: true,
+            emit_f32_slct: true,
+            emit_wide_slct: false,
+            emit_f64_slct: true,
+            emit_predicated_slct: false,
+            ..GenConfig::default()
+        };
+        assert_mnemonic_coverage(&cfg, 8192, 2048, F64_SLCT_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_f64_slct_mnemonic(&ptx),
+                "seed {seed:x} emitted f64 slct"
             );
         }
     }

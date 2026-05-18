@@ -410,6 +410,8 @@ that feature.
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.*`. |
 | `DIV_DISABLE_F32_SLCT` | `slct` forms with `f32` result or selector. |
+| `DIV_DISABLE_WIDE_SLCT` | `slct` forms with `u64`, `s64`, or `b64` result. |
+| `DIV_DISABLE_F64_SLCT` | `slct.f64.*`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |
 | `DIV_DISABLE_SIGNED_VIDEO` | Signed/mixed `s32` PTX video type suffixes. |
 | `DIV_DISABLE_VIDEO_SAT` | PTX video `.sat` forms. |
