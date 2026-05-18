@@ -102,12 +102,20 @@
 //!                         suppress immediate 0x7fffffff/0x80000000 generation
 //!   DIV_DISABLE_DP2A      default: false; set 1/true/yes/on to suppress
 //!                         PTX dp2a.{lo,hi}.u32.u32 generation
+//!   DIV_DISABLE_NEGATED_PREDICATES default: false; set 1/true/yes/on to suppress
+//!                         @!%p instruction predicates
 //!   DIV_DISABLE_PREDICATED_ALU default: false; set 1/true/yes/on to suppress
 //!                         predicated ALU instruction generation
 //!   DIV_DISABLE_PREDICATED_UNARY default: false; set 1/true/yes/on to suppress
 //!                         predicated unary instruction generation
 //!   DIV_DISABLE_PREDICATED_CVT default: false; set 1/true/yes/on to suppress
 //!                         predicated subword cvt generation
+//!   DIV_DISABLE_PREDICATED_MAD default: false; set 1/true/yes/on to suppress
+//!                         predicated mad.lo.{u32,s32} generation
+//!   DIV_DISABLE_PREDICATED_SAD default: false; set 1/true/yes/on to suppress
+//!                         predicated sad.{u32,s32} generation
+//!   DIV_DISABLE_PREDICATED_SLCT default: false; set 1/true/yes/on to suppress
+//!                         predicated slct generation
 //!   DIV_DISABLE_SET       default: false; set 1/true/yes/on to suppress
 //!                         PTX set.{cmp}.u32.{u32,s32} generation
 //!   DIV_DISABLE_S32_SLCT  default: false; set 1/true/yes/on to suppress
@@ -291,11 +299,19 @@ struct Args {
     #[arg(long)]
     disable_dp2a: bool,
     #[arg(long)]
+    disable_negated_predicates: bool,
+    #[arg(long)]
     disable_predicated_alu: bool,
     #[arg(long)]
     disable_predicated_unary: bool,
     #[arg(long)]
     disable_predicated_cvt: bool,
+    #[arg(long)]
+    disable_predicated_mad: bool,
+    #[arg(long)]
+    disable_predicated_sad: bool,
+    #[arg(long)]
+    disable_predicated_slct: bool,
     #[arg(long)]
     disable_set: bool,
     #[arg(long)]
@@ -403,12 +419,19 @@ impl Args {
             "DIV_DISABLE_I32_BOUNDARY_IMMS"
         );
         set_bool!(self.disable_dp2a, "DIV_DISABLE_DP2A");
+        set_bool!(
+            self.disable_negated_predicates,
+            "DIV_DISABLE_NEGATED_PREDICATES"
+        );
         set_bool!(self.disable_predicated_alu, "DIV_DISABLE_PREDICATED_ALU");
         set_bool!(
             self.disable_predicated_unary,
             "DIV_DISABLE_PREDICATED_UNARY"
         );
         set_bool!(self.disable_predicated_cvt, "DIV_DISABLE_PREDICATED_CVT");
+        set_bool!(self.disable_predicated_mad, "DIV_DISABLE_PREDICATED_MAD");
+        set_bool!(self.disable_predicated_sad, "DIV_DISABLE_PREDICATED_SAD");
+        set_bool!(self.disable_predicated_slct, "DIV_DISABLE_PREDICATED_SLCT");
         set_bool!(self.disable_set, "DIV_DISABLE_SET");
         set_bool!(self.disable_s32_slct, "DIV_DISABLE_S32_SLCT");
         set_bool!(self.disable_video, "DIV_DISABLE_VIDEO");
@@ -520,9 +543,14 @@ impl Config {
         let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
         let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
         let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
+        let disable_negated_predicates =
+            env_bool("DIV_DISABLE_NEGATED_PREDICATES")?.unwrap_or(false);
         let disable_predicated_alu = env_bool("DIV_DISABLE_PREDICATED_ALU")?.unwrap_or(false);
         let disable_predicated_unary = env_bool("DIV_DISABLE_PREDICATED_UNARY")?.unwrap_or(false);
         let disable_predicated_cvt = env_bool("DIV_DISABLE_PREDICATED_CVT")?.unwrap_or(false);
+        let disable_predicated_mad = env_bool("DIV_DISABLE_PREDICATED_MAD")?.unwrap_or(false);
+        let disable_predicated_sad = env_bool("DIV_DISABLE_PREDICATED_SAD")?.unwrap_or(false);
+        let disable_predicated_slct = env_bool("DIV_DISABLE_PREDICATED_SLCT")?.unwrap_or(false);
         let disable_set = env_bool("DIV_DISABLE_SET")?.unwrap_or(false);
         let disable_s32_slct = env_bool("DIV_DISABLE_S32_SLCT")?.unwrap_or(false);
         let disable_video = env_bool("DIV_DISABLE_VIDEO")?.unwrap_or(false);
@@ -576,9 +604,13 @@ impl Config {
             emit_subc: !disable_subc,
             emit_i32_boundary_immediates: !disable_i32_boundary_imms,
             emit_dp2a: !disable_dp2a,
+            emit_negated_predicates: !disable_negated_predicates,
             emit_predicated_alu: !disable_predicated_alu,
             emit_predicated_unary: !disable_predicated_unary,
             emit_predicated_cvt: !disable_predicated_cvt,
+            emit_predicated_mad: !disable_predicated_mad && !disable_mul_lo,
+            emit_predicated_sad: !disable_predicated_sad,
+            emit_predicated_slct: !disable_predicated_slct,
             emit_set: !disable_set,
             emit_s32_slct: !disable_s32_slct,
             emit_video: !disable_video,
@@ -767,7 +799,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_sad={} emit_predicated_slct={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -826,9 +858,13 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_subc,
         cfg.gen_config.emit_i32_boundary_immediates,
         cfg.gen_config.emit_dp2a,
+        cfg.gen_config.emit_negated_predicates,
         cfg.gen_config.emit_predicated_alu,
         cfg.gen_config.emit_predicated_unary,
         cfg.gen_config.emit_predicated_cvt,
+        cfg.gen_config.emit_predicated_mad,
+        cfg.gen_config.emit_predicated_sad,
+        cfg.gen_config.emit_predicated_slct,
         cfg.gen_config.emit_set,
         cfg.gen_config.emit_s32_slct,
         cfg.gen_config.emit_video,

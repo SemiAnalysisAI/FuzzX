@@ -255,9 +255,13 @@ that feature.
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
+| `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
+| `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
+| `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |
+| `DIV_DISABLE_PREDICATED_SLCT` | Predicated `slct` instructions. |
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |

@@ -94,9 +94,13 @@ pub struct GenConfig {
     pub emit_subc: bool,
     pub emit_i32_boundary_immediates: bool,
     pub emit_dp2a: bool,
+    pub emit_negated_predicates: bool,
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
+    pub emit_predicated_mad: bool,
+    pub emit_predicated_sad: bool,
+    pub emit_predicated_slct: bool,
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_video: bool,
@@ -167,9 +171,13 @@ impl Default for GenConfig {
             emit_subc: true,
             emit_i32_boundary_immediates: true,
             emit_dp2a: true,
+            emit_negated_predicates: true,
             emit_predicated_alu: true,
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
+            emit_predicated_mad: true,
+            emit_predicated_sad: true,
+            emit_predicated_slct: true,
             emit_set: true,
             emit_s32_slct: true,
             emit_video: true,
@@ -699,6 +707,24 @@ fn sanitize_xor_not_operand(operand: Operand) -> Operand {
     }
 }
 
+const NEGATED_PRED_BIT: u32 = 1 << 31;
+
+fn pred_id(pred: u32) -> u32 {
+    pred & !NEGATED_PRED_BIT
+}
+
+fn pred_is_negated(pred: u32) -> bool {
+    pred & NEGATED_PRED_BIT != 0
+}
+
+fn pred_guard(pred: u32) -> String {
+    if pred_is_negated(pred) {
+        format!("@!%p{}", pred_id(pred))
+    } else {
+        format!("@%p{}", pred_id(pred))
+    }
+}
+
 enum Inst {
     Bin {
         op: BinOp,
@@ -849,6 +875,18 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred sad.{u32,s32} dst, a, b, c;`.
+    PredicatedSad {
+        op: SadOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `slct.u32.s32 dst, a, b, c;` — select `a` or `b` from signed `c`.
     Slct {
         op: SlctOp,
@@ -856,6 +894,18 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred slct.* dst, a, b, c;`.
+    PredicatedSlct {
+        op: SlctOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `dp4a.{u32,s32}.{u32,s32} dst, a, b, c;` — 4-byte dot product.
     Dp4a {
@@ -889,6 +939,18 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred mad.lo.{u32,s32} dst, a, b, c;`.
+    PredicatedMad {
+        signed: bool,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `lop3.b32 dst, a, b, c, imm;` — 3-input logical op via 8-bit truth
     /// table. The optimizer canonicalizes many boolean lattices through lop3.
@@ -1066,6 +1128,17 @@ impl<'a> Generator<'a> {
         p
     }
 
+    fn alloc_inst_pred(&mut self, u: &mut Unstructured) -> Result<u32> {
+        let pred = self.alloc_pred();
+        Ok(
+            if self.cfg.emit_negated_predicates && u.arbitrary::<bool>()? {
+                pred | NEGATED_PRED_BIT
+            } else {
+                pred
+            },
+        )
+    }
+
     /// Register reserved for `%tid.x`. Outside the working-reg pool so the
     /// body can never overwrite it — critical, since the epilogue uses it as
     /// the per-thread address offset. A corrupted tid would write OOB and
@@ -1149,13 +1222,28 @@ impl<'a> Generator<'a> {
 
     fn pick_mad_or_add(&mut self, u: &mut Unstructured) -> Result<Inst> {
         if self.cfg.emit_mul_lo {
-            Ok(Inst::Mad {
-                signed: self.cfg.emit_signed_lo_alu && u.arbitrary::<bool>()?,
-                dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
-                c: self.pick_operand(u)?,
-            })
+            let signed = self.cfg.emit_signed_lo_alu && u.arbitrary::<bool>()?;
+            if self.cfg.emit_predicated_mad && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedMad {
+                    signed,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            } else {
+                Ok(Inst::Mad {
+                    signed,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
         } else {
             Ok(Inst::Bin {
                 op: BinOp::Add,
@@ -1228,7 +1316,7 @@ impl<'a> Generator<'a> {
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
+                    pred: self.alloc_inst_pred(u)?,
                 })
             } else if self.cfg.emit_set && (!self.cfg.emit_selp || u.arbitrary::<bool>()?) {
                 Ok(Inst::Set {
@@ -1272,7 +1360,7 @@ impl<'a> Generator<'a> {
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
+                    pred: self.alloc_inst_pred(u)?,
                 })
             } else if self.cfg.emit_reg_shifts
                 && self.cfg.emit_bitwise_binops
@@ -1310,7 +1398,7 @@ impl<'a> Generator<'a> {
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
+                    pred: self.alloc_inst_pred(u)?,
                 })
             } else {
                 Ok(Inst::Unary {
@@ -1363,7 +1451,7 @@ impl<'a> Generator<'a> {
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_operand(u)?,
                         cb: self.pick_operand(u)?,
-                        pred: self.alloc_pred(),
+                        pred: self.alloc_inst_pred(u)?,
                     })
                 } else if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
                     Ok(Inst::RegFunnel {
@@ -1395,7 +1483,7 @@ impl<'a> Generator<'a> {
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_operand(u)?,
                         cb: self.pick_operand(u)?,
-                        pred: self.alloc_pred(),
+                        pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
                     Ok(Inst::PredicatedBfe {
@@ -1407,7 +1495,7 @@ impl<'a> Generator<'a> {
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_operand(u)?,
                         cb: self.pick_operand(u)?,
-                        pred: self.alloc_pred(),
+                        pred: self.alloc_inst_pred(u)?,
                     })
                 }
             } else if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
@@ -1437,7 +1525,7 @@ impl<'a> Generator<'a> {
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_operand(u)?,
                         cb: self.pick_operand(u)?,
-                        pred: self.alloc_pred(),
+                        pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
                     Ok(Inst::Bfi {
@@ -1460,7 +1548,7 @@ impl<'a> Generator<'a> {
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
+                    pred: self.alloc_inst_pred(u)?,
                 })
             } else {
                 Ok(Inst::Cvt {
@@ -1489,7 +1577,7 @@ impl<'a> Generator<'a> {
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_operand(u)?,
                         cb: self.pick_operand(u)?,
-                        pred: self.alloc_pred(),
+                        pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
                     Ok(Inst::Bfind {
@@ -1566,22 +1654,52 @@ impl<'a> Generator<'a> {
                     c: Operand::Reg(self.pick_dst(u)?),
                 })
             } else {
-                Ok(Inst::Sad {
-                    op: pick_sad(u)?,
+                let op = pick_sad(u)?;
+                if self.cfg.emit_predicated_sad && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedSad {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Sad {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                    })
+                }
+            }
+        } else if pick < 255 {
+            let op = pick_slct(u, self.cfg.emit_s32_slct)?;
+            if self.cfg.emit_predicated_slct && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedSlct {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_inst_pred(u)?,
+                })
+            } else {
+                Ok(Inst::Slct {
+                    op,
                     dst: self.pick_dst(u)?,
                     a: self.pick_operand(u)?,
                     b: self.pick_operand(u)?,
                     c: self.pick_operand(u)?,
                 })
             }
-        } else if pick < 255 {
-            Ok(Inst::Slct {
-                op: pick_slct(u, self.cfg.emit_s32_slct)?,
-                dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
-                c: self.pick_operand(u)?,
-            })
         } else if self.cfg.emit_dp2a && u.arbitrary::<bool>()? {
             Ok(Inst::Dp2a {
                 op: pick_dp2a(u)?,
@@ -1836,6 +1954,21 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn emit_inst_predicate_setup(
+        &self,
+        s: &mut String,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    ) {
+        write!(s, "    {:<13} %p{}, ", cmp.mnemonic(), pred_id(pred)).unwrap();
+        ca.emit(s);
+        write!(s, ", ").unwrap();
+        cb.emit(s);
+        writeln!(s, ";").unwrap();
+    }
+
     fn emit_inst(&self, s: &mut String, inst: &Inst) {
         match *inst {
             Inst::Bin { op, dst, a, b } => {
@@ -1875,12 +2008,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -1896,12 +2025,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {amount};").unwrap();
             }
@@ -1950,12 +2075,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
@@ -1973,12 +2094,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
@@ -1996,12 +2113,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
@@ -2084,8 +2197,48 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedSad {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Slct { op, dst, a, b, c } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedSlct {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2129,6 +2282,27 @@ impl<'a> Generator<'a> {
             } => {
                 let mnemonic = if signed { "mad.lo.s32" } else { "mad.lo.u32" };
                 write!(s, "    {mnemonic:<13} %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedMad {
+                signed,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let mnemonic = if signed { "mad.lo.s32" } else { "mad.lo.u32" };
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {mnemonic:<8} %r{dst}, ", pred_guard(pred)).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2191,12 +2365,14 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", dir.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<8} %r{dst}, ",
+                    pred_guard(pred),
+                    dir.mnemonic()
+                )
+                .unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2226,12 +2402,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {pos}, {len};").unwrap();
             }
@@ -2259,12 +2431,8 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                write!(s, "    @%p{pred} bfi.b32  %r{dst}, ").unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} bfi.b32  %r{dst}, ", pred_guard(pred)).unwrap();
                 src.emit(s);
                 write!(s, ", ").unwrap();
                 base.emit(s);
@@ -2282,12 +2450,13 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
-                ca.emit(s);
-                write!(s, ", ").unwrap();
-                cb.emit(s);
-                writeln!(s, ";").unwrap();
-                writeln!(s, "    @%p{pred} bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(
+                    s,
+                    "    {} bmsk.clamp.b32 %r{dst}, {pos}, {len};",
+                    pred_guard(pred)
+                )
+                .unwrap();
             }
         }
     }
@@ -2960,7 +3129,12 @@ mod tests {
         let mut tokens = line.trim_start().split_whitespace();
         let pred = tokens.next()?;
         let op = tokens.next()?;
-        pred.starts_with("@%p").then_some(op)
+        (pred.starts_with("@%p") || pred.starts_with("@!%p")).then_some(op)
+    }
+
+    fn has_negated_predicate(ptx: &str) -> bool {
+        ptx.lines()
+            .any(|line| line.trim_start().starts_with("@!%p"))
     }
 
     fn has_register_shift(ptx: &str) -> bool {
@@ -3013,6 +3187,24 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| BFIND_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_mad(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| MAD_LO_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_sad(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SAD_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_slct(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SLCT_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_funnel(ptx: &str) -> bool {
@@ -3453,6 +3645,56 @@ mod tests {
             for mnemonic in ["add.s32", "sub.s32", "mul.lo.s32", "mad.lo.s32"] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
+        }
+    }
+
+    #[test]
+    fn predicated_mad_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; MAD_LO_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in MAD_LO_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = MAD_LO_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_mad_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_predicated_mad: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_mad(&ptx),
+                "seed {seed:x} emitted predicated mad"
+            );
         }
     }
 
@@ -4607,6 +4849,52 @@ mod tests {
     }
 
     #[test]
+    fn predicated_sad_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SAD_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SAD_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SAD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_sad_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_sad: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_sad(&ptx),
+                "seed {seed:x} emitted predicated sad"
+            );
+        }
+    }
+
+    #[test]
     fn slct_generation_is_reachable() {
         let mnemonics = ["slct.u32.s32", "slct.s32.s32", "slct.b32.s32"];
         let mut found = [false; 3];
@@ -4628,6 +4916,52 @@ mod tests {
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn predicated_slct_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SLCT_MNEMONICS.len()];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SLCT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SLCT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_slct(&ptx),
+                "seed {seed:x} emitted predicated slct"
+            );
+        }
     }
 
     #[test]
@@ -4847,6 +5181,43 @@ mod tests {
             }
         }
         assert!(saw_set, "no seed in sample emitted set");
+    }
+
+    #[test]
+    fn negated_predicate_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_negated_predicate = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_negated_predicate |= has_negated_predicate(&ptx);
+            if saw_negated_predicate {
+                break;
+            }
+        }
+
+        assert!(
+            saw_negated_predicate,
+            "no seed in sample emitted a negated instruction predicate"
+        );
+    }
+
+    #[test]
+    fn negated_predicate_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_negated_predicates: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_negated_predicate(&ptx),
+                "seed {seed:x} emitted a negated instruction predicate"
+            );
+        }
     }
 
     #[test]
