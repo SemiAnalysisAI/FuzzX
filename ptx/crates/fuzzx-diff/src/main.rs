@@ -62,6 +62,10 @@
 //!                         PTX setp.{lt,le,gt,ge}.s32 generation
 //!   DIV_DISABLE_SIGNED_DIVREM default: false; set 1/true/yes/on to suppress
 //!                         PTX div.s32/rem.s32 generation
+//!   DIV_DISABLE_REG_DIVREM default: false; set 1/true/yes/on to suppress
+//!                         register-divisor div.u32/rem.u32 generation
+//!   DIV_DISABLE_PREDICATED_REG_DIVREM default: false; set 1/true/yes/on to suppress
+//!                         predicated register-divisor div.u32/rem.u32 generation
 //!   DIV_DISABLE_PREDICATED_DIVREM default: false; set 1/true/yes/on to suppress
 //!                         predicated div/rem generation
 //!   DIV_DISABLE_FUNNEL    default: false; set 1/true/yes/on to suppress
@@ -287,6 +291,10 @@ struct Args {
     #[arg(long)]
     disable_signed_divrem: bool,
     #[arg(long)]
+    disable_reg_divrem: bool,
+    #[arg(long)]
+    disable_predicated_reg_divrem: bool,
+    #[arg(long)]
     disable_predicated_divrem: bool,
     #[arg(long)]
     disable_funnel: bool,
@@ -440,6 +448,11 @@ impl Args {
         set_bool!(self.disable_abs, "DIV_DISABLE_ABS");
         set_bool!(self.disable_signed_cmp, "DIV_DISABLE_SIGNED_CMP");
         set_bool!(self.disable_signed_divrem, "DIV_DISABLE_SIGNED_DIVREM");
+        set_bool!(self.disable_reg_divrem, "DIV_DISABLE_REG_DIVREM");
+        set_bool!(
+            self.disable_predicated_reg_divrem,
+            "DIV_DISABLE_PREDICATED_REG_DIVREM"
+        );
         set_bool!(
             self.disable_predicated_divrem,
             "DIV_DISABLE_PREDICATED_DIVREM"
@@ -616,6 +629,9 @@ impl Config {
         let disable_abs = env_bool("DIV_DISABLE_ABS")?.unwrap_or(false);
         let disable_signed_cmp = env_bool("DIV_DISABLE_SIGNED_CMP")?.unwrap_or(false);
         let disable_signed_divrem = env_bool("DIV_DISABLE_SIGNED_DIVREM")?.unwrap_or(false);
+        let disable_reg_divrem = env_bool("DIV_DISABLE_REG_DIVREM")?.unwrap_or(false);
+        let disable_predicated_reg_divrem =
+            env_bool("DIV_DISABLE_PREDICATED_REG_DIVREM")?.unwrap_or(false);
         let disable_predicated_divrem = env_bool("DIV_DISABLE_PREDICATED_DIVREM")?.unwrap_or(false);
         let disable_funnel = env_bool("DIV_DISABLE_FUNNEL")?.unwrap_or(false);
         let disable_reg_funnel = env_bool("DIV_DISABLE_REG_FUNNEL")?.unwrap_or(false);
@@ -696,6 +712,11 @@ impl Config {
             emit_abs: !disable_abs,
             emit_signed_cmp: !disable_signed_cmp,
             emit_signed_divrem: !disable_signed_divrem,
+            emit_reg_divrem: !disable_reg_divrem && !disable_bitwise_binops && !disable_or,
+            emit_predicated_reg_divrem: !disable_predicated_reg_divrem
+                && !disable_reg_divrem
+                && !disable_bitwise_binops
+                && !disable_or,
             emit_predicated_divrem: !disable_predicated_divrem,
             emit_funnel: !disable_funnel,
             emit_reg_funnel: !disable_reg_funnel && !disable_funnel,
@@ -927,7 +948,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -967,6 +988,8 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_abs,
         cfg.gen_config.emit_signed_cmp,
         cfg.gen_config.emit_signed_divrem,
+        cfg.gen_config.emit_reg_divrem,
+        cfg.gen_config.emit_predicated_reg_divrem,
         cfg.gen_config.emit_predicated_divrem,
         cfg.gen_config.emit_funnel,
         cfg.gen_config.emit_reg_funnel,

@@ -235,6 +235,8 @@ that feature.
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
+| `DIV_DISABLE_REG_DIVREM` | Register-divisor `div.u32` and `rem.u32` with sanitized divisors. |
+| `DIV_DISABLE_PREDICATED_REG_DIVREM` | Predicated register-divisor `div.u32` and `rem.u32`. |
 | `DIV_DISABLE_PREDICATED_DIVREM` | Predicated `div` and `rem` instructions. |
 | `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.l.wrap.b32` and `shf.r.wrap.b32`. |

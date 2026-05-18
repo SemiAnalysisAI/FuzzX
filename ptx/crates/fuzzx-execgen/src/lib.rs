@@ -74,6 +74,8 @@ pub struct GenConfig {
     pub emit_abs: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
+    pub emit_reg_divrem: bool,
+    pub emit_predicated_reg_divrem: bool,
     pub emit_funnel: bool,
     pub emit_reg_funnel: bool,
     pub emit_predicated_funnel: bool,
@@ -165,6 +167,8 @@ impl Default for GenConfig {
             emit_abs: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
+            emit_reg_divrem: true,
+            emit_predicated_reg_divrem: true,
             emit_funnel: true,
             emit_reg_funnel: true,
             emit_predicated_funnel: true,
@@ -916,12 +920,30 @@ enum Inst {
         src: Operand,
         divisor: u32,
     },
+    /// `or.b32 scratch, divisor, 1; div/rem.u32 dst, src, scratch;`.
+    RegDivRem {
+        op: DivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: Operand,
+    },
     /// `setp.<cmp> pred, ca, cb; @pred div/rem dst, src, divisor;`.
     PredicatedDivRem {
         op: DivRemOp,
         dst: u32,
         src: Operand,
         divisor: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Register-divisor unsigned div/rem behind an instruction predicate.
+    PredicatedRegDivRem {
+        op: DivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2082,9 +2104,36 @@ impl<'a> Generator<'a> {
                     })
                 }
             } else {
-                let op = pick_divrem(u, self.cfg.emit_signed_divrem)?;
-                let divisor = self.pick_divisor(u, op)?;
-                if self.cfg.emit_predicated_divrem && u.arbitrary::<bool>()? {
+                let can_emit_reg_divrem =
+                    self.cfg.emit_reg_divrem && self.cfg.emit_bitwise_binops && self.cfg.emit_or;
+                let use_reg_divisor = can_emit_reg_divrem && u.arbitrary::<bool>()?;
+                let op = if use_reg_divisor {
+                    pick_unsigned_divrem(u)?
+                } else {
+                    pick_divrem(u, self.cfg.emit_signed_divrem)?
+                };
+                if use_reg_divisor {
+                    if self.cfg.emit_predicated_reg_divrem && u.arbitrary::<bool>()? {
+                        Ok(Inst::PredicatedRegDivRem {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            divisor: self.pick_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else {
+                        Ok(Inst::RegDivRem {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            divisor: self.pick_operand(u)?,
+                        })
+                    }
+                } else if self.cfg.emit_predicated_divrem && u.arbitrary::<bool>()? {
+                    let divisor = self.pick_divisor(u, op)?;
                     Ok(Inst::PredicatedDivRem {
                         op,
                         dst: self.pick_dst(u)?,
@@ -2096,6 +2145,7 @@ impl<'a> Generator<'a> {
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
+                    let divisor = self.pick_divisor(u, op)?;
                     Ok(Inst::DivRem {
                         op,
                         dst: self.pick_dst(u)?,
@@ -2271,7 +2321,9 @@ impl<'a> Generator<'a> {
             | Inst::Bfind { dst, .. }
             | Inst::PredicatedBfind { dst, .. }
             | Inst::DivRem { dst, .. }
+            | Inst::RegDivRem { dst, .. }
             | Inst::PredicatedDivRem { dst, .. }
+            | Inst::PredicatedRegDivRem { dst, .. }
             | Inst::Mad24 { dst, .. }
             | Inst::PredicatedMad24 { dst, .. }
             | Inst::Mul24 { dst, .. }
@@ -2786,6 +2838,20 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ", {divisor};").unwrap();
             }
+            Inst::RegDivRem {
+                op,
+                dst,
+                src,
+                divisor,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    or.b32        %r{scratch}, ").unwrap();
+                divisor.emit(s);
+                writeln!(s, ", 1;").unwrap();
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", %r{scratch};").unwrap();
+            }
             Inst::PredicatedDivRem {
                 op,
                 dst,
@@ -2800,6 +2866,25 @@ impl<'a> Generator<'a> {
                 write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {divisor};").unwrap();
+            }
+            Inst::PredicatedRegDivRem {
+                op,
+                dst,
+                src,
+                divisor,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    or.b32        %r{scratch}, ").unwrap();
+                divisor.emit(s);
+                writeln!(s, ", 1;").unwrap();
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", %r{scratch};").unwrap();
             }
             Inst::Mad24 { op, dst, a, b, c } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
@@ -3772,6 +3857,11 @@ fn pick_divrem(u: &mut Unstructured, emit_signed_divrem: bool) -> Result<DivRemO
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_unsigned_divrem(u: &mut Unstructured) -> Result<DivRemOp> {
+    let ops = [DivRemOp::DivU, DivRemOp::RemU];
+    Ok(*u.choose(&ops)?)
+}
+
 /// Pick a u32 immediate with a weighted distribution that favors small values
 /// (for arithmetic legibility) while still hitting the corner cases the
 /// constant-folder cares about: 0, INT_MIN, INT_MAX, 0xFFFFFFFF, powers of
@@ -4181,6 +4271,35 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| DIVREM_MNEMONICS.contains(&op))
+    }
+
+    fn is_reg_divrem_line(line: &str, predicated: bool) -> bool {
+        let line = line.trim_start();
+        if predicated != line.starts_with('@') {
+            return false;
+        }
+        let mut tokens = line.split_whitespace();
+        let op = if predicated {
+            let _pred = tokens.next();
+            tokens.next()
+        } else {
+            tokens.next()
+        };
+        if !matches!(op, Some("div.u32" | "rem.u32")) {
+            return false;
+        }
+        line.trim_end_matches(';')
+            .split(',')
+            .next_back()
+            .is_some_and(|divisor| divisor.trim_start().starts_with("%r"))
+    }
+
+    fn has_reg_divrem(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_reg_divrem_line(line, false))
+    }
+
+    fn has_predicated_reg_divrem(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_reg_divrem_line(line, true))
     }
 
     fn has_predicated_lop3(ptx: &str) -> bool {
@@ -6361,6 +6480,7 @@ mod tests {
         let cfg = GenConfig {
             emit_wide_int: false,
             emit_mul_wide: false,
+            emit_predicated_reg_divrem: false,
             ..coverage_heavy_config()
         };
         let mut found = vec![false; DIVREM_MNEMONICS.len()];
@@ -6395,6 +6515,7 @@ mod tests {
             emit_wide_int: false,
             emit_mul_wide: false,
             emit_predicated_divrem: false,
+            emit_predicated_reg_divrem: false,
             ..GenConfig::default()
         };
 
@@ -6404,6 +6525,98 @@ mod tests {
             assert!(
                 !has_predicated_divrem(&ptx),
                 "seed {seed:x} emitted predicated div/rem"
+            );
+        }
+    }
+
+    #[test]
+    fn reg_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            emit_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+        let mut saw_reg_divrem = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_reg_divrem |= has_reg_divrem(&ptx);
+            if saw_reg_divrem {
+                break;
+            }
+        }
+
+        assert!(
+            saw_reg_divrem,
+            "no seed in sample emitted register-divisor div/rem"
+        );
+    }
+
+    #[test]
+    fn reg_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            emit_wide_shifts: false,
+            emit_reg_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_reg_divrem(&ptx),
+                "seed {seed:x} emitted register-divisor div/rem"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_reg_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            emit_wide_shifts: false,
+            emit_predicated_divrem: false,
+            ..coverage_heavy_config()
+        };
+        let mut saw_predicated_reg_divrem = false;
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_reg_divrem |= has_predicated_reg_divrem(&ptx);
+            if saw_predicated_reg_divrem {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_reg_divrem,
+            "no seed in sample emitted predicated register-divisor div/rem"
+        );
+    }
+
+    #[test]
+    fn predicated_reg_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            emit_wide_shifts: false,
+            emit_predicated_divrem: false,
+            emit_predicated_reg_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_reg_divrem(&ptx),
+                "seed {seed:x} emitted predicated register-divisor div/rem"
             );
         }
     }
