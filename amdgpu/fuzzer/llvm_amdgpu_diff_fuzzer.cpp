@@ -1497,18 +1497,6 @@ bool triggersM032LoopVectorSelect(const Instruction &I) {
   return false;
 }
 
-bool isI1ZExtToI32(const Value *V) {
-  const auto *ZExt = dyn_cast<ZExtInst>(V);
-  return ZExt && ZExt->getType()->isIntegerTy(32) &&
-         ZExt->getOperand(0)->getType()->isIntegerTy(1);
-}
-
-bool triggersM033SubZExtBool(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  return BO && BO->getOpcode() == Instruction::Sub &&
-         BO->getType()->isIntegerTy(32) && isI1ZExtToI32(BO->getOperand(1));
-}
-
 bool triggersM035WaveReduceXor(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1658,7 +1646,6 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
-  bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
@@ -1697,7 +1684,6 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
-              (!AllowM033 && triggersM033SubZExtBool(I)) ||
               (!AllowM035 && triggersM035WaveReduceXor(I)) ||
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||

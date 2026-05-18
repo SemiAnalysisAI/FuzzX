@@ -208,7 +208,6 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3=1` | unset | Re-enable `or(add(shl(...), z), z)` and `or(smin(add(shl(...), z), z), z)` tails for [m030](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md). |
 | `FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB=1` | unset | Re-enable subtracting two scalar extracts from the same vector `or` for [m031](known-miscompiles/m031-vector-or-extract-sub/NOTES.md). |
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
-| `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
 | `FUZZX_ALLOW_M035_WAVE_REDUCE_XOR=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.xor` generation for [m035](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_M036_WAVE_REDUCE_ADD=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.add` generation for [m036](known-miscompiles/m036-wave-reduce-add-constant/NOTES.md). |
 | `FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE=1` | unset | Re-enable `sext i8 to i32` values feeding high-byte extraction for [m039](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md). |
@@ -285,7 +284,7 @@ Tested toolchains as of 2026-05-18:
 | [m030-ctlz-shl-or-bitop3](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a low-bit `or` through `v_bitop3_b32` using the unmasked `%n` value instead of `%n & 1`. |
 | [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `or(x, 255) - x` instead of `or(x, 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
-| [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
+| [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ✅ | ✅ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
 | [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ✅ | ✅ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
 | [m035-wave-reduce-xor-constant](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` folds `llvm.amdgcn.wave.reduce.xor.i32(30, 0)` to `30` instead of the even-wave XOR result `0`. |
 | [m036-wave-reduce-add-constant](known-miscompiles/m036-wave-reduce-add-constant/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` folds `llvm.amdgcn.wave.reduce.add.i32(65536, 1)` to `65536` instead of the full-wave sum `0x00400000`. |
