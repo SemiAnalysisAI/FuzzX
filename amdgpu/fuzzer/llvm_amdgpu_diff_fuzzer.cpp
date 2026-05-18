@@ -432,6 +432,14 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::amdgcn_mulhi_u24:
   case Intrinsic::amdgcn_perm:
   case Intrinsic::amdgcn_bitop3:
+  case Intrinsic::amdgcn_sdot2:
+  case Intrinsic::amdgcn_udot2:
+  case Intrinsic::amdgcn_sdot4:
+  case Intrinsic::amdgcn_udot4:
+  case Intrinsic::amdgcn_sudot4:
+  case Intrinsic::amdgcn_sdot8:
+  case Intrinsic::amdgcn_udot8:
+  case Intrinsic::amdgcn_sudot8:
     return true;
   default:
     return false;
@@ -1459,6 +1467,17 @@ bool triggersM034FshlAddWorkitemProduct(const Instruction &I) {
   return false;
 }
 
+bool triggersC001SUDotISELICE(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic())
+    return false;
+  Intrinsic::ID ID = Callee->getIntrinsicID();
+  return ID == Intrinsic::amdgcn_sudot4 || ID == Intrinsic::amdgcn_sudot8;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1554,6 +1573,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
+  bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1588,7 +1608,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
               (!AllowM033 && triggersM033SubZExtBool(I)) ||
-              (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)))
+              (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
+              (!AllowC001 && triggersC001SUDotISELICE(I)))
             return false;
       continue;
     }
@@ -2506,14 +2527,33 @@ Value *emitRandomOverflowInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *packI32ToV2I16(IRBuilder<NoFolder> &B, Value *V, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *V2I16 = FixedVectorType::get(I16, 2);
+  Value *Lo = B.CreateTrunc(V, I16, Twine(Name) + ".lo");
+  Value *Hi32 = B.CreateLShr(V, ConstantInt::get(I32, 16),
+                             Twine(Name) + ".hi32");
+  Value *Hi = B.CreateTrunc(Hi32, I16, Twine(Name) + ".hi");
+  Value *Packed = Constant::getNullValue(V2I16);
+  Packed = B.CreateInsertElement(Packed, Lo, ConstantInt::get(I32, 0),
+                                 Twine(Name) + ".ins0");
+  return B.CreateInsertElement(Packed, Hi, ConstantInt::get(I32, 1),
+                               Twine(Name) + ".ins1");
+}
+
 Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
                                             Value *A, Value *Bv,
                                             std::minstd_rand &Gen,
                                             StringRef NamePrefix) {
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I1 = Type::getInt1Ty(Ctx);
   Value *C = interestingI32(Ctx, Gen);
-  switch (Gen() % 13) {
+  Value *Clamp = ConstantInt::getFalse(Ctx);
+  bool AllowSUDot = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
+  switch (Gen() % (AllowSUDot ? 21 : 19)) {
   case 0: {
     unsigned Offset = Gen() % 32;
     unsigned Width = Gen() % (33 - Offset);
@@ -2570,11 +2610,59 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_perm),
         {A, Bv, C}, Twine(NamePrefix) + ".perm");
-  default:
+  case 12:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_bitop3, {I32}),
         {A, Bv, C, ci32(Ctx, Gen() & 255u)},
         Twine(NamePrefix) + ".bitop3");
+  case 13:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot2),
+        {packI32ToV2I16(B, A, Twine(NamePrefix) + ".sdot2.a"),
+         packI32ToV2I16(B, Bv, Twine(NamePrefix) + ".sdot2.b"), C, Clamp},
+        Twine(NamePrefix) + ".sdot2");
+  case 14:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot2),
+        {packI32ToV2I16(B, A, Twine(NamePrefix) + ".udot2.a"),
+         packI32ToV2I16(B, Bv, Twine(NamePrefix) + ".udot2.b"), C, Clamp},
+        Twine(NamePrefix) + ".udot2");
+  case 15:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot4),
+        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot4");
+  case 16:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot4),
+        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot4");
+  case 17:
+    if (AllowSUDot)
+      return B.CreateCall(
+          Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot4),
+          {ConstantInt::get(I1, Gen() & 1), A,
+           ConstantInt::get(I1, Gen() & 1), Bv, C, Clamp},
+          Twine(NamePrefix) + ".sudot4");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot8),
+        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot8");
+  case 18:
+    if (!AllowSUDot)
+      return B.CreateCall(
+          Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot8),
+          {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot8");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot8),
+        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot8");
+  case 19:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot8),
+        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot8");
+  default:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot8),
+        {ConstantInt::get(I1, Gen() & 1), A, ConstantInt::get(I1, Gen() & 1),
+         Bv, C, Clamp},
+        Twine(NamePrefix) + ".sudot8");
   }
 }
 

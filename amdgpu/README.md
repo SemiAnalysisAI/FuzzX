@@ -52,8 +52,9 @@ reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
 `i32`, and LLVM bit, min/max, saturation, absolute-value, funnel-shift, and
 integer overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
-`perm`, and explicit `bitop3` operations. It also emits a finite scalar FP
-subset by masking
+`perm`, explicit `bitop3`, and integer dot-product operations, with known
+`sudot*` instruction-selection crashes gated off by default. It also emits a
+finite scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
 `fptoui`; a signed variant uses small sign-extended integers, `sitofp`,
@@ -167,6 +168,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
 | `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
 | `FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT=1` | unset | Re-enable `add(fshl(Y, x, 30), x)` shapes for [m034](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md). |
+| `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 
 ## Layout
 
@@ -236,6 +238,7 @@ Tested toolchains as of 2026-05-17:
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
 | [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |
+| [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 
