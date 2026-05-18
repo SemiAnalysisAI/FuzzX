@@ -72,13 +72,14 @@ subgraphs with `i32` phi joins. Those subgraphs can nest more diamonds, switches
 cascades, and small counted loops with optional guarded early exits. The mutator
 also generates top-level counted loops with bounded constant or dynamically
 masked trip counts whose bodies can contain nested diamonds, switches, cascades,
-and inner loops. A complex-CFG mutation chains several nested subgraphs before
-the final store, so a single corpus entry can contain multiple high-fanout joins
-and loop nests instead of just one wrapper around the result. Some generated
-loops carry two independent `i32` accumulator phis, combine them after the loop,
-or take a guarded early exit from the loop body through an exit phi, so corpus
-entries exercise both expression simplification and CFG and loop transforms. CFG
-arms include the same scalar
+and inner loops. A dedicated loop-nest mutation wraps an inner counted loop and
+optional tail CFG inside an outer bounded loop. A complex-CFG mutation chains
+several nested subgraphs before the final store, so a single corpus entry can
+contain multiple high-fanout joins and loop nests instead of just one wrapper
+around the result. Some generated loops carry two independent `i32` accumulator
+phis, combine them after the loop, or take a guarded early exit from the loop
+body through an exit phi, so corpus entries exercise both expression
+simplification and CFG and loop transforms. CFG arms include the same scalar
 integer, bit, boolean, narrowing, saturating, funnel-shift, finite-FP, and vector
 expression families as the linear mutator. Scalar and CFG expressions can also
 mix in extra `i32` global input loads from `in[seed % n]`; these loads are only

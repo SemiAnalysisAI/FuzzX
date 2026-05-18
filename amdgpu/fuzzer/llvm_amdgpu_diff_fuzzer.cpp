@@ -4098,6 +4098,82 @@ void mutateIRAddCountedLoop(Module &M, std::minstd_rand &Gen) {
   }
 }
 
+void mutateIRAddLoopNest(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || !canGrowCFG(*F))
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+
+  BasicBlock *Preheader = Store->getParent();
+  BasicBlock *Exit =
+      Preheader->splitBasicBlock(Store->getIterator(), "fuzz.loop.nest.exit");
+  BasicBlock *Header =
+      BasicBlock::Create(Ctx, "fuzz.loop.nest.header", F, Exit);
+  BasicBlock *Body =
+      BasicBlock::Create(Ctx, "fuzz.loop.nest.body", F, Exit);
+
+  Instruction *OldTerm = Preheader->getTerminator();
+  IRBuilder<NoFolder> PreB(OldTerm);
+  Value *TripCount = nullptr;
+  if ((Gen() % 2) == 0) {
+    TripCount = ci32(Ctx, 1 + (Gen() % 4));
+  } else {
+    Value *TripSeed = (Gen() % 2) == 0 ? Current : Other;
+    Value *Masked =
+        PreB.CreateAnd(TripSeed, ci32(Ctx, 3), "fuzz.loop.nest.trip.mask");
+    TripCount = PreB.CreateAdd(Masked, ci32(Ctx, 1), "fuzz.loop.nest.trip");
+  }
+  PreB.CreateBr(Header);
+  OldTerm->eraseFromParent();
+
+  IRBuilder<NoFolder> HeaderB(Header);
+  PHINode *Index = HeaderB.CreatePHI(I32, 2, "fuzz.loop.nest.iv");
+  PHINode *Acc = HeaderB.CreatePHI(I32, 2, "fuzz.loop.nest.acc");
+  Index->addIncoming(ci32(Ctx, 0), Preheader);
+  Acc->addIncoming(Current, Preheader);
+  Value *Cond =
+      HeaderB.CreateICmpULT(Index, TripCount, "fuzz.loop.nest.cond");
+  HeaderB.CreateCondBr(Cond, Body, Exit);
+
+  IRBuilder<NoFolder> BodyB(Body);
+  unsigned InnerDepth = std::min(chooseCFGDepth(*F, 5, Gen), 3u);
+  CFGFragment Frag =
+      emitRandomNestedCountedLoop(BodyB, M, Exit, Acc, Other, InnerDepth, Gen);
+  if ((Gen() % 2) == 0 && canGrowCFG(*F)) {
+    IRBuilder<NoFolder> TailB(Frag.Tail);
+    unsigned TailDepth = std::min(chooseCFGDepth(*F, 4, Gen), 3u);
+    Frag = emitRandomCFGSubgraph(TailB, M, Exit, Frag.Result, Other, TailDepth,
+                                 Gen);
+  }
+
+  IRBuilder<NoFolder> BackedgeB(Frag.Tail);
+  Value *NextAcc = Frag.Result;
+  switch (Gen() % 4) {
+  case 0:
+    NextAcc = BackedgeB.CreateXor(NextAcc, Index, "fuzz.loop.nest.acc.xor");
+    break;
+  case 1:
+    NextAcc = BackedgeB.CreateAdd(NextAcc, Other, "fuzz.loop.nest.acc.add");
+    break;
+  default:
+    break;
+  }
+  Value *NextIndex =
+      BackedgeB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.nest.next");
+  BackedgeB.CreateBr(Header);
+  Index->addIncoming(NextIndex, Frag.Tail);
+  Acc->addIncoming(NextAcc, Frag.Tail);
+
+  Store->setOperand(0, Acc);
+}
+
 void mutateIRAddCascade(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
   if (!F || !canGrowCFG(*F))
@@ -4261,7 +4337,7 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 32 && (Gen() % 3) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 28) {
+    switch (Gen() % 32) {
     case 0:
     case 1:
     case 2:
@@ -4300,10 +4376,16 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
       break;
     case 24:
     case 25:
-      mutateIRModifyConstant(M, Gen);
-      break;
     case 26:
     case 27:
+      mutateIRAddLoopNest(M, Gen);
+      break;
+    case 28:
+    case 29:
+      mutateIRModifyConstant(M, Gen);
+      break;
+    case 30:
+    case 31:
     default:
       mutateIRRemoveInstruction(M, Gen);
       break;
