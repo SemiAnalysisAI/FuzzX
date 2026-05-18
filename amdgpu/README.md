@@ -163,6 +163,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB=1` | unset | Re-enable subtracting two scalar extracts from the same vector `or` for [m031](known-miscompiles/m031-vector-or-extract-sub/NOTES.md). |
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
 | `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
+| `FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT=1` | unset | Re-enable `add(fshl(Y, x, 30), x)` shapes for [m034](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md). |
 
 ## Layout
 
@@ -185,6 +186,8 @@ Except where otherwise noted, these have been tested on `gfx950`.  The result
 columns report the generic `known-miscompiles/run_ll_reproducer.sh`
 differential test: ✅ means no mismatch was observed for that reproducer, and
 ❌ means the toolchain reproduces the `-O0` / `-O2` mismatch.
+Confirmed compiler ICEs should be recorded here too, with the table entry
+describing the crashing toolchain and phase instead of a differential result.
 
 Tested toolchains as of 2026-05-17:
 
@@ -229,6 +232,7 @@ Tested toolchains as of 2026-05-17:
 | [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `(x \| 255) - x` instead of `(x \| 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
+| [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 

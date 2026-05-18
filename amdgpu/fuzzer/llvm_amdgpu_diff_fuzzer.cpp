@@ -1415,6 +1415,37 @@ bool triggersM033SubZExtBool(const Instruction &I) {
          BO->getType()->isIntegerTy(32) && isI1ZExtToI32(BO->getOperand(1));
 }
 
+bool isM034Fshl(const Value *V, const Value **X) {
+  const auto *Call = dyn_cast<CallInst>(V);
+  if (!Call || !Call->getType()->isIntegerTy(32) || Call->arg_size() != 3)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic() ||
+      Callee->getIntrinsicID() != Intrinsic::fshl)
+    return false;
+  const auto *Shift = dyn_cast<ConstantInt>(Call->getArgOperand(2));
+  if (!Shift || Shift->getZExtValue() != 30)
+    return false;
+  const Value *CandidateX = Call->getArgOperand(1);
+  if (X)
+    *X = CandidateX;
+  return true;
+}
+
+bool triggersM034FshlAddWorkitemProduct(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Add ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  for (unsigned Idx = 0; Idx != 2; ++Idx) {
+    const Value *X = nullptr;
+    if (isM034Fshl(BO->getOperand(Idx), &X) &&
+        BO->getOperand(1 - Idx) == X)
+      return true;
+  }
+  return false;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1509,6 +1540,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
+  bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1542,7 +1574,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
-              (!AllowM033 && triggersM033SubZExtBool(I)))
+              (!AllowM033 && triggersM033SubZExtBool(I)) ||
+              (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)))
             return false;
       continue;
     }
