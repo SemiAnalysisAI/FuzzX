@@ -123,7 +123,7 @@
 //!   DIV_DISABLE_WIDE_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         scalar 64-bit and v2.u64 memory loads and store/load roundtrips
 //!   DIV_DISABLE_MEMORY_CACHE_OPS default: false; set 1/true/yes/on to suppress
-//!                         global-memory load/store cache-policy variants
+//!                         scalar/vector global-memory load/store cache-policy variants
 //!   DIV_DISABLE_F32_ARITH default: false; set 1/true/yes/on to suppress
 //!                         sanitized f32 add/sub/mul/div/fma/copysign/min/max,
 //!                         f32 sat arithmetic, and ftz min/max generation

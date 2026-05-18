@@ -1047,11 +1047,35 @@ impl VectorMemOp {
         }
     }
 
+    fn type_suffix(self) -> &'static str {
+        match self {
+            VectorMemOp::V2 => "v2.u32",
+            VectorMemOp::V4 => "v4.u32",
+            VectorMemOp::V2U64 => "v2.u64",
+        }
+    }
+
+    fn global_load_mnemonic_with_cache(self, cache: GlobalLoadCacheOp) -> String {
+        if matches!(cache, GlobalLoadCacheOp::Default) {
+            self.global_load_mnemonic().to_string()
+        } else {
+            format!("{}.{}", cache.prefix(), self.type_suffix())
+        }
+    }
+
     fn global_store_mnemonic(self) -> &'static str {
         match self {
             VectorMemOp::V2 => "st.global.v2.u32",
             VectorMemOp::V4 => "st.global.v4.u32",
             VectorMemOp::V2U64 => "st.global.v2.u64",
+        }
+    }
+
+    fn global_store_mnemonic_with_cache(self, cache: GlobalStoreCacheOp) -> String {
+        if matches!(cache, GlobalStoreCacheOp::Default) {
+            self.global_store_mnemonic().to_string()
+        } else {
+            format!("{}.{}", cache.prefix(), self.type_suffix())
         }
     }
 
@@ -3366,12 +3390,14 @@ enum Inst {
     /// Aligned vector load from the input buffer.
     GlobalVectorLoad {
         op: VectorMemOp,
+        cache: GlobalLoadCacheOp,
         dsts: [u32; 4],
         offset: u32,
     },
     /// Predicated aligned vector load from the input buffer.
     PredicatedGlobalVectorLoad {
         op: VectorMemOp,
+        cache: GlobalLoadCacheOp,
         dsts: [u32; 4],
         offset: u32,
         cmp: CmpOp,
@@ -3382,6 +3408,7 @@ enum Inst {
     /// Aligned vector store/reload through this thread's output slice.
     GlobalVectorStoreRoundtrip {
         op: VectorMemOp,
+        store_cache: GlobalStoreCacheOp,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -3389,6 +3416,7 @@ enum Inst {
     /// Predicated aligned vector store/reload through this thread's output slice.
     PredicatedGlobalVectorStoreRoundtrip {
         op: VectorMemOp,
+        store_cache: GlobalStoreCacheOp,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -6194,6 +6222,7 @@ impl<'a> Generator<'a> {
         match (space, guard) {
             (0, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorLoad {
                 op,
+                cache: self.pick_global_load_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
                 cmp,
@@ -6203,11 +6232,13 @@ impl<'a> Generator<'a> {
             }),
             (0, None) => Ok(Inst::GlobalVectorLoad {
                 op,
+                cache: self.pick_global_load_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
             }),
             (1, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorStoreRoundtrip {
                 op,
+                store_cache: self.pick_global_store_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, N_OUTPUTS * 4)?,
@@ -6218,6 +6249,7 @@ impl<'a> Generator<'a> {
             }),
             (1, None) => Ok(Inst::GlobalVectorStoreRoundtrip {
                 op,
+                store_cache: self.pick_global_store_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, N_OUTPUTS * 4)?,
@@ -9462,20 +9494,19 @@ impl<'a> Generator<'a> {
                     Some(pred),
                 );
             }
-            Inst::GlobalVectorLoad { op, dsts, offset } => {
+            Inst::GlobalVectorLoad {
+                op,
+                cache,
+                dsts,
+                offset,
+            } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                self.emit_vector_memory_load(
-                    s,
-                    op.global_load_mnemonic(),
-                    op,
-                    dsts,
-                    "%rd6",
-                    offset,
-                    None,
-                );
+                let mnemonic = op.global_load_mnemonic_with_cache(cache);
+                self.emit_vector_memory_load(s, &mnemonic, op, dsts, "%rd6", offset, None);
             }
             Inst::PredicatedGlobalVectorLoad {
                 op,
+                cache,
                 dsts,
                 offset,
                 cmp,
@@ -9485,18 +9516,12 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                self.emit_vector_memory_load(
-                    s,
-                    op.global_load_mnemonic(),
-                    op,
-                    dsts,
-                    "%rd6",
-                    offset,
-                    Some(pred),
-                );
+                let mnemonic = op.global_load_mnemonic_with_cache(cache);
+                self.emit_vector_memory_load(s, &mnemonic, op, dsts, "%rd6", offset, Some(pred));
             }
             Inst::GlobalVectorStoreRoundtrip {
                 op,
+                store_cache,
                 dsts,
                 srcs,
                 offset,
@@ -9505,15 +9530,8 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                self.emit_vector_memory_store(
-                    s,
-                    op.global_store_mnemonic(),
-                    op,
-                    srcs,
-                    "%rd8",
-                    offset,
-                    None,
-                );
+                let store_mnemonic = op.global_store_mnemonic_with_cache(store_cache);
+                self.emit_vector_memory_store(s, &store_mnemonic, op, srcs, "%rd8", offset, None);
                 self.emit_vector_memory_load(
                     s,
                     op.global_load_mnemonic(),
@@ -9526,6 +9544,7 @@ impl<'a> Generator<'a> {
             }
             Inst::PredicatedGlobalVectorStoreRoundtrip {
                 op,
+                store_cache,
                 dsts,
                 srcs,
                 offset,
@@ -9539,9 +9558,10 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                let store_mnemonic = op.global_store_mnemonic_with_cache(store_cache);
                 self.emit_vector_memory_store(
                     s,
-                    op.global_store_mnemonic(),
+                    &store_mnemonic,
                     op,
                     srcs,
                     "%rd8",
@@ -15329,6 +15349,14 @@ mod tests {
         }
     }
 
+    fn vector_memory_width_suffix(type_suffix: &str) -> Option<u32> {
+        match type_suffix {
+            "v2.u32" => Some(8),
+            "v4.u32" | "v2.u64" => Some(16),
+            _ => None,
+        }
+    }
+
     fn global_load_width(mnemonic: &str) -> Option<u32> {
         if let Some(type_suffix) = mnemonic.strip_prefix("ld.global.") {
             if let Some(width) = scalar_global_load_width(type_suffix) {
@@ -15355,12 +15383,35 @@ mod tests {
         })
     }
 
+    fn global_vector_width(mnemonic: &str) -> Option<u32> {
+        if let Some(type_suffix) = mnemonic
+            .strip_prefix("ld.global.")
+            .or_else(|| mnemonic.strip_prefix("st.global."))
+        {
+            if let Some(width) = vector_memory_width_suffix(type_suffix) {
+                return Some(width);
+            }
+        }
+        GLOBAL_LOAD_CACHE_PREFIXES
+            .iter()
+            .chain(GLOBAL_STORE_CACHE_PREFIXES.iter())
+            .find_map(|prefix| {
+                mnemonic
+                    .strip_prefix(prefix)
+                    .and_then(vector_memory_width_suffix)
+            })
+    }
+
     fn is_global_load_mnemonic(mnemonic: &str) -> bool {
         global_load_width(mnemonic).is_some()
     }
 
     fn is_global_store_mnemonic(mnemonic: &str) -> bool {
         global_store_width(mnemonic).is_some()
+    }
+
+    fn is_vector_memory_mnemonic(mnemonic: &str) -> bool {
+        VECTOR_MEMORY_MNEMONICS.contains(&mnemonic) || global_vector_width(mnemonic).is_some()
     }
 
     fn is_global_memory_cache_mnemonic(mnemonic: &str) -> bool {
@@ -15506,7 +15557,7 @@ mod tests {
         } else {
             first
         };
-        if !VECTOR_MEMORY_MNEMONICS.contains(&mnemonic) {
+        if !is_vector_memory_mnemonic(mnemonic) {
             return None;
         }
         let address = if line.contains("[%rd8 + ") {
@@ -15594,17 +15645,26 @@ mod tests {
         })
     }
 
+    fn has_predicated_global_load_access(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            line.contains("[%rd6 + ")
+                && predicated_mnemonic(line).is_some_and(is_global_load_mnemonic)
+        })
+    }
+
     fn has_predicated_global_roundtrip_access(ptx: &str) -> bool {
         ptx.lines().any(|line| {
             line.contains("[%rd8 + ")
                 && predicated_mnemonic(line).is_some_and(|op| {
-                    GLOBAL_LOAD_MNEMONICS.contains(&op) || GLOBAL_STORE_MNEMONICS.contains(&op)
+                    is_global_load_mnemonic(op)
+                        || is_global_store_mnemonic(op)
+                        || is_vector_memory_mnemonic(op)
                 })
         })
     }
 
     fn has_any_predicated_memory_access(ptx: &str) -> bool {
-        has_predicated_memory_access(ptx, GLOBAL_LOAD_MNEMONICS, "[%rd6 + ")
+        has_predicated_global_load_access(ptx)
             || has_predicated_global_roundtrip_access(ptx)
             || has_predicated_memory_access(ptx, CONST_LOAD_MNEMONICS, "[%rd6 + ")
             || has_predicated_memory_access(ptx, LOCAL_MEM_LOAD_MNEMONICS, "[%rd6 + ")
@@ -15616,8 +15676,10 @@ mod tests {
     }
 
     fn has_predicated_vector_memory_access(ptx: &str) -> bool {
-        has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd6 + ")
-            || has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd8 + ")
+        ptx.lines().any(|line| {
+            (line.contains("[%rd6 + ") || line.contains("[%rd8 + "))
+                && predicated_mnemonic(line).is_some_and(is_vector_memory_mnemonic)
+        })
     }
 
     fn has_negated_predicate(ptx: &str) -> bool {
@@ -18090,6 +18152,12 @@ mod tests {
                     "seed {seed:x} emitted body {mnemonic}"
                 );
             }
+            for (mnemonic, _, _) in ptx.lines().filter_map(body_vector_memory_access) {
+                assert!(
+                    !is_global_memory_cache_mnemonic(mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
         }
     }
 
@@ -18413,6 +18481,47 @@ mod tests {
     }
 
     #[test]
+    fn vector_memory_cache_ops_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut loads = vec![false; GLOBAL_LOAD_CACHE_PREFIXES.len()];
+        let mut stores = vec![false; GLOBAL_STORE_CACHE_PREFIXES.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, _, _) in ptx.lines().filter_map(body_vector_memory_access) {
+                if global_vector_width(mnemonic).is_none() {
+                    continue;
+                }
+                for (i, prefix) in GLOBAL_LOAD_CACHE_PREFIXES.iter().enumerate() {
+                    loads[i] |= mnemonic.starts_with(prefix);
+                }
+                for (i, prefix) in GLOBAL_STORE_CACHE_PREFIXES.iter().enumerate() {
+                    stores[i] |= mnemonic.starts_with(prefix);
+                }
+            }
+            if loads.iter().all(|seen| *seen) && stores.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_loads: Vec<_> = GLOBAL_LOAD_CACHE_PREFIXES
+            .iter()
+            .zip(loads)
+            .filter_map(|(prefix, seen)| (!seen).then_some(*prefix))
+            .collect();
+        let missing_stores: Vec<_> = GLOBAL_STORE_CACHE_PREFIXES
+            .iter()
+            .zip(stores)
+            .filter_map(|(prefix, seen)| (!seen).then_some(*prefix))
+            .collect();
+        assert!(
+            missing_loads.is_empty() && missing_stores.is_empty(),
+            "sample missed vector memory cache loads {missing_loads:?} stores {missing_stores:?}"
+        );
+    }
+
+    #[test]
     fn predicated_vector_memory_generation_is_reachable() {
         let cfg = coverage_heavy_config();
 
@@ -18454,36 +18563,42 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, address, offset) in ptx.lines().filter_map(body_vector_memory_access) {
-                let width = if mnemonic.contains(".u64") {
-                    16
-                } else if mnemonic.contains(".v2.") {
-                    8
+                let width = global_vector_width(mnemonic).unwrap_or_else(|| {
+                    if mnemonic.contains(".u64") {
+                        16
+                    } else if mnemonic.contains(".v2.") {
+                        8
+                    } else {
+                        16
+                    }
+                });
+                let limit = if global_vector_width(mnemonic).is_some()
+                    && mnemonic.starts_with("ld.global")
+                    && address == "%rd6"
+                {
+                    input_len() as u32
+                } else if global_vector_width(mnemonic).is_some()
+                    && (mnemonic.starts_with("ld.global") || mnemonic.starts_with("st.global"))
+                    && address == "%rd8"
+                {
+                    N_OUTPUTS * 4
                 } else {
-                    16
-                };
-                let limit = match (mnemonic, address) {
-                    ("ld.global.v2.u32" | "ld.global.v4.u32" | "ld.global.v2.u64", "%rd6") => {
-                        input_len() as u32
+                    match (mnemonic, address) {
+                        ("ld.const.v2.u32" | "ld.const.v4.u32" | "ld.const.v2.u64", "%rd6") => {
+                            CONST_MEM_BYTES
+                        }
+                        (
+                            "ld.local.v2.u32" | "ld.local.v4.u32" | "ld.local.v2.u64"
+                            | "st.local.v2.u32" | "st.local.v4.u32" | "st.local.v2.u64",
+                            "%rd6",
+                        ) => LOCAL_MEM_BYTES,
+                        (
+                            "ld.shared.v2.u32" | "ld.shared.v4.u32" | "ld.shared.v2.u64"
+                            | "st.shared.v2.u32" | "st.shared.v4.u32" | "st.shared.v2.u64",
+                            "%rd6",
+                        ) => SHARED_SLOT_BYTES,
+                        _ => unreachable!(),
                     }
-                    (
-                        "ld.global.v2.u32" | "ld.global.v4.u32" | "ld.global.v2.u64"
-                        | "st.global.v2.u32" | "st.global.v4.u32" | "st.global.v2.u64",
-                        "%rd8",
-                    ) => N_OUTPUTS * 4,
-                    ("ld.const.v2.u32" | "ld.const.v4.u32" | "ld.const.v2.u64", "%rd6") => {
-                        CONST_MEM_BYTES
-                    }
-                    (
-                        "ld.local.v2.u32" | "ld.local.v4.u32" | "ld.local.v2.u64"
-                        | "st.local.v2.u32" | "st.local.v4.u32" | "st.local.v2.u64",
-                        "%rd6",
-                    ) => LOCAL_MEM_BYTES,
-                    (
-                        "ld.shared.v2.u32" | "ld.shared.v4.u32" | "ld.shared.v2.u64"
-                        | "st.shared.v2.u32" | "st.shared.v4.u32" | "st.shared.v2.u64",
-                        "%rd6",
-                    ) => SHARED_SLOT_BYTES,
-                    _ => unreachable!(),
                 };
                 assert_eq!(
                     offset % width,
