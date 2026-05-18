@@ -1532,6 +1532,65 @@ bool triggersM036WaveReduceAdd(const Instruction &I) {
          Callee->getIntrinsicID() == Intrinsic::amdgcn_wave_reduce_add;
 }
 
+bool isI32AndWithConstant(const Value *V, const Value **Base,
+                          uint64_t *Mask) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  for (unsigned Idx = 0; Idx != 2; ++Idx) {
+    const auto *C = dyn_cast<ConstantInt>(BO->getOperand(Idx));
+    if (!C)
+      continue;
+    if (Base)
+      *Base = BO->getOperand(1 - Idx);
+    if (Mask)
+      *Mask = C->getZExtValue();
+    return true;
+  }
+  return false;
+}
+
+bool isM037ByteMask(uint64_t Mask) {
+  return Mask >= 255 && Mask <= 4095 && (Mask & 0xff) == 0xff;
+}
+
+bool isM037MaskedByteSquare(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::Mul ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  const Value *LBase = nullptr;
+  const Value *RBase = nullptr;
+  uint64_t LMask = 0;
+  uint64_t RMask = 0;
+  if (!isI32AndWithConstant(BO->getOperand(0), &LBase, &LMask) ||
+      !isI32AndWithConstant(BO->getOperand(1), &RBase, &RMask))
+    return false;
+  return LBase == RBase && isM037ByteMask(LMask) && isM037ByteMask(RMask);
+}
+
+bool isI32AndOfValueAndConstant(const Value *MaybeAnd, const Value *Operand) {
+  const Value *Base = nullptr;
+  uint64_t Mask = 0;
+  return isI32AndWithConstant(MaybeAnd, &Base, &Mask) && Base == Operand &&
+         Mask != 0;
+}
+
+bool triggersM037Dot4SquareLowbit(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Add ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  return (isM037MaskedByteSquare(BO->getOperand(0)) &&
+          isI32AndOfValueAndConstant(BO->getOperand(1), BO->getOperand(0))) ||
+         (isM037MaskedByteSquare(BO->getOperand(1)) &&
+          isI32AndOfValueAndConstant(BO->getOperand(0), BO->getOperand(1)));
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1649,6 +1708,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
   bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
+  bool AllowM037 = envFlag("FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1688,6 +1748,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
               (!AllowM035 && triggersM035WaveReduceXor(I)) ||
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
+              (!AllowM037 && triggersM037Dot4SquareLowbit(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
