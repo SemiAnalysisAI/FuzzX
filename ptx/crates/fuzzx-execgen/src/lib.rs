@@ -2951,12 +2951,40 @@ enum Inst {
         base_pred: u32,
         pred: u32,
     },
+    /// Instruction-predicated single-precision `setp.<cmp>.<and|or|xor>`.
+    PredicatedF32SetpBool {
+        bool_op: PredicateBoolOp,
+        base_cmp: CmpOp,
+        base_a: Operand,
+        base_b: Operand,
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        base_pred: u32,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
+    },
     /// Single-precision floating-point classification with `testp`.
     F32Testp {
         op: FloatTestpOp,
         dst: u32,
         src: Operand,
         pred: u32,
+    },
+    /// Instruction-predicated single-precision floating-point classification.
+    PredicatedF32Testp {
+        op: FloatTestpOp,
+        dst: u32,
+        src: Operand,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
     },
     /// Sanitized single-precision compare feeding `selp.f32`.
     F32Selp {
@@ -3115,6 +3143,23 @@ enum Inst {
         base_pred: u32,
         pred: u32,
     },
+    /// Instruction-predicated double-precision `setp.<cmp>.<and|or|xor>`.
+    PredicatedF64SetpBool {
+        bool_op: PredicateBoolOp,
+        base_cmp: CmpOp,
+        base_a: Operand,
+        base_b: Operand,
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        base_pred: u32,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
+    },
     /// Double-precision floating-point classification with `testp`.
     F64Testp {
         op: FloatTestpOp,
@@ -3122,6 +3167,18 @@ enum Inst {
         src_lo: Operand,
         src_hi: Operand,
         pred: u32,
+    },
+    /// Instruction-predicated double-precision floating-point classification.
+    PredicatedF64Testp {
+        op: FloatTestpOp,
+        dst: u32,
+        src_lo: Operand,
+        src_hi: Operand,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
     },
     /// Sanitized double-precision compare feeding `selp.f64`.
     F64Selp {
@@ -5655,27 +5712,59 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f32_setp_bool(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        Ok(Inst::F32SetpBool {
-            bool_op: pick_predicate_bool_op(u)?,
-            base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-            base_a: self.pick_guard_operand(u)?,
-            base_b: self.pick_guard_operand(u)?,
-            cmp: pick_float_cmp(u)?,
-            dst: self.pick_non_output_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            base_pred: self.alloc_pred(),
-            pred: self.alloc_pred(),
-        })
+        if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+                guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                guard_ca: self.pick_guard_operand(u)?,
+                guard_cb: self.pick_guard_operand(u)?,
+                guard_pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+            })
+        }
     }
 
     fn pick_f32_testp(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        Ok(Inst::F32Testp {
-            op: self.pick_float_testp_op(u)?,
-            dst: self.pick_non_output_dst(u)?,
-            src: self.pick_reg_operand(u)?,
-            pred: self.alloc_pred(),
-        })
+        if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32Testp {
+                op: self.pick_float_testp_op(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                src: self.pick_reg_operand(u)?,
+                pred: self.alloc_pred(),
+                guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                guard_ca: self.pick_guard_operand(u)?,
+                guard_cb: self.pick_guard_operand(u)?,
+                guard_pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32Testp {
+                op: self.pick_float_testp_op(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                src: self.pick_reg_operand(u)?,
+                pred: self.alloc_pred(),
+            })
+        }
     }
 
     fn pick_f32_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -5926,28 +6015,61 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f64_setp_bool(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        Ok(Inst::F64SetpBool {
-            bool_op: pick_predicate_bool_op(u)?,
-            base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-            base_a: self.pick_guard_operand(u)?,
-            base_b: self.pick_guard_operand(u)?,
-            cmp: pick_float_cmp(u)?,
-            dst: self.pick_non_output_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            base_pred: self.alloc_pred(),
-            pred: self.alloc_pred(),
-        })
+        if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+                guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                guard_ca: self.pick_guard_operand(u)?,
+                guard_cb: self.pick_guard_operand(u)?,
+                guard_pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+            })
+        }
     }
 
     fn pick_f64_testp(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        Ok(Inst::F64Testp {
-            op: self.pick_float_testp_op(u)?,
-            dst: self.pick_non_output_dst(u)?,
-            src_lo: self.pick_reg_operand(u)?,
-            src_hi: self.pick_reg_operand(u)?,
-            pred: self.alloc_pred(),
-        })
+        if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64Testp {
+                op: self.pick_float_testp_op(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                src_lo: self.pick_reg_operand(u)?,
+                src_hi: self.pick_reg_operand(u)?,
+                pred: self.alloc_pred(),
+                guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                guard_ca: self.pick_guard_operand(u)?,
+                guard_cb: self.pick_guard_operand(u)?,
+                guard_pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64Testp {
+                op: self.pick_float_testp_op(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                src_lo: self.pick_reg_operand(u)?,
+                src_hi: self.pick_reg_operand(u)?,
+                pred: self.alloc_pred(),
+            })
+        }
     }
 
     fn pick_f64_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -7318,11 +7440,15 @@ impl<'a> Generator<'a> {
             | Inst::F32Set { dst, .. }
             | Inst::PredicatedF32Set { dst, .. }
             | Inst::F32SetpBool { dst, .. }
+            | Inst::PredicatedF32SetpBool { dst, .. }
             | Inst::F32Testp { dst, .. }
+            | Inst::PredicatedF32Testp { dst, .. }
             | Inst::F64Set { dst, .. }
             | Inst::PredicatedF64Set { dst, .. }
             | Inst::F64SetpBool { dst, .. }
+            | Inst::PredicatedF64SetpBool { dst, .. }
             | Inst::F64Testp { dst, .. }
+            | Inst::PredicatedF64Testp { dst, .. }
             | Inst::PredicatedSet { dst, .. }
             | Inst::WideSet { dst, .. }
             | Inst::PredicatedWideSet { dst, .. } => {
@@ -8552,6 +8678,40 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %f0, %f1, %p{base_pred};").unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
+            Inst::PredicatedF32SetpBool {
+                bool_op,
+                base_cmp,
+                base_a,
+                base_b,
+                cmp,
+                dst,
+                a,
+                b,
+                base_pred,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    {:<13} %p{base_pred}, ", base_cmp.mnemonic()).unwrap();
+                base_a.emit(s);
+                write!(s, ", ").unwrap();
+                base_b.emit(s);
+                writeln!(s, ";").unwrap();
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                writeln!(s, "    setp.ne.u32   %p{pred}, 0, 0;").unwrap();
+                let mnemonic = cmp.f32_setp_bool_mnemonic(bool_op);
+                writeln!(
+                    s,
+                    "    {} {mnemonic:<8} %p{pred}, %f0, %f1, %p{base_pred};",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
             Inst::F32Testp { op, dst, src, pred } => {
                 write!(s, "    mov.u32       %r{dst}, ").unwrap();
                 src.emit(s);
@@ -8559,6 +8719,31 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    mov.b32       %f0, %r{dst};").unwrap();
                 let mnemonic = op.f32_mnemonic();
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %f0;").unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
+            Inst::PredicatedF32Testp {
+                op,
+                dst,
+                src,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    mov.u32       %r{dst}, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    mov.b32       %f0, %r{dst};").unwrap();
+                writeln!(s, "    setp.ne.u32   %p{pred}, 0, 0;").unwrap();
+                let mnemonic = op.f32_mnemonic();
+                writeln!(
+                    s,
+                    "    {} {mnemonic:<8} %p{pred}, %f0;",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
             Inst::F32Selp {
@@ -8894,6 +9079,40 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %fd0, %fd1, %p{base_pred};").unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
+            Inst::PredicatedF64SetpBool {
+                bool_op,
+                base_cmp,
+                base_a,
+                base_b,
+                cmp,
+                dst,
+                a,
+                b,
+                base_pred,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    {:<13} %p{base_pred}, ", base_cmp.mnemonic()).unwrap();
+                base_a.emit(s);
+                write!(s, ", ").unwrap();
+                base_b.emit(s);
+                writeln!(s, ";").unwrap();
+                self.emit_sanitized_f64_operand(s, 0, a);
+                self.emit_sanitized_f64_operand(s, 1, b);
+                writeln!(s, "    setp.ne.u32   %p{pred}, 0, 0;").unwrap();
+                let mnemonic = cmp.f64_setp_bool_mnemonic(bool_op);
+                writeln!(
+                    s,
+                    "    {} {mnemonic:<8} %p{pred}, %fd0, %fd1, %p{base_pred};",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
             Inst::F64Testp {
                 op,
                 dst,
@@ -8911,6 +9130,36 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    mov.b64       %fd0, {{%r{dst}, %r{scratch}}};").unwrap();
                 let mnemonic = op.f64_mnemonic();
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %fd0;").unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
+            Inst::PredicatedF64Testp {
+                op,
+                dst,
+                src_lo,
+                src_hi,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                src_hi.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    mov.u32       %r{dst}, ").unwrap();
+                src_lo.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    mov.b64       %fd0, {{%r{dst}, %r{scratch}}};").unwrap();
+                writeln!(s, "    setp.ne.u32   %p{pred}, 0, 0;").unwrap();
+                let mnemonic = op.f64_mnemonic();
+                writeln!(
+                    s,
+                    "    {} {mnemonic:<8} %p{pred}, %fd0;",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
             Inst::F64Selp {
@@ -13698,7 +13947,11 @@ mod tests {
         ptx.lines().filter_map(predicated_mnemonic).any(|op| {
             SET_MNEMONICS.contains(&op)
                 || F32_COMPARE_MNEMONICS.contains(&op)
+                || F32_SETP_BOOL_MNEMONICS.contains(&op)
+                || F32_TESTP_MNEMONICS.contains(&op)
                 || F64_COMPARE_MNEMONICS.contains(&op)
+                || F64_SETP_BOOL_MNEMONICS.contains(&op)
+                || F64_TESTP_MNEMONICS.contains(&op)
         })
     }
 
@@ -16514,6 +16767,18 @@ mod tests {
     }
 
     #[test]
+    fn predicated_f32_testp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_selp: false,
+            emit_f64_compare: false,
+            emit_set: false,
+            emit_setp_bool: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F32_TESTP_MNEMONICS);
+    }
+
+    #[test]
     fn f32_compare_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_f32_compare: false,
@@ -16545,6 +16810,17 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_mnemonic_coverage(&cfg, 32768, 8192, F32_SETP_BOOL_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_f32_setp_bool_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_compare: false,
+            emit_set: false,
+            emit_f32_selp: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F32_SETP_BOOL_MNEMONICS);
     }
 
     #[test]
@@ -16815,6 +17091,18 @@ mod tests {
     }
 
     #[test]
+    fn predicated_f64_testp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_compare: false,
+            emit_f64_selp: false,
+            emit_set: false,
+            emit_setp_bool: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F64_TESTP_MNEMONICS);
+    }
+
+    #[test]
     fn f64_compare_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_f64_compare: false,
@@ -16846,6 +17134,17 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_mnemonic_coverage(&cfg, 32768, 8192, F64_SETP_BOOL_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_f64_setp_bool_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_compare: false,
+            emit_set: false,
+            emit_f64_selp: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F64_SETP_BOOL_MNEMONICS);
     }
 
     #[test]

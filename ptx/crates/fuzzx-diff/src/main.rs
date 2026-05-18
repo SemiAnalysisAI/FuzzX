@@ -370,7 +370,7 @@
 //!   DIV_DISABLE_PREDICATED_MAD_CARRY default: false; set 1/true/yes/on to suppress
 //!                         predicated mad.cc/madc.cc/madc carry-chain generation
 //!   DIV_DISABLE_PREDICATED_SET default: false; set 1/true/yes/on to suppress
-//!                         predicated integer and floating-point set.{cmp} generation
+//!                         predicated integer and floating-point set/setp/testp generation
 //!   DIV_DISABLE_PREDICATED_SELP default: false; set 1/true/yes/on to suppress
 //!                         instruction-predicated integer and floating-point selp generation
 //!   DIV_DISABLE_SAD default: false; set 1/true/yes/on to suppress
