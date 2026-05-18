@@ -113,6 +113,7 @@ pub struct GenConfig {
     pub emit_wide_memory: bool,
     pub emit_memory_cache_ops: bool,
     pub emit_volatile_memory: bool,
+    pub emit_bit_memory: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -326,6 +327,7 @@ impl Default for GenConfig {
             emit_wide_memory: true,
             emit_memory_cache_ops: true,
             emit_volatile_memory: true,
+            emit_bit_memory: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -749,6 +751,10 @@ enum GlobalLoadOp {
     U32,
     U64,
     S64,
+    B8,
+    B16,
+    B32,
+    B64,
 }
 
 impl GlobalLoadOp {
@@ -761,6 +767,10 @@ impl GlobalLoadOp {
             GlobalLoadOp::U32 => "ld.global.u32",
             GlobalLoadOp::U64 => "ld.global.u64",
             GlobalLoadOp::S64 => "ld.global.s64",
+            GlobalLoadOp::B8 => "ld.global.b8",
+            GlobalLoadOp::B16 => "ld.global.b16",
+            GlobalLoadOp::B32 => "ld.global.b32",
+            GlobalLoadOp::B64 => "ld.global.b64",
         }
     }
 
@@ -773,6 +783,10 @@ impl GlobalLoadOp {
             GlobalLoadOp::U32 => "u32",
             GlobalLoadOp::U64 => "u64",
             GlobalLoadOp::S64 => "s64",
+            GlobalLoadOp::B8 => "b8",
+            GlobalLoadOp::B16 => "b16",
+            GlobalLoadOp::B32 => "b32",
+            GlobalLoadOp::B64 => "b64",
         }
     }
 
@@ -790,15 +804,18 @@ impl GlobalLoadOp {
 
     fn width(self) -> u32 {
         match self {
-            GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
-            GlobalLoadOp::U16 | GlobalLoadOp::S16 => 2,
-            GlobalLoadOp::U32 => 4,
-            GlobalLoadOp::U64 | GlobalLoadOp::S64 => 8,
+            GlobalLoadOp::U8 | GlobalLoadOp::S8 | GlobalLoadOp::B8 => 1,
+            GlobalLoadOp::U16 | GlobalLoadOp::S16 | GlobalLoadOp::B16 => 2,
+            GlobalLoadOp::U32 | GlobalLoadOp::B32 => 4,
+            GlobalLoadOp::U64 | GlobalLoadOp::S64 | GlobalLoadOp::B64 => 8,
         }
     }
 
     fn is_wide(self) -> bool {
-        matches!(self, GlobalLoadOp::U64 | GlobalLoadOp::S64)
+        matches!(
+            self,
+            GlobalLoadOp::U64 | GlobalLoadOp::S64 | GlobalLoadOp::B64
+        )
     }
 }
 
@@ -832,6 +849,10 @@ enum GlobalStoreRoundtripOp {
     U32,
     U64,
     S64,
+    B8,
+    B16,
+    B32,
+    B64,
 }
 
 impl GlobalStoreRoundtripOp {
@@ -844,6 +865,10 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U32 => "ld.global.u32",
             GlobalStoreRoundtripOp::U64 => "ld.global.u64",
             GlobalStoreRoundtripOp::S64 => "ld.global.s64",
+            GlobalStoreRoundtripOp::B8 => "ld.global.b8",
+            GlobalStoreRoundtripOp::B16 => "ld.global.b16",
+            GlobalStoreRoundtripOp::B32 => "ld.global.b32",
+            GlobalStoreRoundtripOp::B64 => "ld.global.b64",
         }
     }
 
@@ -853,6 +878,10 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "st.global.u16",
             GlobalStoreRoundtripOp::U32 => "st.global.u32",
             GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => "st.global.u64",
+            GlobalStoreRoundtripOp::B8 => "st.global.b8",
+            GlobalStoreRoundtripOp::B16 => "st.global.b16",
+            GlobalStoreRoundtripOp::B32 => "st.global.b32",
+            GlobalStoreRoundtripOp::B64 => "st.global.b64",
         }
     }
 
@@ -862,6 +891,10 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "u16",
             GlobalStoreRoundtripOp::U32 => "u32",
             GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => "u64",
+            GlobalStoreRoundtripOp::B8 => "b8",
+            GlobalStoreRoundtripOp::B16 => "b16",
+            GlobalStoreRoundtripOp::B32 => "b32",
+            GlobalStoreRoundtripOp::B64 => "b64",
         }
     }
 
@@ -874,6 +907,10 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U32 => "u32",
             GlobalStoreRoundtripOp::U64 => "u64",
             GlobalStoreRoundtripOp::S64 => "s64",
+            GlobalStoreRoundtripOp::B8 => "b8",
+            GlobalStoreRoundtripOp::B16 => "b16",
+            GlobalStoreRoundtripOp::B32 => "b32",
+            GlobalStoreRoundtripOp::B64 => "b64",
         }
     }
 
@@ -895,17 +932,23 @@ impl GlobalStoreRoundtripOp {
 
     fn width(self) -> u32 {
         match self {
-            GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => 1,
-            GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => 2,
-            GlobalStoreRoundtripOp::U32 => 4,
-            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => 8,
+            GlobalStoreRoundtripOp::U8
+            | GlobalStoreRoundtripOp::S8
+            | GlobalStoreRoundtripOp::B8 => 1,
+            GlobalStoreRoundtripOp::U16
+            | GlobalStoreRoundtripOp::S16
+            | GlobalStoreRoundtripOp::B16 => 2,
+            GlobalStoreRoundtripOp::U32 | GlobalStoreRoundtripOp::B32 => 4,
+            GlobalStoreRoundtripOp::U64
+            | GlobalStoreRoundtripOp::S64
+            | GlobalStoreRoundtripOp::B64 => 8,
         }
     }
 
     fn is_wide(self) -> bool {
         matches!(
             self,
-            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64
+            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 | GlobalStoreRoundtripOp::B64
         )
     }
 }
@@ -919,6 +962,10 @@ enum ConstLoadOp {
     U32,
     U64,
     S64,
+    B8,
+    B16,
+    B32,
+    B64,
 }
 
 impl ConstLoadOp {
@@ -931,20 +978,24 @@ impl ConstLoadOp {
             ConstLoadOp::U32 => "ld.const.u32",
             ConstLoadOp::U64 => "ld.const.u64",
             ConstLoadOp::S64 => "ld.const.s64",
+            ConstLoadOp::B8 => "ld.const.b8",
+            ConstLoadOp::B16 => "ld.const.b16",
+            ConstLoadOp::B32 => "ld.const.b32",
+            ConstLoadOp::B64 => "ld.const.b64",
         }
     }
 
     fn width(self) -> u32 {
         match self {
-            ConstLoadOp::U8 | ConstLoadOp::S8 => 1,
-            ConstLoadOp::U16 | ConstLoadOp::S16 => 2,
-            ConstLoadOp::U32 => 4,
-            ConstLoadOp::U64 | ConstLoadOp::S64 => 8,
+            ConstLoadOp::U8 | ConstLoadOp::S8 | ConstLoadOp::B8 => 1,
+            ConstLoadOp::U16 | ConstLoadOp::S16 | ConstLoadOp::B16 => 2,
+            ConstLoadOp::U32 | ConstLoadOp::B32 => 4,
+            ConstLoadOp::U64 | ConstLoadOp::S64 | ConstLoadOp::B64 => 8,
         }
     }
 
     fn is_wide(self) -> bool {
-        matches!(self, ConstLoadOp::U64 | ConstLoadOp::S64)
+        matches!(self, ConstLoadOp::U64 | ConstLoadOp::S64 | ConstLoadOp::B64)
     }
 }
 
@@ -957,6 +1008,10 @@ enum LocalMemOp {
     U32,
     U64,
     S64,
+    B8,
+    B16,
+    B32,
+    B64,
 }
 
 impl LocalMemOp {
@@ -969,6 +1024,10 @@ impl LocalMemOp {
             LocalMemOp::U32 => "ld.local.u32",
             LocalMemOp::U64 => "ld.local.u64",
             LocalMemOp::S64 => "ld.local.s64",
+            LocalMemOp::B8 => "ld.local.b8",
+            LocalMemOp::B16 => "ld.local.b16",
+            LocalMemOp::B32 => "ld.local.b32",
+            LocalMemOp::B64 => "ld.local.b64",
         }
     }
 
@@ -978,20 +1037,24 @@ impl LocalMemOp {
             LocalMemOp::U16 | LocalMemOp::S16 => "st.local.u16",
             LocalMemOp::U32 => "st.local.u32",
             LocalMemOp::U64 | LocalMemOp::S64 => "st.local.u64",
+            LocalMemOp::B8 => "st.local.b8",
+            LocalMemOp::B16 => "st.local.b16",
+            LocalMemOp::B32 => "st.local.b32",
+            LocalMemOp::B64 => "st.local.b64",
         }
     }
 
     fn width(self) -> u32 {
         match self {
-            LocalMemOp::U8 | LocalMemOp::S8 => 1,
-            LocalMemOp::U16 | LocalMemOp::S16 => 2,
-            LocalMemOp::U32 => 4,
-            LocalMemOp::U64 | LocalMemOp::S64 => 8,
+            LocalMemOp::U8 | LocalMemOp::S8 | LocalMemOp::B8 => 1,
+            LocalMemOp::U16 | LocalMemOp::S16 | LocalMemOp::B16 => 2,
+            LocalMemOp::U32 | LocalMemOp::B32 => 4,
+            LocalMemOp::U64 | LocalMemOp::S64 | LocalMemOp::B64 => 8,
         }
     }
 
     fn is_wide(self) -> bool {
-        matches!(self, LocalMemOp::U64 | LocalMemOp::S64)
+        matches!(self, LocalMemOp::U64 | LocalMemOp::S64 | LocalMemOp::B64)
     }
 }
 
@@ -1004,6 +1067,10 @@ enum SharedMemOp {
     U32,
     U64,
     S64,
+    B8,
+    B16,
+    B32,
+    B64,
 }
 
 impl SharedMemOp {
@@ -1016,6 +1083,10 @@ impl SharedMemOp {
             SharedMemOp::U32 => "ld.shared.u32",
             SharedMemOp::U64 => "ld.shared.u64",
             SharedMemOp::S64 => "ld.shared.s64",
+            SharedMemOp::B8 => "ld.shared.b8",
+            SharedMemOp::B16 => "ld.shared.b16",
+            SharedMemOp::B32 => "ld.shared.b32",
+            SharedMemOp::B64 => "ld.shared.b64",
         }
     }
 
@@ -1028,6 +1099,10 @@ impl SharedMemOp {
             SharedMemOp::U32 => "u32",
             SharedMemOp::U64 => "u64",
             SharedMemOp::S64 => "s64",
+            SharedMemOp::B8 => "b8",
+            SharedMemOp::B16 => "b16",
+            SharedMemOp::B32 => "b32",
+            SharedMemOp::B64 => "b64",
         }
     }
 
@@ -1037,6 +1112,10 @@ impl SharedMemOp {
             SharedMemOp::U16 | SharedMemOp::S16 => "st.shared.u16",
             SharedMemOp::U32 => "st.shared.u32",
             SharedMemOp::U64 | SharedMemOp::S64 => "st.shared.u64",
+            SharedMemOp::B8 => "st.shared.b8",
+            SharedMemOp::B16 => "st.shared.b16",
+            SharedMemOp::B32 => "st.shared.b32",
+            SharedMemOp::B64 => "st.shared.b64",
         }
     }
 
@@ -1046,6 +1125,10 @@ impl SharedMemOp {
             SharedMemOp::U16 | SharedMemOp::S16 => "u16",
             SharedMemOp::U32 => "u32",
             SharedMemOp::U64 | SharedMemOp::S64 => "u64",
+            SharedMemOp::B8 => "b8",
+            SharedMemOp::B16 => "b16",
+            SharedMemOp::B32 => "b32",
+            SharedMemOp::B64 => "b64",
         }
     }
 
@@ -1059,15 +1142,15 @@ impl SharedMemOp {
 
     fn width(self) -> u32 {
         match self {
-            SharedMemOp::U8 | SharedMemOp::S8 => 1,
-            SharedMemOp::U16 | SharedMemOp::S16 => 2,
-            SharedMemOp::U32 => 4,
-            SharedMemOp::U64 | SharedMemOp::S64 => 8,
+            SharedMemOp::U8 | SharedMemOp::S8 | SharedMemOp::B8 => 1,
+            SharedMemOp::U16 | SharedMemOp::S16 | SharedMemOp::B16 => 2,
+            SharedMemOp::U32 | SharedMemOp::B32 => 4,
+            SharedMemOp::U64 | SharedMemOp::S64 | SharedMemOp::B64 => 8,
         }
     }
 
     fn is_wide(self) -> bool {
-        matches!(self, SharedMemOp::U64 | SharedMemOp::S64)
+        matches!(self, SharedMemOp::U64 | SharedMemOp::S64 | SharedMemOp::B64)
     }
 }
 
@@ -1076,13 +1159,16 @@ enum VectorMemOp {
     V2,
     V4,
     V2U64,
+    V2B32,
+    V4B32,
+    V2B64,
 }
 
 impl VectorMemOp {
     fn lanes(self) -> usize {
         match self {
-            VectorMemOp::V2 | VectorMemOp::V2U64 => 2,
-            VectorMemOp::V4 => 4,
+            VectorMemOp::V2 | VectorMemOp::V2U64 | VectorMemOp::V2B32 | VectorMemOp::V2B64 => 2,
+            VectorMemOp::V4 | VectorMemOp::V4B32 => 4,
         }
     }
 
@@ -1091,7 +1177,7 @@ impl VectorMemOp {
     }
 
     fn is_wide(self) -> bool {
-        matches!(self, VectorMemOp::V2U64)
+        matches!(self, VectorMemOp::V2U64 | VectorMemOp::V2B64)
     }
 
     fn global_load_mnemonic(self) -> &'static str {
@@ -1099,6 +1185,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "ld.global.v2.u32",
             VectorMemOp::V4 => "ld.global.v4.u32",
             VectorMemOp::V2U64 => "ld.global.v2.u64",
+            VectorMemOp::V2B32 => "ld.global.v2.b32",
+            VectorMemOp::V4B32 => "ld.global.v4.b32",
+            VectorMemOp::V2B64 => "ld.global.v2.b64",
         }
     }
 
@@ -1107,6 +1196,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "v2.u32",
             VectorMemOp::V4 => "v4.u32",
             VectorMemOp::V2U64 => "v2.u64",
+            VectorMemOp::V2B32 => "v2.b32",
+            VectorMemOp::V4B32 => "v4.b32",
+            VectorMemOp::V2B64 => "v2.b64",
         }
     }
 
@@ -1127,6 +1219,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "st.global.v2.u32",
             VectorMemOp::V4 => "st.global.v4.u32",
             VectorMemOp::V2U64 => "st.global.v2.u64",
+            VectorMemOp::V2B32 => "st.global.v2.b32",
+            VectorMemOp::V4B32 => "st.global.v4.b32",
+            VectorMemOp::V2B64 => "st.global.v2.b64",
         }
     }
 
@@ -1147,6 +1242,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "ld.const.v2.u32",
             VectorMemOp::V4 => "ld.const.v4.u32",
             VectorMemOp::V2U64 => "ld.const.v2.u64",
+            VectorMemOp::V2B32 => "ld.const.v2.b32",
+            VectorMemOp::V4B32 => "ld.const.v4.b32",
+            VectorMemOp::V2B64 => "ld.const.v2.b64",
         }
     }
 
@@ -1155,6 +1253,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "ld.local.v2.u32",
             VectorMemOp::V4 => "ld.local.v4.u32",
             VectorMemOp::V2U64 => "ld.local.v2.u64",
+            VectorMemOp::V2B32 => "ld.local.v2.b32",
+            VectorMemOp::V4B32 => "ld.local.v4.b32",
+            VectorMemOp::V2B64 => "ld.local.v2.b64",
         }
     }
 
@@ -1163,6 +1264,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "st.local.v2.u32",
             VectorMemOp::V4 => "st.local.v4.u32",
             VectorMemOp::V2U64 => "st.local.v2.u64",
+            VectorMemOp::V2B32 => "st.local.v2.b32",
+            VectorMemOp::V4B32 => "st.local.v4.b32",
+            VectorMemOp::V2B64 => "st.local.v2.b64",
         }
     }
 
@@ -1171,6 +1275,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "ld.shared.v2.u32",
             VectorMemOp::V4 => "ld.shared.v4.u32",
             VectorMemOp::V2U64 => "ld.shared.v2.u64",
+            VectorMemOp::V2B32 => "ld.shared.v2.b32",
+            VectorMemOp::V4B32 => "ld.shared.v4.b32",
+            VectorMemOp::V2B64 => "ld.shared.v2.b64",
         }
     }
 
@@ -1183,6 +1290,9 @@ impl VectorMemOp {
             VectorMemOp::V2 => "st.shared.v2.u32",
             VectorMemOp::V4 => "st.shared.v4.u32",
             VectorMemOp::V2U64 => "st.shared.v2.u64",
+            VectorMemOp::V2B32 => "st.shared.v2.b32",
+            VectorMemOp::V4B32 => "st.shared.v4.b32",
+            VectorMemOp::V2B64 => "st.shared.v2.b64",
         }
     }
 
@@ -5990,12 +6100,33 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
         let base_ops = [
             GlobalLoadOp::U8,
             GlobalLoadOp::S8,
             GlobalLoadOp::U16,
             GlobalLoadOp::S16,
             GlobalLoadOp::U32,
+        ];
+        let bit_ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+            GlobalLoadOp::B8,
+            GlobalLoadOp::B16,
+            GlobalLoadOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+            GlobalLoadOp::B32,
         ];
         let wide_ops = [
             GlobalLoadOp::U8,
@@ -6006,10 +6137,41 @@ impl<'a> Generator<'a> {
             GlobalLoadOp::U64,
             GlobalLoadOp::S64,
         ];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+            GlobalLoadOp::U64,
+            GlobalLoadOp::S64,
+            GlobalLoadOp::B8,
+            GlobalLoadOp::B16,
+            GlobalLoadOp::B32,
+            GlobalLoadOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+            GlobalLoadOp::U64,
+            GlobalLoadOp::S64,
+            GlobalLoadOp::B32,
+            GlobalLoadOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
         };
         let op = *u.choose(ops)?;
         let volatile = self.pick_volatile_memory(u)?;
@@ -6022,7 +6184,7 @@ impl<'a> Generator<'a> {
         let max_offset = input_len() as u32 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
         let dst = self.pick_dst(u)?;
-        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+        if predicated {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedGlobalLoad {
                 op,
@@ -6046,12 +6208,33 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_global_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
         let base_ops = [
             GlobalStoreRoundtripOp::U8,
             GlobalStoreRoundtripOp::S8,
             GlobalStoreRoundtripOp::U16,
             GlobalStoreRoundtripOp::S16,
             GlobalStoreRoundtripOp::U32,
+        ];
+        let bit_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::B8,
+            GlobalStoreRoundtripOp::B16,
+            GlobalStoreRoundtripOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::B32,
         ];
         let wide_ops = [
             GlobalStoreRoundtripOp::U8,
@@ -6062,10 +6245,41 @@ impl<'a> Generator<'a> {
             GlobalStoreRoundtripOp::U64,
             GlobalStoreRoundtripOp::S64,
         ];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+            GlobalStoreRoundtripOp::B8,
+            GlobalStoreRoundtripOp::B16,
+            GlobalStoreRoundtripOp::B32,
+            GlobalStoreRoundtripOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+            GlobalStoreRoundtripOp::B32,
+            GlobalStoreRoundtripOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
         };
         let op = *u.choose(ops)?;
         let volatile = self.pick_volatile_memory(u)?;
@@ -6079,7 +6293,7 @@ impl<'a> Generator<'a> {
         let offset = u.int_in_range(0..=max_offset / width)? * width;
         let dst = self.pick_dst(u)?;
         let src = self.pick_safe_reg(u)?;
-        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+        if predicated {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedGlobalStoreRoundtrip {
                 op,
@@ -6105,12 +6319,33 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_const_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
         let base_ops = [
             ConstLoadOp::U8,
             ConstLoadOp::S8,
             ConstLoadOp::U16,
             ConstLoadOp::S16,
             ConstLoadOp::U32,
+        ];
+        let bit_ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+            ConstLoadOp::B8,
+            ConstLoadOp::B16,
+            ConstLoadOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+            ConstLoadOp::B32,
         ];
         let wide_ops = [
             ConstLoadOp::U8,
@@ -6121,17 +6356,48 @@ impl<'a> Generator<'a> {
             ConstLoadOp::U64,
             ConstLoadOp::S64,
         ];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+            ConstLoadOp::U64,
+            ConstLoadOp::S64,
+            ConstLoadOp::B8,
+            ConstLoadOp::B16,
+            ConstLoadOp::B32,
+            ConstLoadOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+            ConstLoadOp::U64,
+            ConstLoadOp::S64,
+            ConstLoadOp::B32,
+            ConstLoadOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
         };
         let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = CONST_MEM_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
         let dst = self.pick_dst(u)?;
-        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+        if predicated {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedConstLoad {
                 op,
@@ -6147,12 +6413,33 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_local_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
         let base_ops = [
             LocalMemOp::U8,
             LocalMemOp::S8,
             LocalMemOp::U16,
             LocalMemOp::S16,
             LocalMemOp::U32,
+        ];
+        let bit_ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+            LocalMemOp::B8,
+            LocalMemOp::B16,
+            LocalMemOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+            LocalMemOp::B32,
         ];
         let wide_ops = [
             LocalMemOp::U8,
@@ -6163,10 +6450,41 @@ impl<'a> Generator<'a> {
             LocalMemOp::U64,
             LocalMemOp::S64,
         ];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+            LocalMemOp::U64,
+            LocalMemOp::S64,
+            LocalMemOp::B8,
+            LocalMemOp::B16,
+            LocalMemOp::B32,
+            LocalMemOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+            LocalMemOp::U64,
+            LocalMemOp::S64,
+            LocalMemOp::B32,
+            LocalMemOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
         };
         let op = *u.choose(ops)?;
         let width = op.width();
@@ -6174,7 +6492,7 @@ impl<'a> Generator<'a> {
         let offset = u.int_in_range(0..=max_offset / width)? * width;
         let dst = self.pick_dst(u)?;
         let src = self.pick_safe_reg(u)?;
-        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+        if predicated {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedLocalMem {
                 op,
@@ -6196,12 +6514,33 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_shared_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
         let base_ops = [
             SharedMemOp::U8,
             SharedMemOp::S8,
             SharedMemOp::U16,
             SharedMemOp::S16,
             SharedMemOp::U32,
+        ];
+        let bit_ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+            SharedMemOp::B8,
+            SharedMemOp::B16,
+            SharedMemOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+            SharedMemOp::B32,
         ];
         let wide_ops = [
             SharedMemOp::U8,
@@ -6212,10 +6551,41 @@ impl<'a> Generator<'a> {
             SharedMemOp::U64,
             SharedMemOp::S64,
         ];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+            SharedMemOp::U64,
+            SharedMemOp::S64,
+            SharedMemOp::B8,
+            SharedMemOp::B16,
+            SharedMemOp::B32,
+            SharedMemOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+            SharedMemOp::U64,
+            SharedMemOp::S64,
+            SharedMemOp::B32,
+            SharedMemOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
         };
         let op = *u.choose(ops)?;
         let width = op.width();
@@ -6224,7 +6594,7 @@ impl<'a> Generator<'a> {
         let dst = self.pick_dst(u)?;
         let src = self.pick_safe_reg(u)?;
         let volatile = self.pick_volatile_memory(u)?;
-        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+        if predicated {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedSharedMem {
                 op,
@@ -6263,11 +6633,26 @@ impl<'a> Generator<'a> {
 
     fn pick_vector_op(&mut self, u: &mut Unstructured) -> Result<VectorMemOp> {
         let base_ops = [VectorMemOp::V2, VectorMemOp::V4];
+        let bit_ops = [
+            VectorMemOp::V2,
+            VectorMemOp::V4,
+            VectorMemOp::V2B32,
+            VectorMemOp::V4B32,
+        ];
         let wide_ops = [VectorMemOp::V2, VectorMemOp::V4, VectorMemOp::V2U64];
-        let ops = if self.cfg.emit_wide_memory {
-            &wide_ops[..]
-        } else {
-            &base_ops[..]
+        let wide_bit_ops = [
+            VectorMemOp::V2,
+            VectorMemOp::V4,
+            VectorMemOp::V2U64,
+            VectorMemOp::V2B32,
+            VectorMemOp::V4B32,
+            VectorMemOp::V2B64,
+        ];
+        let ops = match (self.cfg.emit_wide_memory, self.cfg.emit_bit_memory) {
+            (true, true) => &wide_bit_ops[..],
+            (true, false) => &wide_ops[..],
+            (false, true) => &bit_ops[..],
+            (false, false) => &base_ops[..],
         };
         Ok(*u.choose(ops)?)
     }
@@ -9121,6 +9506,13 @@ impl<'a> Generator<'a> {
         is_wide: bool,
         pred: Option<u32>,
     ) {
+        let narrow_bit_mask = if mnemonic.ends_with(".b8") {
+            Some(0xff)
+        } else if mnemonic.ends_with(".b16") {
+            Some(0xffff)
+        } else {
+            None
+        };
         if is_wide {
             let scratch = self.wide_scratch_hi_reg();
             if let Some(pred) = pred {
@@ -9132,15 +9524,16 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
             }
         } else if let Some(pred) = pred {
-            writeln!(
-                s,
-                "    {} {:<8} %r{dst}, [{addr} + {offset}];",
-                pred_guard(pred),
-                mnemonic
-            )
-            .unwrap();
+            let guard = pred_guard(pred);
+            writeln!(s, "    {guard} {mnemonic:<8} %r{dst}, [{addr} + {offset}];").unwrap();
+            if let Some(mask) = narrow_bit_mask {
+                writeln!(s, "    {guard} and.b32  %r{dst}, %r{dst}, {mask};").unwrap();
+            }
         } else {
             writeln!(s, "    {mnemonic:<13} %r{dst}, [{addr} + {offset}];").unwrap();
+            if let Some(mask) = narrow_bit_mask {
+                writeln!(s, "    and.b32       %r{dst}, %r{dst}, {mask};").unwrap();
+            }
         }
     }
 
@@ -14353,22 +14746,36 @@ mod tests {
     const WIDE_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.u64",
         "ld.global.s64",
+        "ld.global.b64",
         "st.global.u64",
+        "st.global.b64",
         "ld.const.u64",
         "ld.const.s64",
+        "ld.const.b64",
         "ld.local.u64",
         "ld.local.s64",
+        "ld.local.b64",
         "st.local.u64",
+        "st.local.b64",
         "ld.shared.u64",
         "ld.shared.s64",
+        "ld.shared.b64",
         "st.shared.u64",
+        "st.shared.b64",
         "ld.global.v2.u64",
+        "ld.global.v2.b64",
         "st.global.v2.u64",
+        "st.global.v2.b64",
         "ld.const.v2.u64",
+        "ld.const.v2.b64",
         "ld.local.v2.u64",
+        "ld.local.v2.b64",
         "st.local.v2.u64",
+        "st.local.v2.b64",
         "ld.shared.v2.u64",
+        "ld.shared.v2.b64",
         "st.shared.v2.u64",
+        "st.shared.v2.b64",
     ];
     const VECTOR_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.v2.u32",
@@ -14392,6 +14799,57 @@ mod tests {
         "st.shared.v2.u32",
         "st.shared.v4.u32",
         "st.shared.v2.u64",
+    ];
+    const BIT_MEMORY_MNEMONICS: &[&str] = &[
+        "ld.global.b8",
+        "ld.global.b16",
+        "ld.global.b32",
+        "ld.global.b64",
+        "st.global.b8",
+        "st.global.b16",
+        "st.global.b32",
+        "st.global.b64",
+        "ld.const.b8",
+        "ld.const.b16",
+        "ld.const.b32",
+        "ld.const.b64",
+        "ld.local.b8",
+        "ld.local.b16",
+        "ld.local.b32",
+        "ld.local.b64",
+        "st.local.b8",
+        "st.local.b16",
+        "st.local.b32",
+        "st.local.b64",
+        "ld.shared.b8",
+        "ld.shared.b16",
+        "ld.shared.b32",
+        "ld.shared.b64",
+        "st.shared.b8",
+        "st.shared.b16",
+        "st.shared.b32",
+        "st.shared.b64",
+        "ld.global.v2.b32",
+        "ld.global.v4.b32",
+        "ld.global.v2.b64",
+        "st.global.v2.b32",
+        "st.global.v4.b32",
+        "st.global.v2.b64",
+        "ld.const.v2.b32",
+        "ld.const.v4.b32",
+        "ld.const.v2.b64",
+        "ld.local.v2.b32",
+        "ld.local.v4.b32",
+        "ld.local.v2.b64",
+        "st.local.v2.b32",
+        "st.local.v4.b32",
+        "st.local.v2.b64",
+        "ld.shared.v2.b32",
+        "ld.shared.v4.b32",
+        "ld.shared.v2.b64",
+        "st.shared.v2.b32",
+        "st.shared.v4.b32",
+        "st.shared.v2.b64",
     ];
     const F32_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f32",
@@ -15533,22 +15991,35 @@ mod tests {
 
     fn scalar_global_load_width(type_suffix: &str) -> Option<u32> {
         match type_suffix {
-            "u8" | "s8" => Some(1),
-            "u16" | "s16" => Some(2),
-            "u32" => Some(4),
-            "u64" | "s64" => Some(8),
+            "u8" | "s8" | "b8" => Some(1),
+            "u16" | "s16" | "b16" => Some(2),
+            "u32" | "b32" => Some(4),
+            "u64" | "s64" | "b64" => Some(8),
             _ => None,
         }
     }
 
     fn scalar_global_store_width(type_suffix: &str) -> Option<u32> {
         match type_suffix {
-            "u8" => Some(1),
-            "u16" => Some(2),
-            "u32" => Some(4),
-            "u64" => Some(8),
+            "u8" | "b8" => Some(1),
+            "u16" | "b16" => Some(2),
+            "u32" | "b32" => Some(4),
+            "u64" | "b64" => Some(8),
             _ => None,
         }
+    }
+
+    fn const_load_width(mnemonic: &str) -> Option<u32> {
+        mnemonic
+            .strip_prefix("ld.const.")
+            .and_then(scalar_global_load_width)
+    }
+
+    fn local_memory_width(mnemonic: &str) -> Option<u32> {
+        let type_suffix = mnemonic
+            .strip_prefix("ld.local.")
+            .or_else(|| mnemonic.strip_prefix("st.local."))?;
+        scalar_global_load_width(type_suffix).or_else(|| scalar_global_store_width(type_suffix))
     }
 
     fn shared_memory_width(mnemonic: &str) -> Option<u32> {
@@ -15562,8 +16033,8 @@ mod tests {
 
     fn vector_memory_width_suffix(type_suffix: &str) -> Option<u32> {
         match type_suffix {
-            "v2.u32" => Some(8),
-            "v4.u32" | "v2.u64" => Some(16),
+            "v2.u32" | "v2.b32" => Some(8),
+            "v4.u32" | "v2.u64" | "v4.b32" | "v2.b64" => Some(16),
             _ => None,
         }
     }
@@ -15598,6 +16069,19 @@ mod tests {
                 .strip_prefix(prefix)
                 .and_then(scalar_global_store_width)
         })
+    }
+
+    fn const_vector_width(mnemonic: &str) -> Option<u32> {
+        mnemonic
+            .strip_prefix("ld.const.")
+            .and_then(vector_memory_width_suffix)
+    }
+
+    fn local_vector_width(mnemonic: &str) -> Option<u32> {
+        mnemonic
+            .strip_prefix("ld.local.")
+            .or_else(|| mnemonic.strip_prefix("st.local."))
+            .and_then(vector_memory_width_suffix)
     }
 
     fn global_vector_width(mnemonic: &str) -> Option<u32> {
@@ -15655,6 +16139,23 @@ mod tests {
         mnemonic.starts_with("ld.volatile.") || mnemonic.starts_with("st.volatile.")
     }
 
+    fn is_bit_memory_mnemonic(mnemonic: &str) -> bool {
+        let is_memory = global_load_width(mnemonic).is_some()
+            || global_store_width(mnemonic).is_some()
+            || const_load_width(mnemonic).is_some()
+            || local_memory_width(mnemonic).is_some()
+            || shared_memory_width(mnemonic).is_some()
+            || global_vector_width(mnemonic).is_some()
+            || shared_vector_width(mnemonic).is_some()
+            || const_vector_width(mnemonic).is_some()
+            || local_vector_width(mnemonic).is_some();
+        is_memory
+            && (mnemonic.contains(".b8")
+                || mnemonic.contains(".b16")
+                || mnemonic.contains(".b32")
+                || mnemonic.contains(".b64"))
+    }
+
     fn body_global_load(line: &str) -> Option<(&str, u32)> {
         let line = line.trim_start();
         if !line.contains("[%rd6 + ") {
@@ -15709,8 +16210,8 @@ mod tests {
         if !line.contains("[%rd6 + ") {
             return None;
         }
-        let mnemonic = line.split_whitespace().next()?;
-        if !CONST_LOAD_MNEMONICS.contains(&mnemonic) {
+        let mnemonic = body_mnemonic(line)?;
+        if const_load_width(mnemonic).is_none() {
             return None;
         }
         let offset = line
@@ -15733,10 +16234,8 @@ mod tests {
         if !line.contains("[%rd6 + ") {
             return None;
         }
-        let mnemonic = line.split_whitespace().next()?;
-        if !LOCAL_MEM_LOAD_MNEMONICS.contains(&mnemonic)
-            && !LOCAL_MEM_STORE_MNEMONICS.contains(&mnemonic)
-        {
+        let mnemonic = body_mnemonic(line)?;
+        if local_memory_width(mnemonic).is_none() {
             return None;
         }
         let offset = line
@@ -18454,6 +18953,35 @@ mod tests {
     }
 
     #[test]
+    fn bit_memory_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_memory_cache_ops: false,
+            emit_volatile_memory: false,
+            ..coverage_heavy_config()
+        };
+        assert_body_mnemonic_coverage(&cfg, 16384, 32768, BIT_MEMORY_MNEMONICS);
+    }
+
+    #[test]
+    fn bit_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bit_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ptx.lines().filter_map(body_mnemonic) {
+                assert!(
+                    !is_bit_memory_mnemonic(mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn const_load_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; CONST_LOAD_MNEMONICS.len()];
@@ -18507,13 +19035,7 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, offset) in ptx.lines().filter_map(body_const_load) {
-                let width = match mnemonic {
-                    "ld.const.u8" | "ld.const.s8" => 1,
-                    "ld.const.u16" | "ld.const.s16" => 2,
-                    "ld.const.u32" => 4,
-                    "ld.const.u64" | "ld.const.s64" => 8,
-                    _ => unreachable!(),
-                };
+                let width = const_load_width(mnemonic).unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -18593,13 +19115,7 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, offset) in ptx.lines().filter_map(body_local_mem_access) {
-                let width = match mnemonic {
-                    "ld.local.u8" | "ld.local.s8" | "st.local.u8" => 1,
-                    "ld.local.u16" | "ld.local.s16" | "st.local.u16" => 2,
-                    "ld.local.u32" | "st.local.u32" => 4,
-                    "ld.local.u64" | "ld.local.s64" | "st.local.u64" => 8,
-                    _ => unreachable!(),
-                };
+                let width = local_memory_width(mnemonic).unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -18876,6 +19392,10 @@ mod tests {
                     N_OUTPUTS * 4
                 } else if shared_vector_width(mnemonic).is_some() && address == "%rd6" {
                     SHARED_SLOT_BYTES
+                } else if const_vector_width(mnemonic).is_some() && address == "%rd6" {
+                    CONST_MEM_BYTES
+                } else if local_vector_width(mnemonic).is_some() && address == "%rd6" {
+                    LOCAL_MEM_BYTES
                 } else {
                     match (mnemonic, address) {
                         ("ld.const.v2.u32" | "ld.const.v4.u32" | "ld.const.v2.u64", "%rd6") => {
