@@ -2856,6 +2856,120 @@ Value *emitRandomPackUnpackIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *callI32UnaryIntrinsic(IRBuilder<NoFolder> &B, Module &M,
+                             Intrinsic::ID ID, Value *V, const Twine &Name) {
+  Type *I32 = Type::getInt32Ty(M.getContext());
+  if (ID == Intrinsic::ctlz || ID == Intrinsic::cttz)
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}),
+                        {V, ConstantInt::getFalse(M.getContext())}, Name);
+  return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {I32}), {V},
+                      Name);
+}
+
+Value *emitRandomBitCountIdiom(IRBuilder<NoFolder> &B, Module &M, Value *A,
+                               Value *Bv, std::minstd_rand &Gen,
+                               StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  switch (Gen() % 8) {
+  case 0: {
+    Value *Neg = B.CreateSub(ci32(Ctx, 0), A, Twine(NamePrefix) + ".neg");
+    Value *LowBit = B.CreateAnd(A, Neg, Twine(NamePrefix) + ".lowbit");
+    Value *LowPop = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, LowBit,
+                                          Twine(NamePrefix) + ".lowpop");
+    return B.CreateXor(LowBit, LowPop, Twine(NamePrefix) + ".lowbit.mix");
+  }
+  case 1: {
+    Value *Dec = B.CreateSub(A, ci32(Ctx, 1), Twine(NamePrefix) + ".dec");
+    Value *Cleared = B.CreateAnd(A, Dec, Twine(NamePrefix) + ".clear.lowbit");
+    Value *PopA = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, A,
+                                        Twine(NamePrefix) + ".pop.a");
+    Value *PopCleared = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, Cleared,
+                                              Twine(NamePrefix) + ".pop.clear");
+    Value *Delta =
+        B.CreateSub(PopA, PopCleared, Twine(NamePrefix) + ".pop.delta");
+    return B.CreateAdd(Cleared, Delta, Twine(NamePrefix) + ".clear.mix");
+  }
+  case 2: {
+    Value *X = A;
+    X = B.CreateOr(X, B.CreateLShr(X, ci32(Ctx, 1),
+                                   Twine(NamePrefix) + ".smear1.shr"),
+                   Twine(NamePrefix) + ".smear1");
+    X = B.CreateOr(X, B.CreateLShr(X, ci32(Ctx, 2),
+                                   Twine(NamePrefix) + ".smear2.shr"),
+                   Twine(NamePrefix) + ".smear2");
+    X = B.CreateOr(X, B.CreateLShr(X, ci32(Ctx, 4),
+                                   Twine(NamePrefix) + ".smear4.shr"),
+                   Twine(NamePrefix) + ".smear4");
+    X = B.CreateOr(X, B.CreateLShr(X, ci32(Ctx, 8),
+                                   Twine(NamePrefix) + ".smear8.shr"),
+                   Twine(NamePrefix) + ".smear8");
+    X = B.CreateOr(X, B.CreateLShr(X, ci32(Ctx, 16),
+                                   Twine(NamePrefix) + ".smear16.shr"),
+                   Twine(NamePrefix) + ".smear16");
+    Value *Pop =
+        callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, X,
+                              Twine(NamePrefix) + ".smear.pop");
+    return B.CreateSub(X, Pop, Twine(NamePrefix) + ".smear.mix");
+  }
+  case 3: {
+    Value *Byte = B.CreateAnd(A, ci32(Ctx, 0xff), Twine(NamePrefix) + ".byte");
+    Value *Pop = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, Byte,
+                                       Twine(NamePrefix) + ".byte.pop");
+    Value *Parity =
+        B.CreateAnd(Pop, ci32(Ctx, 1), Twine(NamePrefix) + ".parity");
+    Value *Odd =
+        B.CreateICmpNE(Parity, ci32(Ctx, 0), Twine(NamePrefix) + ".odd");
+    return B.CreateSelect(Odd, Bv, A, Twine(NamePrefix) + ".parity.select");
+  }
+  case 4: {
+    Value *PopA = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, A,
+                                        Twine(NamePrefix) + ".pop.a");
+    Value *PopB = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, Bv,
+                                        Twine(NamePrefix) + ".pop.b");
+    Value *Cmp =
+        B.CreateICmpUGT(PopA, PopB, Twine(NamePrefix) + ".pop.cmp");
+    return B.CreateSelect(Cmp, A, Bv, Twine(NamePrefix) + ".pop.select");
+  }
+  case 5: {
+    Value *Leading = callI32UnaryIntrinsic(B, M, Intrinsic::ctlz, A,
+                                           Twine(NamePrefix) + ".ctlz");
+    Value *Trailing = callI32UnaryIntrinsic(B, M, Intrinsic::cttz, Bv,
+                                            Twine(NamePrefix) + ".cttz");
+    Value *Shift =
+        B.CreateAnd(Trailing, ci32(Ctx, 31), Twine(NamePrefix) + ".shift");
+    Value *Bit =
+        B.CreateShl(ci32(Ctx, 1), Shift, Twine(NamePrefix) + ".bit");
+    return B.CreateXor(Bit, Leading, Twine(NamePrefix) + ".count.bit.xor");
+  }
+  case 6: {
+    Value *Rev = callI32UnaryIntrinsic(B, M, Intrinsic::bitreverse, A,
+                                       Twine(NamePrefix) + ".reverse");
+    Value *Hi = B.CreateLShr(Rev, ci32(Ctx, 16), Twine(NamePrefix) + ".hi");
+    Value *Fold =
+        B.CreateXor(Rev, Hi, Twine(NamePrefix) + ".reverse.fold");
+    Value *Pop = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, Fold,
+                                       Twine(NamePrefix) + ".reverse.pop");
+    return B.CreateAdd(Fold, Pop, Twine(NamePrefix) + ".reverse.mix");
+  }
+  default: {
+    Value *Diff = B.CreateXor(A, Bv, Twine(NamePrefix) + ".diff");
+    Value *Pop = callI32UnaryIntrinsic(B, M, Intrinsic::ctpop, Diff,
+                                       Twine(NamePrefix) + ".diff.pop");
+    Value *Shift = B.CreateAnd(Pop, ci32(Ctx, 31),
+                               Twine(NamePrefix) + ".diff.shift");
+    Value *Bit =
+        B.CreateShl(ci32(Ctx, 1), Shift, Twine(NamePrefix) + ".diff.bit");
+    Value *HasBit = B.CreateICmpNE(
+        B.CreateAnd(A, Bit, Twine(NamePrefix) + ".test"), ci32(Ctx, 0),
+        Twine(NamePrefix) + ".hasbit");
+    Value *Set = B.CreateOr(A, Bit, Twine(NamePrefix) + ".setbit");
+    Value *Toggled = B.CreateXor(A, Bit, Twine(NamePrefix) + ".togglebit");
+    return B.CreateSelect(HasBit, Toggled, Set,
+                          Twine(NamePrefix) + ".bit.select");
+  }
+  }
+}
+
 Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
                                      Value *Bv, std::minstd_rand &Gen,
                                      StringRef NamePrefix) {
@@ -4101,7 +4215,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 146) {
+  switch (Gen() % 154) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4335,6 +4449,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 129:
     return emitRandomPackUnpackIdiom(B, A, Bv, Gen,
                                      "fuzz.packunpack.idiom");
+  case 130:
+  case 131:
+  case 132:
+  case 133:
+  case 134:
+  case 135:
+  case 136:
+  case 137:
+    return emitRandomBitCountIdiom(B, M, A, Bv, Gen,
+                                   "fuzz.bitcount.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4369,7 +4493,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 130) {
+  switch (Gen() % 138) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4596,6 +4720,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 121:
     return emitRandomPackUnpackIdiom(B, A, Bv, Gen,
                                      "fuzz.cfg.packunpack.idiom");
+  case 122:
+  case 123:
+  case 124:
+  case 125:
+  case 126:
+  case 127:
+  case 128:
+  case 129:
+    return emitRandomBitCountIdiom(B, M, A, Bv, Gen,
+                                   "fuzz.cfg.bitcount.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
