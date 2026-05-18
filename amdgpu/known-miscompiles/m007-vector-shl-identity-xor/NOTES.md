@@ -70,12 +70,14 @@ global_store_dword v[0:1], v2, off
 
 ## Checked Toolchains
 
-Checked on 2026-05-16 on `gfx950`.
+Checked on 2026-05-16 on `gfx950`; the patched ROCm HEAD result was rechecked
+on 2026-05-18.
 
 | Toolchain | Result |
 | --- | --- |
 | Upstream LLVM 23.0.0git, commit `a1403139d0ba7fdfc82d6ae8a2884f27fec9fa15`, built with sanitizer coverage | Reproduces. |
 | ROCm 7.1.1 clang 20.0.0git, commit `27682a16360e33e37c4f3cc6adf9a620733f8fe1` | Does not reproduce this reduced case. |
+| ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
 
 Original fuzzer input SHA-1:
 `cd5df35736aa0812c2e76e0e20203f8b3f4afb40`.
