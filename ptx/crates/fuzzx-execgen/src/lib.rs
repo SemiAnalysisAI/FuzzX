@@ -2822,6 +2822,18 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// Predicated sanitized single-precision floating-point arithmetic.
+    PredicatedF32Arith {
+        op: F32ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Sanitized f32 arithmetic with explicit non-default rounding modes.
     F32RoundingArith {
         op: F32RoundingArithOp,
@@ -2897,6 +2909,18 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// Predicated sanitized double-precision floating-point arithmetic.
+    PredicatedF64Arith {
+        op: F64ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized f64 arithmetic with explicit non-default rounding modes.
     F64RoundingArith {
@@ -5241,13 +5265,28 @@ impl<'a> Generator<'a> {
             F32ArithOp::Min,
             F32ArithOp::Max,
         ];
-        Ok(Inst::F32Arith {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            c: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f32_rounding_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -5427,13 +5466,28 @@ impl<'a> Generator<'a> {
             F64ArithOp::Min,
             F64ArithOp::Max,
         ];
-        Ok(Inst::F64Arith {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            c: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f64_rounding_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -6989,6 +7043,7 @@ impl<'a> Generator<'a> {
             | Inst::SharedMem { dst, .. }
             | Inst::PredicatedSharedMem { dst, .. }
             | Inst::F32Arith { dst, .. }
+            | Inst::PredicatedF32Arith { dst, .. }
             | Inst::F32RoundingArith { dst, .. }
             | Inst::F32Unary { dst, .. }
             | Inst::F32Cvt { dst, .. }
@@ -6996,6 +7051,7 @@ impl<'a> Generator<'a> {
             | Inst::F32SpecialMath { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::F64Arith { dst, .. }
+            | Inst::PredicatedF64Arith { dst, .. }
             | Inst::F64RoundingArith { dst, .. }
             | Inst::F64Unary { dst, .. }
             | Inst::F64Cvt { dst, .. }
@@ -7880,6 +7936,51 @@ impl<'a> Generator<'a> {
                 }
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
             }
+            Inst::PredicatedF32Arith {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f32_operand(s, 0, a);
+                if op.uses_arbitrary_sign_b() {
+                    let scratch = self.wide_scratch_hi_reg();
+                    write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(s, "    mov.b32       %f1, %r{scratch};").unwrap();
+                } else if op.needs_positive_b() {
+                    self.emit_sanitized_f32_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f32_operand(s, 1, b);
+                }
+                writeln!(s, "    mov.f32       %f3, %f0;").unwrap();
+                if op.uses_c() {
+                    self.emit_sanitized_f32_operand(s, 2, c);
+                    writeln!(
+                        s,
+                        "    {} {:<8} %f3, %f0, %f1, %f2;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %f3, %f0, %f1;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+            }
             Inst::F32RoundingArith { op, dst, a, b, c } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
                 if op.needs_positive_b() {
@@ -7992,6 +8093,52 @@ impl<'a> Generator<'a> {
                     writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %fd2;", op.mnemonic()).unwrap();
                 } else {
                     writeln!(s, "    {:<13} %fd3, %fd0, %fd1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+            }
+            Inst::PredicatedF64Arith {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f64_operand(s, 0, a);
+                if op.uses_arbitrary_sign_b() {
+                    let scratch = self.wide_scratch_hi_reg();
+                    write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                    writeln!(s, "    mov.b64       %fd1, {{%r{dst}, %r{scratch}}};").unwrap();
+                } else if op.needs_positive_b() {
+                    self.emit_sanitized_f64_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f64_operand(s, 1, b);
+                }
+                writeln!(s, "    mov.f64       %fd3, %fd0;").unwrap();
+                if op.uses_c() {
+                    self.emit_sanitized_f64_operand(s, 2, c);
+                    writeln!(
+                        s,
+                        "    {} {:<8} %fd3, %fd0, %fd1, %fd2;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %fd3, %fd0, %fd1;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
                 }
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
             }
@@ -12700,7 +12847,40 @@ mod tests {
                 || PACKED_ADD_MNEMONICS.contains(&op)
                 || PACKED_MINMAX_MNEMONICS.contains(&op)
                 || SCALAR_16BIT_MNEMONICS.contains(&op)
+                || F32_ARITH_MNEMONICS.contains(&op)
+                || F64_ARITH_MNEMONICS.contains(&op)
         })
+    }
+
+    fn assert_predicated_mnemonic_coverage(
+        cfg: &GenConfig,
+        program_bytes: usize,
+        n_seeds: u64,
+        mnemonics: &[&'static str],
+    ) {
+        let mut found = vec![false; mnemonics.len()];
+
+        for seed in 0..n_seeds {
+            let bytes = bytes_from_seed(seed, program_bytes);
+            let ptx = generate_from_bytes_with_config(&bytes, cfg).unwrap();
+            let seen: HashSet<_> = ptx.lines().filter_map(predicated_mnemonic).collect();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= seen.contains(mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
     }
 
     fn setp_bool_suffix(line: &str) -> Option<&'static str> {
@@ -15396,6 +15576,15 @@ mod tests {
     }
 
     #[test]
+    fn predicated_f32_arith_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_arith: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F32_ARITH_MNEMONICS);
+    }
+
+    #[test]
     fn f32_arith_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_f32_arith: false,
@@ -15614,6 +15803,15 @@ mod tests {
     #[test]
     fn f64_arith_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F64_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_f64_arith_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_arith: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F64_ARITH_MNEMONICS);
     }
 
     #[test]
