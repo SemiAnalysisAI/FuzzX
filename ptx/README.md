@@ -235,6 +235,7 @@ that feature.
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
+| `DIV_DISABLE_PREDICATED_DIVREM` | Predicated `div` and `rem` instructions. |
 | `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_PREDICATED_FUNNEL` | Predicated `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
@@ -263,6 +264,8 @@ that feature.
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
+| `DIV_DISABLE_PREDICATED_SET` | Predicated `set.{cmp}` instructions. |
+| `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32` instructions. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SLCT` | Predicated `slct` instructions. |
 | `DIV_DISABLE_PREDICATED_DP` | Predicated `dp4a` and `dp2a` instructions. |

@@ -102,6 +102,9 @@ pub struct GenConfig {
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
     pub emit_predicated_mad: bool,
+    pub emit_predicated_set: bool,
+    pub emit_predicated_selp: bool,
+    pub emit_predicated_divrem: bool,
     pub emit_predicated_sad: bool,
     pub emit_predicated_slct: bool,
     pub emit_predicated_dp: bool,
@@ -184,6 +187,9 @@ impl Default for GenConfig {
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
             emit_predicated_mad: true,
+            emit_predicated_set: true,
+            emit_predicated_selp: true,
+            emit_predicated_divrem: true,
             emit_predicated_sad: true,
             emit_predicated_slct: true,
             emit_predicated_dp: true,
@@ -751,6 +757,20 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `setp` for selp input and instruction guard, then guarded `selp.b32`.
+    PredicatedSel {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
+    },
     /// `setp.<cmp> pred, ca, cb; @pred <binop> dst, a, b;`.
     PredicatedBin {
         op: BinOp,
@@ -779,6 +799,17 @@ enum Inst {
         cmp: CmpOp,
         a: Operand,
         b: Operand,
+    },
+    /// `setp.<cmp> guard, ca, cb; @guard set.<cmp> dst, a, b;`.
+    PredicatedSet {
+        dst: u32,
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
     },
     /// `<op>.b32 dst, src, amount;` where amount is an immediate in 0..=31
     /// (avoids shift-amount-≥-32 UB).
@@ -837,6 +868,17 @@ enum Inst {
         dst: u32,
         src: Operand,
         divisor: u32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred div/rem dst, src, divisor;`.
+    PredicatedDivRem {
+        op: DivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `mad24.{lo,hi}.{u32,s32} dst, a, b, c;` — 24-bit multiply plus addend.
     Mad24 {
@@ -1195,6 +1237,7 @@ struct Generator<'a> {
     n_pred: u32,
     blocks: Vec<Block>,
     prmt_result_regs: Vec<u32>,
+    set_result_regs: Vec<u32>,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -1212,6 +1255,7 @@ impl<'a> Generator<'a> {
             n_pred: 0,
             blocks: Vec::new(),
             prmt_result_regs: Vec::new(),
+            set_result_regs: Vec::new(),
             counters: Vec::new(),
         }
     }
@@ -1294,7 +1338,11 @@ impl<'a> Generator<'a> {
         u.int_in_range(0..=self.n_working - 1)
     }
 
-    fn pick_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
+    fn pick_non_output_dst(&mut self, u: &mut Unstructured) -> Result<u32> {
+        u.int_in_range(N_OUTPUTS..=self.n_working - 1)
+    }
+
+    fn pick_raw_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
         let pick: u8 = u.arbitrary()?;
         if pick < 192 {
             Ok(Operand::Reg(u.int_in_range(0..=self.n_working - 1)?))
@@ -1305,6 +1353,26 @@ impl<'a> Generator<'a> {
                 self.cfg.emit_i32_boundary_immediates,
             )?))
         }
+    }
+
+    fn pick_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
+        let operand = self.pick_raw_operand(u)?;
+        Ok(match operand {
+            // m013 is a materialized-boolean fold where ptxas treats a true
+            // set.{cmp} result as 1 instead of 0xffffffff. Avoid feeding live
+            // set result registers into later value flow.
+            Operand::Reg(reg) if self.set_result_regs.contains(&reg) => Operand::Imm(0),
+            operand => operand,
+        })
+    }
+
+    fn pick_reg_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
+        let reg = self.pick_dst(u)?;
+        Ok(if self.set_result_regs.contains(&reg) {
+            Operand::Reg(0)
+        } else {
+            Operand::Reg(reg)
+        })
     }
 
     fn pick_bin_operand(&mut self, u: &mut Unstructured, op: BinOp) -> Result<Operand> {
@@ -1327,6 +1395,22 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_divisor(&mut self, u: &mut Unstructured, op: DivRemOp) -> Result<u32> {
+        if op.is_signed() {
+            pick_signed_divisor_imm32(u, self.cfg.max_immediate)
+        } else {
+            pick_nonzero_imm32(
+                u,
+                self.cfg.max_immediate,
+                self.cfg.emit_i32_boundary_immediates,
+            )
+        }
+    }
+
+    fn pick_guard_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
+        self.pick_operand(u)
+    }
+
     fn pick_mad_or_add(&mut self, u: &mut Unstructured) -> Result<Inst> {
         if self.cfg.emit_mul_lo {
             let signed = self.cfg.emit_signed_lo_alu && u.arbitrary::<bool>()?;
@@ -1338,8 +1422,8 @@ impl<'a> Generator<'a> {
                     b: self.pick_operand(u)?,
                     c: self.pick_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1421,27 +1505,56 @@ impl<'a> Generator<'a> {
                     a: self.pick_bin_operand(u, op)?,
                     b: self.pick_bin_operand(u, op)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else if self.cfg.emit_set && (!self.cfg.emit_selp || u.arbitrary::<bool>()?) {
-                Ok(Inst::Set {
-                    dst: self.pick_dst(u)?,
-                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                })
+                if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedSet {
+                        dst: self.pick_non_output_dst(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        guard_ca: self.pick_guard_operand(u)?,
+                        guard_cb: self.pick_guard_operand(u)?,
+                        guard_pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Set {
+                        dst: self.pick_non_output_dst(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                    })
+                }
             } else if self.cfg.emit_selp {
-                Ok(Inst::Sel {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
-                })
+                if self.cfg.emit_predicated_selp && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedSel {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_pred(),
+                        guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        guard_ca: self.pick_guard_operand(u)?,
+                        guard_cb: self.pick_guard_operand(u)?,
+                        guard_pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Sel {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                }
             } else {
                 Ok(Inst::Bin {
                     op: BinOp::Add,
@@ -1465,8 +1578,8 @@ impl<'a> Generator<'a> {
                     src: self.pick_operand(u)?,
                     amount: u.int_in_range(0..=31)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else if self.cfg.emit_reg_shifts
@@ -1503,8 +1616,8 @@ impl<'a> Generator<'a> {
                     dst: self.pick_dst(u)?,
                     src: self.pick_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1524,8 +1637,8 @@ impl<'a> Generator<'a> {
                         c: self.pick_operand(u)?,
                         imm: u.arbitrary()?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1549,8 +1662,8 @@ impl<'a> Generator<'a> {
                         b: self.pick_operand(u)?,
                         ctrl: u.int_in_range(0..=0xFFFF)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1578,13 +1691,13 @@ impl<'a> Generator<'a> {
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
                         amount: if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
-                            Operand::Reg(self.pick_dst(u)?)
+                            self.pick_reg_operand(u)?
                         } else {
                             Operand::Imm(u.int_in_range(0..=31)?)
                         },
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
@@ -1593,7 +1706,7 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
-                        amount: Operand::Reg(self.pick_dst(u)?),
+                        amount: self.pick_reg_operand(u)?,
                     })
                 } else {
                     Ok(Inst::Funnel {
@@ -1615,8 +1728,8 @@ impl<'a> Generator<'a> {
                         pos: u.int_in_range(0..=31)?,
                         len: u.int_in_range(0..=31)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1627,8 +1740,8 @@ impl<'a> Generator<'a> {
                         pos: u.int_in_range(0..=31)?,
                         len: u.int_in_range(0..=31)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 }
@@ -1657,8 +1770,8 @@ impl<'a> Generator<'a> {
                         pos: u.int_in_range(0..=31)?,
                         len: u.int_in_range(0..=31)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1680,8 +1793,8 @@ impl<'a> Generator<'a> {
                     dst: self.pick_dst(u)?,
                     src: self.pick_cvt_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1709,8 +1822,8 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1734,8 +1847,8 @@ impl<'a> Generator<'a> {
                             a: self.pick_operand(u)?,
                             b: self.pick_operand(u)?,
                             cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                            ca: self.pick_operand(u)?,
-                            cb: self.pick_operand(u)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
                             pred: self.alloc_inst_pred(u)?,
                         })
                     } else {
@@ -1755,8 +1868,8 @@ impl<'a> Generator<'a> {
                             b: self.pick_operand(u)?,
                             c: self.pick_operand(u)?,
                             cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                            ca: self.pick_operand(u)?,
-                            cb: self.pick_operand(u)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
                             pred: self.alloc_inst_pred(u)?,
                         })
                     } else {
@@ -1790,20 +1903,26 @@ impl<'a> Generator<'a> {
                 })
             } else {
                 let op = pick_divrem(u, self.cfg.emit_signed_divrem)?;
-                Ok(Inst::DivRem {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
-                    divisor: if op.is_signed() {
-                        pick_signed_divisor_imm32(u, self.cfg.max_immediate)
-                    } else {
-                        pick_nonzero_imm32(
-                            u,
-                            self.cfg.max_immediate,
-                            self.cfg.emit_i32_boundary_immediates,
-                        )
-                    }?,
-                })
+                let divisor = self.pick_divisor(u, op)?;
+                if self.cfg.emit_predicated_divrem && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedDivRem {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        divisor,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::DivRem {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        divisor,
+                    })
+                }
             }
         } else if pick < 254 {
             if self.cfg.emit_video && u.arbitrary::<bool>()? {
@@ -1812,21 +1931,21 @@ impl<'a> Generator<'a> {
                     Ok(Inst::PredicatedVideo {
                         op,
                         dst: self.pick_dst(u)?,
-                        a: Operand::Reg(self.pick_dst(u)?),
-                        b: Operand::Reg(self.pick_dst(u)?),
-                        c: Operand::Reg(self.pick_dst(u)?),
+                        a: self.pick_reg_operand(u)?,
+                        b: self.pick_reg_operand(u)?,
+                        c: self.pick_reg_operand(u)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
                     Ok(Inst::Video {
                         op,
                         dst: self.pick_dst(u)?,
-                        a: Operand::Reg(self.pick_dst(u)?),
-                        b: Operand::Reg(self.pick_dst(u)?),
-                        c: Operand::Reg(self.pick_dst(u)?),
+                        a: self.pick_reg_operand(u)?,
+                        b: self.pick_reg_operand(u)?,
+                        c: self.pick_reg_operand(u)?,
                     })
                 }
             } else {
@@ -1839,8 +1958,8 @@ impl<'a> Generator<'a> {
                         b: self.pick_operand(u)?,
                         c: self.pick_operand(u)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                        ca: self.pick_operand(u)?,
-                        cb: self.pick_operand(u)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
                 } else {
@@ -1863,8 +1982,8 @@ impl<'a> Generator<'a> {
                     b: self.pick_operand(u)?,
                     c: self.pick_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1886,8 +2005,8 @@ impl<'a> Generator<'a> {
                     b: self.pick_operand(u)?,
                     c: self.pick_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1909,8 +2028,8 @@ impl<'a> Generator<'a> {
                     b: self.pick_operand(u)?,
                     c: self.pick_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_operand(u)?,
-                    cb: self.pick_operand(u)?,
+                    ca: self.pick_guard_operand(u)?,
+                    cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
             } else {
@@ -1925,11 +2044,81 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn forget_tracked_write(&mut self, dst: u32) {
+        self.prmt_result_regs.retain(|reg| *reg != dst);
+        self.set_result_regs.retain(|reg| *reg != dst);
+    }
+
+    fn remember_prmt_write(&mut self, dst: u32) {
+        self.set_result_regs.retain(|reg| *reg != dst);
+        if !self.prmt_result_regs.contains(&dst) {
+            self.prmt_result_regs.push(dst);
+        }
+    }
+
+    fn remember_set_write(&mut self, dst: u32) {
+        self.prmt_result_regs.retain(|reg| *reg != dst);
+        if !self.set_result_regs.contains(&dst) {
+            self.set_result_regs.push(dst);
+        }
+    }
+
     fn note_inst(&mut self, inst: &Inst) {
-        if let Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } = inst {
-            if !self.prmt_result_regs.contains(dst) {
-                self.prmt_result_regs.push(*dst);
+        match inst {
+            Inst::Set { dst, .. } | Inst::PredicatedSet { dst, .. } => {
+                self.remember_set_write(*dst);
             }
+            Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } => {
+                self.remember_prmt_write(*dst);
+            }
+            Inst::AddCarry { dst_lo, dst_hi, .. } => {
+                self.forget_tracked_write(*dst_lo);
+                self.forget_tracked_write(*dst_hi);
+            }
+            Inst::Bin { dst, .. }
+            | Inst::Sel { dst, .. }
+            | Inst::PredicatedSel { dst, .. }
+            | Inst::PredicatedBin { dst, .. }
+            | Inst::PredicatedShift { dst, .. }
+            | Inst::Shift { dst, .. }
+            | Inst::RegShift { dst, .. }
+            | Inst::Unary { dst, .. }
+            | Inst::PredicatedUnary { dst, .. }
+            | Inst::Cvt { dst, .. }
+            | Inst::PredicatedCvt { dst, .. }
+            | Inst::Bfind { dst, .. }
+            | Inst::PredicatedBfind { dst, .. }
+            | Inst::DivRem { dst, .. }
+            | Inst::PredicatedDivRem { dst, .. }
+            | Inst::Mad24 { dst, .. }
+            | Inst::PredicatedMad24 { dst, .. }
+            | Inst::Mul24 { dst, .. }
+            | Inst::PredicatedMul24 { dst, .. }
+            | Inst::MulWide { dst, .. }
+            | Inst::WideInt { dst, .. }
+            | Inst::Sad { dst, .. }
+            | Inst::PredicatedSad { dst, .. }
+            | Inst::Slct { dst, .. }
+            | Inst::PredicatedSlct { dst, .. }
+            | Inst::Dp4a { dst, .. }
+            | Inst::PredicatedDp4a { dst, .. }
+            | Inst::Dp2a { dst, .. }
+            | Inst::PredicatedDp2a { dst, .. }
+            | Inst::Video { dst, .. }
+            | Inst::PredicatedVideo { dst, .. }
+            | Inst::Mad { dst, .. }
+            | Inst::PredicatedMad { dst, .. }
+            | Inst::Lop3 { dst, .. }
+            | Inst::PredicatedLop3 { dst, .. }
+            | Inst::Funnel { dst, .. }
+            | Inst::RegFunnel { dst, .. }
+            | Inst::PredicatedFunnel { dst, .. }
+            | Inst::Bfe { dst, .. }
+            | Inst::PredicatedBfe { dst, .. }
+            | Inst::Bfi { dst, .. }
+            | Inst::PredicatedBfi { dst, .. }
+            | Inst::Bmsk { dst, .. }
+            | Inst::PredicatedBmsk { dst, .. } => self.forget_tracked_write(*dst),
         }
     }
 
@@ -2214,6 +2403,31 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ", %p{pred};").unwrap();
             }
+            Inst::PredicatedSel {
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                write!(s, "    {:<13} %p{}, ", cmp.mnemonic(), pred_id(pred)).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    {} selp.b32 %r{dst}, ", pred_guard(guard_pred)).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ", %p{};", pred_id(pred)).unwrap();
+            }
             Inst::PredicatedBin {
                 op,
                 dst,
@@ -2248,6 +2462,29 @@ impl<'a> Generator<'a> {
             }
             Inst::Set { dst, cmp, a, b } => {
                 write!(s, "    {:<17} %r{dst}, ", cmp.set_mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedSet {
+                dst,
+                cmp,
+                a,
+                b,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(
+                    s,
+                    "    {} {:<12} %r{dst}, ",
+                    pred_guard(guard_pred),
+                    cmp.set_mnemonic()
+                )
+                .unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2341,6 +2578,21 @@ impl<'a> Generator<'a> {
                 divisor,
             } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", {divisor};").unwrap();
+            }
+            Inst::PredicatedDivRem {
+                op,
+                dst,
+                src,
+                divisor,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {divisor};").unwrap();
             }
@@ -3555,6 +3807,24 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| MAD_LO_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_set(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SET_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_selp(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| op == "selp.b32")
+    }
+
+    fn has_predicated_divrem(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| DIVREM_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_lop3(ptx: &str) -> bool {
@@ -5414,6 +5684,58 @@ mod tests {
     }
 
     #[test]
+    fn predicated_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; DIVREM_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in DIVREM_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = DIVREM_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_mul_wide: false,
+            emit_predicated_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_divrem(&ptx),
+                "seed {seed:x} emitted predicated div/rem"
+            );
+        }
+    }
+
+    #[test]
     fn signed_divrem_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_signed_divrem: false,
@@ -5865,6 +6187,43 @@ mod tests {
     }
 
     #[test]
+    fn predicated_set_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_set = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_set |= has_predicated_set(&ptx);
+            if saw_predicated_set {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_set,
+            "no seed in sample emitted predicated set"
+        );
+    }
+
+    #[test]
+    fn predicated_set_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_set: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_set(&ptx),
+                "seed {seed:x} emitted predicated set"
+            );
+        }
+    }
+
+    #[test]
     fn negated_predicate_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut saw_negated_predicate = false;
@@ -5949,6 +6308,43 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("selp.b32"), "seed {seed:x} emitted selp.b32");
+        }
+    }
+
+    #[test]
+    fn predicated_selp_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_selp = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_selp |= has_predicated_selp(&ptx);
+            if saw_predicated_selp {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_selp,
+            "no seed in sample emitted predicated selp"
+        );
+    }
+
+    #[test]
+    fn predicated_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_selp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_selp(&ptx),
+                "seed {seed:x} emitted predicated selp"
+            );
         }
     }
 
