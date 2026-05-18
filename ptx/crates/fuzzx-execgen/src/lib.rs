@@ -954,6 +954,7 @@ enum F32ArithOp {
     Div,
     DivApprox,
     Fma,
+    Copysign,
     Min,
     Max,
 }
@@ -967,6 +968,7 @@ impl F32ArithOp {
             F32ArithOp::Div => "div.rn.f32",
             F32ArithOp::DivApprox => "div.approx.ftz.f32",
             F32ArithOp::Fma => "fma.rn.f32",
+            F32ArithOp::Copysign => "copysign.f32",
             F32ArithOp::Min => "min.f32",
             F32ArithOp::Max => "max.f32",
         }
@@ -978,6 +980,10 @@ impl F32ArithOp {
 
     fn needs_positive_b(self) -> bool {
         matches!(self, F32ArithOp::Div | F32ArithOp::DivApprox)
+    }
+
+    fn uses_arbitrary_sign_b(self) -> bool {
+        matches!(self, F32ArithOp::Copysign)
     }
 }
 
@@ -1184,6 +1190,7 @@ enum F64ArithOp {
     Mul,
     Div,
     Fma,
+    Copysign,
     Min,
     Max,
 }
@@ -1196,6 +1203,7 @@ impl F64ArithOp {
             F64ArithOp::Mul => "mul.rn.f64",
             F64ArithOp::Div => "div.rn.f64",
             F64ArithOp::Fma => "fma.rn.f64",
+            F64ArithOp::Copysign => "copysign.f64",
             F64ArithOp::Min => "min.f64",
             F64ArithOp::Max => "max.f64",
         }
@@ -1207,6 +1215,10 @@ impl F64ArithOp {
 
     fn needs_positive_b(self) -> bool {
         matches!(self, F64ArithOp::Div)
+    }
+
+    fn uses_arbitrary_sign_b(self) -> bool {
+        matches!(self, F64ArithOp::Copysign)
     }
 }
 
@@ -2283,6 +2295,37 @@ impl FloatCmpOp {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FloatTestpOp {
+    Finite,
+    Infinite,
+    Number,
+    NotANumber,
+    Normal,
+    Subnormal,
+}
+
+impl FloatTestpOp {
+    fn suffix(self) -> &'static str {
+        match self {
+            FloatTestpOp::Finite => "finite",
+            FloatTestpOp::Infinite => "infinite",
+            FloatTestpOp::Number => "number",
+            FloatTestpOp::NotANumber => "notanumber",
+            FloatTestpOp::Normal => "normal",
+            FloatTestpOp::Subnormal => "subnormal",
+        }
+    }
+
+    fn f32_mnemonic(self) -> String {
+        format!("testp.{}.f32", self.suffix())
+    }
+
+    fn f64_mnemonic(self) -> String {
+        format!("testp.{}.f64", self.suffix())
+    }
+}
+
 impl CmpOp {
     fn mnemonic(self) -> &'static str {
         match self {
@@ -2776,6 +2819,13 @@ enum Inst {
         base_pred: u32,
         pred: u32,
     },
+    /// Single-precision floating-point classification with `testp`.
+    F32Testp {
+        op: FloatTestpOp,
+        dst: u32,
+        src: Operand,
+        pred: u32,
+    },
     /// Sanitized single-precision compare feeding `selp.f32`.
     F32Selp {
         cmp: FloatCmpOp,
@@ -2843,6 +2893,14 @@ enum Inst {
         a: Operand,
         b: Operand,
         base_pred: u32,
+        pred: u32,
+    },
+    /// Double-precision floating-point classification with `testp`.
+    F64Testp {
+        op: FloatTestpOp,
+        dst: u32,
+        src_lo: Operand,
+        src_hi: Operand,
         pred: u32,
     },
     /// Sanitized double-precision compare feeding `selp.f64`.
@@ -5123,6 +5181,7 @@ impl<'a> Generator<'a> {
             F32ArithOp::Div,
             F32ArithOp::DivApprox,
             F32ArithOp::Fma,
+            F32ArithOp::Copysign,
             F32ArithOp::Min,
             F32ArithOp::Max,
         ];
@@ -5232,6 +5291,18 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_float_testp_op(&mut self, u: &mut Unstructured) -> Result<FloatTestpOp> {
+        let ops = [
+            FloatTestpOp::Finite,
+            FloatTestpOp::Infinite,
+            FloatTestpOp::Number,
+            FloatTestpOp::NotANumber,
+            FloatTestpOp::Normal,
+            FloatTestpOp::Subnormal,
+        ];
+        Ok(*u.choose(&ops)?)
+    }
+
     fn pick_f32_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::F32Set {
             cmp: pick_float_cmp(u)?,
@@ -5256,6 +5327,15 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_f32_testp(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F32Testp {
+            op: self.pick_float_testp_op(u)?,
+            dst: self.pick_non_output_dst(u)?,
+            src: self.pick_reg_operand(u)?,
+            pred: self.alloc_pred(),
+        })
+    }
+
     fn pick_f32_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::F32Selp {
             cmp: pick_float_cmp(u)?,
@@ -5273,6 +5353,7 @@ impl<'a> Generator<'a> {
             F64ArithOp::Mul,
             F64ArithOp::Div,
             F64ArithOp::Fma,
+            F64ArithOp::Copysign,
             F64ArithOp::Min,
             F64ArithOp::Max,
         ];
@@ -5390,6 +5471,16 @@ impl<'a> Generator<'a> {
             a: self.pick_cvt_operand(u)?,
             b: self.pick_cvt_operand(u)?,
             base_pred: self.alloc_pred(),
+            pred: self.alloc_pred(),
+        })
+    }
+
+    fn pick_f64_testp(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F64Testp {
+            op: self.pick_float_testp_op(u)?,
+            dst: self.pick_non_output_dst(u)?,
+            src_lo: self.pick_reg_operand(u)?,
+            src_hi: self.pick_reg_operand(u)?,
             pred: self.alloc_pred(),
         })
     }
@@ -5633,6 +5724,11 @@ impl<'a> Generator<'a> {
                 self.pick_f32_setp_bool(u)
             } else if self.cfg.emit_f32_compare
                 && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=3)? == 0
+            {
+                self.pick_f32_testp(u)
+            } else if self.cfg.emit_f32_compare
+                && self.cfg.emit_bitwise_binops
                 && (self.cfg.emit_f32_selp || self.cfg.emit_set)
                 && u.int_in_range(0..=3)? == 0
             {
@@ -5651,6 +5747,11 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=3)? == 0
             {
                 self.pick_f64_setp_bool(u)
+            } else if self.cfg.emit_f64_compare
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=3)? == 0
+            {
+                self.pick_f64_testp(u)
             } else if self.cfg.emit_f64_compare
                 && self.cfg.emit_bitwise_binops
                 && (self.cfg.emit_f64_selp || self.cfg.emit_set)
@@ -6737,8 +6838,10 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Set { dst, .. }
             | Inst::F32Set { dst, .. }
             | Inst::F32SetpBool { dst, .. }
+            | Inst::F32Testp { dst, .. }
             | Inst::F64Set { dst, .. }
             | Inst::F64SetpBool { dst, .. }
+            | Inst::F64Testp { dst, .. }
             | Inst::PredicatedSet { dst, .. }
             | Inst::WideSet { dst, .. }
             | Inst::PredicatedWideSet { dst, .. } => {
@@ -7674,7 +7777,13 @@ impl<'a> Generator<'a> {
             }
             Inst::F32Arith { op, dst, a, b, c } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
-                if op.needs_positive_b() {
+                if op.uses_arbitrary_sign_b() {
+                    let scratch = self.wide_scratch_hi_reg();
+                    write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(s, "    mov.b32       %f1, %r{scratch};").unwrap();
+                } else if op.needs_positive_b() {
                     self.emit_sanitized_f32_math_operand(s, 1, b, FloatInputDomain::Positive);
                 } else {
                     self.emit_sanitized_f32_operand(s, 1, b);
@@ -7758,6 +7867,15 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %f0, %f1, %p{base_pred};").unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
+            Inst::F32Testp { op, dst, src, pred } => {
+                write!(s, "    mov.u32       %r{dst}, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    mov.b32       %f0, %r{dst};").unwrap();
+                let mnemonic = op.f32_mnemonic();
+                writeln!(s, "    {mnemonic:<13} %p{pred}, %f0;").unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
             Inst::F32Selp {
                 cmp,
                 dst,
@@ -7773,7 +7891,14 @@ impl<'a> Generator<'a> {
             }
             Inst::F64Arith { op, dst, a, b, c } => {
                 self.emit_sanitized_f64_operand(s, 0, a);
-                if op.needs_positive_b() {
+                if op.uses_arbitrary_sign_b() {
+                    let scratch = self.wide_scratch_hi_reg();
+                    write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                    writeln!(s, "    mov.b64       %fd1, {{%r{dst}, %r{scratch}}};").unwrap();
+                } else if op.needs_positive_b() {
                     self.emit_sanitized_f64_math_operand(s, 1, b, FloatInputDomain::Positive);
                 } else {
                     self.emit_sanitized_f64_operand(s, 1, b);
@@ -7855,6 +7980,25 @@ impl<'a> Generator<'a> {
                 self.emit_sanitized_f64_operand(s, 1, b);
                 let mnemonic = cmp.f64_setp_bool_mnemonic(bool_op);
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %fd0, %fd1, %p{base_pred};").unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
+            Inst::F64Testp {
+                op,
+                dst,
+                src_lo,
+                src_hi,
+                pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    mov.u32       %r{scratch}, ").unwrap();
+                src_hi.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    mov.u32       %r{dst}, ").unwrap();
+                src_lo.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    mov.b64       %fd0, {{%r{dst}, %r{scratch}}};").unwrap();
+                let mnemonic = op.f64_mnemonic();
+                writeln!(s, "    {mnemonic:<13} %p{pred}, %fd0;").unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
             Inst::F64Selp {
@@ -11372,6 +11516,7 @@ mod tests {
         "div.rn.f32",
         "div.approx.ftz.f32",
         "fma.rn.f32",
+        "copysign.f32",
         "min.f32",
         "max.f32",
     ];
@@ -11501,6 +11646,14 @@ mod tests {
         "setp.nan.or.f32",
         "setp.nan.xor.f32",
     ];
+    const F32_TESTP_MNEMONICS: &[&str] = &[
+        "testp.finite.f32",
+        "testp.infinite.f32",
+        "testp.number.f32",
+        "testp.notanumber.f32",
+        "testp.normal.f32",
+        "testp.subnormal.f32",
+    ];
     const F32_SELP_MNEMONICS: &[&str] = &["selp.f32"];
     const F64_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f64",
@@ -11508,6 +11661,7 @@ mod tests {
         "mul.rn.f64",
         "div.rn.f64",
         "fma.rn.f64",
+        "copysign.f64",
         "min.f64",
         "max.f64",
     ];
@@ -11627,6 +11781,14 @@ mod tests {
         "setp.nan.and.f64",
         "setp.nan.or.f64",
         "setp.nan.xor.f64",
+    ];
+    const F64_TESTP_MNEMONICS: &[&str] = &[
+        "testp.finite.f64",
+        "testp.infinite.f64",
+        "testp.number.f64",
+        "testp.notanumber.f64",
+        "testp.normal.f64",
+        "testp.subnormal.f64",
     ];
     const F64_SELP_MNEMONICS: &[&str] = &["selp.f64"];
     const SPECIAL_REG_NAMES: &[&str] = &[
@@ -11960,6 +12122,7 @@ mod tests {
             F32_COMPARE_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SETP_BOOL_MNEMONICS,
+            F32_TESTP_MNEMONICS,
             F32_SELP_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
@@ -11969,6 +12132,7 @@ mod tests {
             F64_COMPARE_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SETP_BOOL_MNEMONICS,
+            F64_TESTP_MNEMONICS,
             F64_SELP_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
@@ -12033,6 +12197,7 @@ mod tests {
             F32_SPECIAL_MATH_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SETP_BOOL_MNEMONICS,
+            F32_TESTP_MNEMONICS,
             F32_SELP_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
@@ -12041,6 +12206,7 @@ mod tests {
             F64_SPECIAL_MATH_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SETP_BOOL_MNEMONICS,
+            F64_TESTP_MNEMONICS,
             F64_SELP_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -15194,6 +15360,7 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_mnemonic_coverage(&cfg, 4096, 2048, F32_COMPARE_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_TESTP_MNEMONICS);
     }
 
     #[test]
@@ -15211,6 +15378,7 @@ mod tests {
                 .iter()
                 .chain(F32_SETP_MNEMONICS.iter())
                 .chain(F32_SETP_BOOL_MNEMONICS.iter())
+                .chain(F32_TESTP_MNEMONICS.iter())
             {
                 assert!(!seen.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
@@ -15397,6 +15565,7 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_mnemonic_coverage(&cfg, 4096, 2048, F64_COMPARE_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F64_TESTP_MNEMONICS);
     }
 
     #[test]
@@ -15414,6 +15583,7 @@ mod tests {
                 .iter()
                 .chain(F64_SETP_MNEMONICS.iter())
                 .chain(F64_SETP_BOOL_MNEMONICS.iter())
+                .chain(F64_TESTP_MNEMONICS.iter())
             {
                 assert!(!seen.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
