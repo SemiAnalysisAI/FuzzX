@@ -6447,11 +6447,24 @@ ConstantInt *intConst(Type *Ty, uint64_t Value) {
   return ConstantInt::get(cast<IntegerType>(Ty), Value);
 }
 
-ConstantInt *signedLimitConst(Type *Ty, bool Min) {
+Type *oracleWideIntegerType(Type *Ty) {
   unsigned Width = cast<IntegerType>(Ty)->getBitWidth();
-  APInt Value = Min ? APInt::getSignedMinValue(Width)
-                    : APInt::getSignedMaxValue(Width);
-  return ConstantInt::get(Ty->getContext(), Value);
+  unsigned WideWidth = Width < 32 ? 32 : Width * 2;
+  WideWidth = std::min(WideWidth, 128u);
+  return IntegerType::get(Ty->getContext(), WideWidth);
+}
+
+ConstantInt *oracleUnsignedMax(Type *WideTy, unsigned SourceWidth) {
+  unsigned WideWidth = cast<IntegerType>(WideTy)->getBitWidth();
+  return ConstantInt::get(WideTy->getContext(),
+                          APInt::getMaxValue(SourceWidth).zext(WideWidth));
+}
+
+ConstantInt *oracleSignedLimit(Type *WideTy, unsigned SourceWidth, bool Min) {
+  unsigned WideWidth = cast<IntegerType>(WideTy)->getBitWidth();
+  APInt Value = Min ? APInt::getSignedMinValue(SourceWidth)
+                    : APInt::getSignedMaxValue(SourceWidth);
+  return ConstantInt::get(WideTy->getContext(), Value.sext(WideWidth));
 }
 
 Value *notI1(IRBuilder<NoFolder> &B, Value *V, const Twine &Name) {
@@ -6562,28 +6575,51 @@ Value *lowerOracleIntegerIntrinsic(IRBuilder<NoFolder> &B, CallInst *Call) {
   }
   case Intrinsic::uadd_sat: {
     Value *Bv = Call->getArgOperand(1);
-    Value *Sum = B.CreateAdd(A, Bv, "fuzzx.oracle.uadd.sat.sum");
-    Value *Overflow = B.CreateICmpULT(Sum, A, "fuzzx.oracle.uadd.sat.ov");
-    return B.CreateSelect(Overflow, intConst(Ty, -1ull), Sum,
-                          "fuzzx.oracle.uadd.sat");
+    Type *WideTy = oracleWideIntegerType(Ty);
+    unsigned Width = cast<IntegerType>(Ty)->getBitWidth();
+    Value *AWide = B.CreateZExt(A, WideTy, "fuzzx.oracle.uadd.sat.a");
+    Value *BWide = B.CreateZExt(Bv, WideTy, "fuzzx.oracle.uadd.sat.b");
+    Value *Sum = B.CreateAdd(AWide, BWide, "fuzzx.oracle.uadd.sat.sum");
+    ConstantInt *Max = oracleUnsignedMax(WideTy, Width);
+    Value *Overflow = B.CreateICmpUGT(Sum, Max, "fuzzx.oracle.uadd.sat.ov");
+    Value *Clamped =
+        B.CreateSelect(Overflow, Max, Sum, "fuzzx.oracle.uadd.sat.clamp");
+    return B.CreateTrunc(Clamped, Ty, "fuzzx.oracle.uadd.sat");
   }
   case Intrinsic::usub_sat: {
     Value *Bv = Call->getArgOperand(1);
-    Value *Diff = B.CreateSub(A, Bv, "fuzzx.oracle.usub.sat.diff");
-    Value *Overflow = B.CreateICmpULT(A, Bv, "fuzzx.oracle.usub.sat.ov");
-    return B.CreateSelect(Overflow, intConst(Ty, 0), Diff,
-                          "fuzzx.oracle.usub.sat");
+    Type *WideTy = oracleWideIntegerType(Ty);
+    Value *AWide = B.CreateZExt(A, WideTy, "fuzzx.oracle.usub.sat.a");
+    Value *BWide = B.CreateZExt(Bv, WideTy, "fuzzx.oracle.usub.sat.b");
+    Value *Diff = B.CreateSub(AWide, BWide, "fuzzx.oracle.usub.sat.diff");
+    Value *Overflow = B.CreateICmpULT(AWide, BWide,
+                                      "fuzzx.oracle.usub.sat.ov");
+    Value *Clamped =
+        B.CreateSelect(Overflow, ConstantInt::get(WideTy, 0), Diff,
+                       "fuzzx.oracle.usub.sat.clamp");
+    return B.CreateTrunc(Clamped, Ty, "fuzzx.oracle.usub.sat");
   }
   case Intrinsic::sadd_sat:
   case Intrinsic::ssub_sat: {
     Value *Bv = Call->getArgOperand(1);
-    SignedOverflowParts Parts = buildSignedAddSubOverflow(
-        B, A, Bv, ID == Intrinsic::ssub_sat, "fuzzx.oracle.ssat");
-    Value *Clamp =
-        B.CreateSelect(Parts.Positive, signedLimitConst(Ty, false),
-                       signedLimitConst(Ty, true), "fuzzx.oracle.ssat.clamp");
-    return B.CreateSelect(Parts.Any, Clamp, Parts.Result,
-                          "fuzzx.oracle.ssat");
+    Type *WideTy = oracleWideIntegerType(Ty);
+    unsigned Width = cast<IntegerType>(Ty)->getBitWidth();
+    Value *AWide = B.CreateSExt(A, WideTy, "fuzzx.oracle.ssat.a");
+    Value *BWide = B.CreateSExt(Bv, WideTy, "fuzzx.oracle.ssat.b");
+    Value *Raw = ID == Intrinsic::ssub_sat
+                     ? B.CreateSub(AWide, BWide, "fuzzx.oracle.ssat.raw")
+                     : B.CreateAdd(AWide, BWide, "fuzzx.oracle.ssat.raw");
+    ConstantInt *Min = oracleSignedLimit(WideTy, Width, true);
+    ConstantInt *Max = oracleSignedLimit(WideTy, Width, false);
+    Value *TooHigh = B.CreateICmpSGT(Raw, Max, "fuzzx.oracle.ssat.high");
+    Value *HighClamped =
+        B.CreateSelect(TooHigh, Max, Raw, "fuzzx.oracle.ssat.high.clamp");
+    Value *TooLow =
+        B.CreateICmpSLT(HighClamped, Min, "fuzzx.oracle.ssat.low");
+    Value *Clamped =
+        B.CreateSelect(TooLow, Min, HighClamped,
+                       "fuzzx.oracle.ssat.low.clamp");
+    return B.CreateTrunc(Clamped, Ty, "fuzzx.oracle.ssat");
   }
   case Intrinsic::fshl:
   case Intrinsic::fshr: {
