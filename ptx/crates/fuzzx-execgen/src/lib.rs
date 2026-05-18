@@ -43,6 +43,7 @@ pub const fn input_len() -> usize {
 const LOCAL_MEM_BYTES: u32 = 64;
 const SHARED_SLOT_BYTES: u32 = 4;
 const SHARED_MEM_BYTES: u32 = N_THREADS * SHARED_SLOT_BYTES;
+const CONST_MEM_BYTES: u32 = 64;
 const F32_INPUT_MASK: u32 = 1023;
 
 #[derive(Debug, Clone)]
@@ -103,6 +104,8 @@ pub struct GenConfig {
     pub emit_special_regs: bool,
     pub emit_predicated_special_regs: bool,
     pub emit_global_loads: bool,
+    pub emit_global_store_roundtrips: bool,
+    pub emit_const_memory: bool,
     pub emit_local_memory: bool,
     pub emit_shared_memory: bool,
     pub emit_f32_arith: bool,
@@ -298,6 +301,8 @@ impl Default for GenConfig {
             emit_special_regs: true,
             emit_predicated_special_regs: true,
             emit_global_loads: true,
+            emit_global_store_roundtrips: true,
+            emit_const_memory: true,
             emit_local_memory: true,
             emit_shared_memory: true,
             emit_f32_arith: true,
@@ -703,6 +708,72 @@ impl GlobalLoadOp {
             GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
             GlobalLoadOp::U16 | GlobalLoadOp::S16 => 2,
             GlobalLoadOp::U32 => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GlobalStoreRoundtripOp {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+}
+
+impl GlobalStoreRoundtripOp {
+    fn load_mnemonic(self) -> &'static str {
+        match self {
+            GlobalStoreRoundtripOp::U8 => "ld.global.u8",
+            GlobalStoreRoundtripOp::S8 => "ld.global.s8",
+            GlobalStoreRoundtripOp::U16 => "ld.global.u16",
+            GlobalStoreRoundtripOp::S16 => "ld.global.s16",
+            GlobalStoreRoundtripOp::U32 => "ld.global.u32",
+        }
+    }
+
+    fn store_mnemonic(self) -> &'static str {
+        match self {
+            GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => "st.global.u8",
+            GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "st.global.u16",
+            GlobalStoreRoundtripOp::U32 => "st.global.u32",
+        }
+    }
+
+    fn width(self) -> u32 {
+        match self {
+            GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => 1,
+            GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => 2,
+            GlobalStoreRoundtripOp::U32 => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ConstLoadOp {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+}
+
+impl ConstLoadOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            ConstLoadOp::U8 => "ld.const.u8",
+            ConstLoadOp::S8 => "ld.const.s8",
+            ConstLoadOp::U16 => "ld.const.u16",
+            ConstLoadOp::S16 => "ld.const.s16",
+            ConstLoadOp::U32 => "ld.const.u32",
+        }
+    }
+
+    fn width(self) -> u32 {
+        match self {
+            ConstLoadOp::U8 | ConstLoadOp::S8 => 1,
+            ConstLoadOp::U16 | ConstLoadOp::S16 => 2,
+            ConstLoadOp::U32 => 4,
         }
     }
 }
@@ -1993,6 +2064,19 @@ enum Inst {
     /// Bounded read-only load from the existing input buffer.
     GlobalLoad {
         op: GlobalLoadOp,
+        dst: u32,
+        offset: u32,
+    },
+    /// Store to and reload from this thread's output slice in global memory.
+    GlobalStoreRoundtrip {
+        op: GlobalStoreRoundtripOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+    },
+    /// Bounded read-only load from module-scope constant memory.
+    ConstLoad {
+        op: ConstLoadOp,
         dst: u32,
         offset: u32,
     },
@@ -4043,6 +4127,45 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_global_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+        ];
+        let op = *u.choose(&ops)?;
+        let width = op.width();
+        let max_offset = N_OUTPUTS * 4 - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        Ok(Inst::GlobalStoreRoundtrip {
+            op,
+            dst: self.pick_dst(u)?,
+            src: self.pick_safe_reg(u)?,
+            offset,
+        })
+    }
+
+    fn pick_const_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+        ];
+        let op = *u.choose(&ops)?;
+        let width = op.width();
+        let max_offset = CONST_MEM_BYTES - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        Ok(Inst::ConstLoad {
+            op,
+            dst: self.pick_dst(u)?,
+            offset,
+        })
+    }
+
     fn pick_local_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [
             LocalMemOp::U8,
@@ -4144,6 +4267,16 @@ impl<'a> Generator<'a> {
         if pick < 90 {
             if self.cfg.emit_global_loads && u.int_in_range(0..=7)? == 0 {
                 return self.pick_global_load(u);
+            }
+            if self.cfg.emit_global_store_roundtrips
+                && self.cfg.emit_mul_wide
+                && self.cfg.emit_wide_int
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_global_store_roundtrip(u);
+            }
+            if self.cfg.emit_const_memory && u.int_in_range(0..=7)? == 0 {
+                return self.pick_const_load(u);
             }
             if self.cfg.emit_local_memory && u.int_in_range(0..=7)? == 0 {
                 return self.pick_local_mem(u);
@@ -5404,6 +5537,8 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
+            | Inst::GlobalStoreRoundtrip { dst, .. }
+            | Inst::ConstLoad { dst, .. }
             | Inst::LocalMem { dst, .. }
             | Inst::SharedMem { dst, .. }
             | Inst::F32Arith { dst, .. }
@@ -5625,6 +5760,14 @@ impl<'a> Generator<'a> {
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
         writeln!(s, ".address_size 64").unwrap();
+        write!(s, ".const .align 4 .b8 fuzzx_const[{CONST_MEM_BYTES}] = {{").unwrap();
+        for i in 0..CONST_MEM_BYTES {
+            if i > 0 {
+                write!(s, ",").unwrap();
+            }
+            write!(s, "{}", (i.wrapping_mul(17).wrapping_add(3)) & 0xff).unwrap();
+        }
+        writeln!(s, "}};").unwrap();
         writeln!(s).unwrap();
         writeln!(s, ".visible .entry {KERNEL_NAME}(").unwrap();
         writeln!(s, "    .param .u64 in_ptr,").unwrap();
@@ -5903,6 +6046,33 @@ impl<'a> Generator<'a> {
             }
             Inst::GlobalLoad { op, dst, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+                writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
+            }
+            Inst::GlobalStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} [%rd8 + {offset}], %r{src};",
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, [%rd8 + {offset}];",
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::ConstLoad { op, dst, offset } => {
+                writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
                 writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
             }
             Inst::LocalMem {
@@ -9423,6 +9593,14 @@ mod tests {
         "ld.global.s16",
         "ld.global.u32",
     ];
+    const GLOBAL_STORE_MNEMONICS: &[&str] = &["st.global.u8", "st.global.u16", "st.global.u32"];
+    const CONST_LOAD_MNEMONICS: &[&str] = &[
+        "ld.const.u8",
+        "ld.const.s8",
+        "ld.const.u16",
+        "ld.const.s16",
+        "ld.const.u32",
+    ];
     const LOCAL_MEM_LOAD_MNEMONICS: &[&str] = &[
         "ld.local.u8",
         "ld.local.s8",
@@ -9780,6 +9958,8 @@ mod tests {
             SCALAR_16BIT_COMPARE_MNEMONICS,
             SCALAR_16BIT_SELP_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
+            GLOBAL_STORE_MNEMONICS,
+            CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
             SHARED_MEM_LOAD_MNEMONICS,
@@ -9837,6 +10017,8 @@ mod tests {
             PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_POST_KNOWN_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
+            GLOBAL_STORE_MNEMONICS,
+            CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
             SHARED_MEM_LOAD_MNEMONICS,
@@ -9903,6 +10085,56 @@ mod tests {
     fn has_body_global_load(ptx: &str, mnemonic: &str) -> bool {
         ptx.lines()
             .filter_map(body_global_load)
+            .any(|(op, _)| op == mnemonic)
+    }
+
+    fn body_global_store_roundtrip_access(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd8 + ") {
+            return None;
+        }
+        let mnemonic = line.split_whitespace().next()?;
+        if !GLOBAL_LOAD_MNEMONICS.contains(&mnemonic) && !GLOBAL_STORE_MNEMONICS.contains(&mnemonic)
+        {
+            return None;
+        }
+        let offset = line
+            .split("[%rd8 + ")
+            .nth(1)?
+            .split(']')
+            .next()?
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_global_store_roundtrip_access(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_global_store_roundtrip_access)
+            .any(|(op, _)| op == mnemonic)
+    }
+
+    fn body_const_load(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd6 + ") {
+            return None;
+        }
+        let mnemonic = line.split_whitespace().next()?;
+        if !CONST_LOAD_MNEMONICS.contains(&mnemonic) {
+            return None;
+        }
+        let offset = line
+            .split("[%rd6 + ")
+            .nth(1)?
+            .trim_end_matches("];")
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_const_load(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_const_load)
             .any(|(op, _)| op == mnemonic)
     }
 
@@ -12304,6 +12536,164 @@ mod tests {
                 );
                 assert!(
                     offset + width <= input_len() as u32,
+                    "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_store_roundtrip_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut loads = vec![false; GLOBAL_LOAD_MNEMONICS.len()];
+        let mut stores = vec![false; GLOBAL_STORE_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in GLOBAL_LOAD_MNEMONICS.iter().enumerate() {
+                loads[i] |= has_body_global_store_roundtrip_access(&ptx, mnemonic);
+            }
+            for (i, mnemonic) in GLOBAL_STORE_MNEMONICS.iter().enumerate() {
+                stores[i] |= has_body_global_store_roundtrip_access(&ptx, mnemonic);
+            }
+            if loads.iter().all(|seen| *seen) && stores.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_loads: Vec<_> = GLOBAL_LOAD_MNEMONICS
+            .iter()
+            .zip(loads)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        let missing_stores: Vec<_> = GLOBAL_STORE_MNEMONICS
+            .iter()
+            .zip(stores)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing_loads.is_empty() && missing_stores.is_empty(),
+            "sample missed global roundtrip loads {missing_loads:?} stores {missing_stores:?}"
+        );
+    }
+
+    #[test]
+    fn global_store_roundtrip_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_store_roundtrips: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in GLOBAL_LOAD_MNEMONICS
+                .iter()
+                .chain(GLOBAL_STORE_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_body_global_store_roundtrip_access(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_store_roundtrip_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_global_store_roundtrip_access) {
+                let width = match mnemonic {
+                    "ld.global.u8" | "ld.global.s8" | "st.global.u8" => 1,
+                    "ld.global.u16" | "ld.global.s16" | "st.global.u16" => 2,
+                    "ld.global.u32" | "st.global.u32" => 4,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= N_OUTPUTS * 4,
+                    "seed {seed:x} emitted out-of-output-slice {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn const_load_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; CONST_LOAD_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in CONST_LOAD_MNEMONICS.iter().enumerate() {
+                found[i] |= has_body_const_load(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = CONST_LOAD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit body const loads {missing:?}"
+        );
+    }
+
+    #[test]
+    fn const_load_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_const_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in CONST_LOAD_MNEMONICS {
+                assert!(
+                    !has_body_const_load(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn const_load_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_const_load) {
+                let width = match mnemonic {
+                    "ld.const.u8" | "ld.const.s8" => 1,
+                    "ld.const.u16" | "ld.const.s16" => 2,
+                    "ld.const.u32" => 4,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= CONST_MEM_BYTES,
                     "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
                 );
             }

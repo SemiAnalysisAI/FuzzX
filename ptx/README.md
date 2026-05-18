@@ -266,6 +266,8 @@ that feature.
 | `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
 | `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
 | `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32}` loads from the input buffer. |
+| `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32}` plus `ld.global.{u8,s8,u16,s16,u32}` roundtrips through the output buffer. |
+| `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32}` loads from a module-scope constant buffer. |
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips. |
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/fma/min/max.f32` arithmetic. |
