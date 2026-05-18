@@ -1662,6 +1662,25 @@ bool triggersM038LoopFPMaskXor(const Instruction &I) {
   return false;
 }
 
+bool triggersM039SExtI8HighBytePack(const Instruction &I) {
+  const auto *SExt = dyn_cast<SExtInst>(&I);
+  if (!SExt || !SExt->getType()->isIntegerTy(32) ||
+      !SExt->getOperand(0)->getType()->isIntegerTy(8))
+    return false;
+
+  for (const User *U : SExt->users()) {
+    const auto *BO = dyn_cast<BinaryOperator>(U);
+    if (!BO || BO->getOpcode() != Instruction::LShr ||
+        !BO->getType()->isIntegerTy(32))
+      continue;
+    const auto *Shift = dyn_cast<ConstantInt>(BO->getOperand(1));
+    if (Shift && (Shift->getZExtValue() == 16 ||
+                  Shift->getZExtValue() == 24))
+      return true;
+  }
+  return false;
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1782,6 +1801,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
   bool AllowM037 = envFlag("FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT", false);
   bool AllowM038 = envFlag("FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR", false);
+  bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1824,6 +1844,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
               (!AllowM037 && triggersM037Dot4SquareLowbit(I)) ||
               (!AllowM038 && triggersM038LoopFPMaskXor(I)) ||
+              (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -6324,11 +6345,11 @@ bool crossOverIRModules(Module &Base, const Module &Other,
 bool typeUnsupportedByInterpreterOracle(Type *Ty) {
   if (!Ty)
     return false;
-  if (Ty->isHalfTy())
+  if (Ty->isFloatingPointTy())
     return true;
   if (auto *VecTy = dyn_cast<VectorType>(Ty)) {
     Type *EltTy = VecTy->getElementType();
-    return EltTy->isHalfTy() || EltTy->isFloatTy() || EltTy->isDoubleTy();
+    return EltTy->isFloatingPointTy();
   }
   if (auto *StructTy = dyn_cast<StructType>(Ty))
     for (Type *EltTy : StructTy->elements())
@@ -6344,7 +6365,25 @@ bool intrinsicUnsupportedByInterpreterOracle(Intrinsic::ID ID) {
   case Intrinsic::ctlz:
   case Intrinsic::cttz:
   case Intrinsic::ctpop:
+  case Intrinsic::bitreverse:
   case Intrinsic::bswap:
+  case Intrinsic::abs:
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+  case Intrinsic::smin:
+  case Intrinsic::smax:
+  case Intrinsic::uadd_sat:
+  case Intrinsic::usub_sat:
+  case Intrinsic::sadd_sat:
+  case Intrinsic::ssub_sat:
+  case Intrinsic::fshl:
+  case Intrinsic::fshr:
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+  case Intrinsic::umul_with_overflow:
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
+  case Intrinsic::smul_with_overflow:
     return false;
   default:
     return true;
@@ -6356,10 +6395,274 @@ bool intrinsicScalarizedForInterpreterOracle(Intrinsic::ID ID) {
   case Intrinsic::ctlz:
   case Intrinsic::cttz:
   case Intrinsic::ctpop:
+  case Intrinsic::bitreverse:
   case Intrinsic::bswap:
+  case Intrinsic::abs:
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+  case Intrinsic::smin:
+  case Intrinsic::smax:
+  case Intrinsic::uadd_sat:
+  case Intrinsic::usub_sat:
+  case Intrinsic::sadd_sat:
+  case Intrinsic::ssub_sat:
+  case Intrinsic::fshl:
+  case Intrinsic::fshr:
     return true;
   default:
     return false;
+  }
+}
+
+bool intrinsicManuallyLoweredForInterpreterOracle(Intrinsic::ID ID) {
+  switch (ID) {
+  case Intrinsic::bitreverse:
+  case Intrinsic::abs:
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+  case Intrinsic::smin:
+  case Intrinsic::smax:
+  case Intrinsic::uadd_sat:
+  case Intrinsic::usub_sat:
+  case Intrinsic::sadd_sat:
+  case Intrinsic::ssub_sat:
+  case Intrinsic::fshl:
+  case Intrinsic::fshr:
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+  case Intrinsic::umul_with_overflow:
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
+  case Intrinsic::smul_with_overflow:
+    return true;
+  default:
+    return false;
+  }
+}
+
+ConstantInt *intConst(Type *Ty, uint64_t Value) {
+  return ConstantInt::get(cast<IntegerType>(Ty), Value);
+}
+
+ConstantInt *signedLimitConst(Type *Ty, bool Min) {
+  unsigned Width = cast<IntegerType>(Ty)->getBitWidth();
+  APInt Value = Min ? APInt::getSignedMinValue(Width)
+                    : APInt::getSignedMaxValue(Width);
+  return ConstantInt::get(Ty->getContext(), Value);
+}
+
+Value *notI1(IRBuilder<NoFolder> &B, Value *V, const Twine &Name) {
+  return B.CreateXor(V, ConstantInt::getTrue(V->getContext()), Name);
+}
+
+Value *lowerOracleBitReverse(IRBuilder<NoFolder> &B, Value *V,
+                             const Twine &Name) {
+  Type *Ty = V->getType();
+  if (!Ty->isIntegerTy())
+    return nullptr;
+  unsigned Width = Ty->getIntegerBitWidth();
+  Value *Result = intConst(Ty, 0);
+  for (unsigned I = 0; I != Width; ++I) {
+    Value *Bit = B.CreateAnd(B.CreateLShr(V, intConst(Ty, I),
+                                          Name + ".shr"),
+                             intConst(Ty, 1), Name + ".bit");
+    unsigned OutShift = Width - 1 - I;
+    if (OutShift != 0)
+      Bit = B.CreateShl(Bit, intConst(Ty, OutShift), Name + ".shl");
+    Result = B.CreateOr(Result, Bit, Name + ".or");
+  }
+  return Result;
+}
+
+struct SignedOverflowParts {
+  Value *Result;
+  Value *Positive;
+  Value *Negative;
+  Value *Any;
+};
+
+SignedOverflowParts buildSignedAddSubOverflow(IRBuilder<NoFolder> &B, Value *A,
+                                               Value *Bv, bool IsSub,
+                                               const Twine &Name) {
+  Type *Ty = A->getType();
+  Value *Zero = intConst(Ty, 0);
+  Value *Result = IsSub ? B.CreateSub(A, Bv, Name + ".diff")
+                        : B.CreateAdd(A, Bv, Name + ".sum");
+  Value *ANeg = B.CreateICmpSLT(A, Zero, Name + ".a.neg");
+  Value *BNeg = B.CreateICmpSLT(Bv, Zero, Name + ".b.neg");
+  Value *RNeg = B.CreateICmpSLT(Result, Zero, Name + ".r.neg");
+  Value *NotANeg = notI1(B, ANeg, Name + ".a.nonneg");
+  Value *NotBNeg = notI1(B, BNeg, Name + ".b.nonneg");
+  Value *NotRNeg = notI1(B, RNeg, Name + ".r.nonneg");
+
+  Value *Positive = nullptr;
+  Value *Negative = nullptr;
+  if (IsSub) {
+    Positive = B.CreateAnd(B.CreateAnd(NotANeg, BNeg, Name + ".pos.ab"),
+                           RNeg, Name + ".pos");
+    Negative = B.CreateAnd(B.CreateAnd(ANeg, NotBNeg, Name + ".neg.ab"),
+                           NotRNeg, Name + ".neg");
+  } else {
+    Positive = B.CreateAnd(B.CreateAnd(NotANeg, NotBNeg, Name + ".pos.ab"),
+                           RNeg, Name + ".pos");
+    Negative = B.CreateAnd(B.CreateAnd(ANeg, BNeg, Name + ".neg.ab"),
+                           NotRNeg, Name + ".neg");
+  }
+  Value *Any = B.CreateOr(Positive, Negative, Name + ".any");
+  return {Result, Positive, Negative, Any};
+}
+
+Value *makeOverflowResult(IRBuilder<NoFolder> &B, CallInst *Call,
+                          Value *Result, Value *Overflow, const Twine &Name) {
+  Value *Pair = PoisonValue::get(Call->getType());
+  Pair = B.CreateInsertValue(Pair, Result, {0}, Name + ".value");
+  return B.CreateInsertValue(Pair, Overflow, {1}, Name + ".overflow");
+}
+
+Value *lowerOracleIntegerIntrinsic(IRBuilder<NoFolder> &B, CallInst *Call) {
+  Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic())
+    return nullptr;
+
+  Intrinsic::ID ID = Callee->getIntrinsicID();
+  Value *A = Call->getArgOperand(0);
+  Type *Ty = A->getType();
+  bool IsOverflow = isOverflowIntrinsic(ID);
+  if (!Ty->isIntegerTy() || (!Call->getType()->isIntegerTy() && !IsOverflow))
+    return nullptr;
+
+  switch (ID) {
+  case Intrinsic::bitreverse:
+    return lowerOracleBitReverse(B, A, "fuzzx.oracle.bitreverse");
+  case Intrinsic::abs: {
+    Value *Neg = B.CreateSub(intConst(Ty, 0), A, "fuzzx.oracle.abs.neg");
+    Value *IsNeg =
+        B.CreateICmpSLT(A, intConst(Ty, 0), "fuzzx.oracle.abs.isneg");
+    return B.CreateSelect(IsNeg, Neg, A, "fuzzx.oracle.abs");
+  }
+  case Intrinsic::umin:
+  case Intrinsic::umax:
+  case Intrinsic::smin:
+  case Intrinsic::smax: {
+    Value *Bv = Call->getArgOperand(1);
+    ICmpInst::Predicate Pred;
+    if (ID == Intrinsic::umin)
+      Pred = ICmpInst::ICMP_ULT;
+    else if (ID == Intrinsic::umax)
+      Pred = ICmpInst::ICMP_UGT;
+    else if (ID == Intrinsic::smin)
+      Pred = ICmpInst::ICMP_SLT;
+    else
+      Pred = ICmpInst::ICMP_SGT;
+    Value *Cmp = B.CreateICmp(Pred, A, Bv, "fuzzx.oracle.minmax.cmp");
+    return B.CreateSelect(Cmp, A, Bv, "fuzzx.oracle.minmax");
+  }
+  case Intrinsic::uadd_sat: {
+    Value *Bv = Call->getArgOperand(1);
+    Value *Sum = B.CreateAdd(A, Bv, "fuzzx.oracle.uadd.sat.sum");
+    Value *Overflow = B.CreateICmpULT(Sum, A, "fuzzx.oracle.uadd.sat.ov");
+    return B.CreateSelect(Overflow, intConst(Ty, -1ull), Sum,
+                          "fuzzx.oracle.uadd.sat");
+  }
+  case Intrinsic::usub_sat: {
+    Value *Bv = Call->getArgOperand(1);
+    Value *Diff = B.CreateSub(A, Bv, "fuzzx.oracle.usub.sat.diff");
+    Value *Overflow = B.CreateICmpULT(A, Bv, "fuzzx.oracle.usub.sat.ov");
+    return B.CreateSelect(Overflow, intConst(Ty, 0), Diff,
+                          "fuzzx.oracle.usub.sat");
+  }
+  case Intrinsic::sadd_sat:
+  case Intrinsic::ssub_sat: {
+    Value *Bv = Call->getArgOperand(1);
+    SignedOverflowParts Parts = buildSignedAddSubOverflow(
+        B, A, Bv, ID == Intrinsic::ssub_sat, "fuzzx.oracle.ssat");
+    Value *Clamp =
+        B.CreateSelect(Parts.Positive, signedLimitConst(Ty, false),
+                       signedLimitConst(Ty, true), "fuzzx.oracle.ssat.clamp");
+    return B.CreateSelect(Parts.Any, Clamp, Parts.Result,
+                          "fuzzx.oracle.ssat");
+  }
+  case Intrinsic::fshl:
+  case Intrinsic::fshr: {
+    Value *Bv = Call->getArgOperand(1);
+    Value *Amt = Call->getArgOperand(2);
+    unsigned Width = Ty->getIntegerBitWidth();
+    Value *Shift = B.CreateAnd(Amt, intConst(Ty, Width - 1),
+                               "fuzzx.oracle.fsh.shift");
+    Value *InvShift =
+        B.CreateAnd(B.CreateSub(intConst(Ty, Width), Shift,
+                                "fuzzx.oracle.fsh.inv.raw"),
+                    intConst(Ty, Width - 1), "fuzzx.oracle.fsh.inv");
+    Value *IsZero =
+        B.CreateICmpEQ(Shift, intConst(Ty, 0), "fuzzx.oracle.fsh.zero");
+    if (ID == Intrinsic::fshl) {
+      Value *Left = B.CreateShl(A, Shift, "fuzzx.oracle.fshl.left");
+      Value *Right = B.CreateLShr(Bv, InvShift, "fuzzx.oracle.fshl.right");
+      Value *Combined = B.CreateOr(Left, Right, "fuzzx.oracle.fshl.or");
+      return B.CreateSelect(IsZero, A, Combined, "fuzzx.oracle.fshl");
+    }
+    Value *Left = B.CreateShl(A, InvShift, "fuzzx.oracle.fshr.left");
+    Value *Right = B.CreateLShr(Bv, Shift, "fuzzx.oracle.fshr.right");
+    Value *Combined = B.CreateOr(Left, Right, "fuzzx.oracle.fshr.or");
+    return B.CreateSelect(IsZero, Bv, Combined, "fuzzx.oracle.fshr");
+  }
+  case Intrinsic::uadd_with_overflow: {
+    Value *Bv = Call->getArgOperand(1);
+    Value *Sum = B.CreateAdd(A, Bv, "fuzzx.oracle.uadd.ov.sum");
+    Value *Overflow = B.CreateICmpULT(Sum, A, "fuzzx.oracle.uadd.ov");
+    return makeOverflowResult(B, Call, Sum, Overflow, "fuzzx.oracle.uadd.ov");
+  }
+  case Intrinsic::usub_with_overflow: {
+    Value *Bv = Call->getArgOperand(1);
+    Value *Diff = B.CreateSub(A, Bv, "fuzzx.oracle.usub.ov.diff");
+    Value *Overflow = B.CreateICmpULT(A, Bv, "fuzzx.oracle.usub.ov");
+    return makeOverflowResult(B, Call, Diff, Overflow, "fuzzx.oracle.usub.ov");
+  }
+  case Intrinsic::umul_with_overflow: {
+    Value *Bv = Call->getArgOperand(1);
+    unsigned Width = Ty->getIntegerBitWidth();
+    Type *WideTy = IntegerType::get(Ty->getContext(), Width * 2);
+    Value *WideA = B.CreateZExt(A, WideTy, "fuzzx.oracle.umul.ov.a");
+    Value *WideB = B.CreateZExt(Bv, WideTy, "fuzzx.oracle.umul.ov.b");
+    Value *WideProduct =
+        B.CreateMul(WideA, WideB, "fuzzx.oracle.umul.ov.wide");
+    Value *Product = B.CreateTrunc(WideProduct, Ty,
+                                   "fuzzx.oracle.umul.ov.product");
+    Value *High = B.CreateLShr(WideProduct, ConstantInt::get(WideTy, Width),
+                               "fuzzx.oracle.umul.ov.high");
+    Value *Overflow =
+        B.CreateICmpNE(High, ConstantInt::get(WideTy, 0),
+                       "fuzzx.oracle.umul.ov");
+    return makeOverflowResult(B, Call, Product, Overflow,
+                              "fuzzx.oracle.umul.ov");
+  }
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow: {
+    Value *Bv = Call->getArgOperand(1);
+    SignedOverflowParts Parts = buildSignedAddSubOverflow(
+        B, A, Bv, ID == Intrinsic::ssub_with_overflow, "fuzzx.oracle.sov");
+    return makeOverflowResult(B, Call, Parts.Result, Parts.Any,
+                              "fuzzx.oracle.sov");
+  }
+  case Intrinsic::smul_with_overflow: {
+    Value *Bv = Call->getArgOperand(1);
+    unsigned Width = Ty->getIntegerBitWidth();
+    Type *WideTy = IntegerType::get(Ty->getContext(), Width * 2);
+    Value *WideA = B.CreateSExt(A, WideTy, "fuzzx.oracle.smul.ov.a");
+    Value *WideB = B.CreateSExt(Bv, WideTy, "fuzzx.oracle.smul.ov.b");
+    Value *WideProduct =
+        B.CreateMul(WideA, WideB, "fuzzx.oracle.smul.ov.wide");
+    Value *Product = B.CreateTrunc(WideProduct, Ty,
+                                   "fuzzx.oracle.smul.ov.product");
+    Value *SignExtended =
+        B.CreateSExt(Product, WideTy, "fuzzx.oracle.smul.ov.sext");
+    Value *Overflow = B.CreateICmpNE(WideProduct, SignExtended,
+                                     "fuzzx.oracle.smul.ov");
+    return makeOverflowResult(B, Call, Product, Overflow,
+                              "fuzzx.oracle.smul.ov");
+  }
+  default:
+    return nullptr;
   }
 }
 
@@ -6428,10 +6731,15 @@ bool scalarizeOracleVectorIntrinsics(Module &M) {
     for (unsigned I = 0, E = VecTy->getNumElements(); I != E; ++I) {
       Value *Lane = ci32(M.getContext(), I);
       SmallVector<Value *, 2> Args;
-      Args.push_back(B.CreateExtractElement(Call->getArgOperand(0), Lane,
-                                            "fuzzx.oracle.scalar.arg"));
-      if (Call->arg_size() > 1)
-        Args.push_back(Call->getArgOperand(1));
+      for (unsigned ArgNo = 0; ArgNo != Call->arg_size(); ++ArgNo) {
+        Value *Arg = Call->getArgOperand(ArgNo);
+        if (isa<FixedVectorType>(Arg->getType())) {
+          Args.push_back(B.CreateExtractElement(
+              Arg, Lane, "fuzzx.oracle.scalar.arg"));
+        } else {
+          Args.push_back(Arg);
+        }
+      }
       Value *Scalar =
           B.CreateCall(ScalarDecl, Args, "fuzzx.oracle.scalar.intr");
       Result = B.CreateInsertElement(Result, Scalar, Lane,
@@ -6442,6 +6750,37 @@ bool scalarizeOracleVectorIntrinsics(Module &M) {
     Call->eraseFromParent();
   }
 
+  return true;
+}
+
+bool lowerOracleIntegerIntrinsics(Module &M) {
+  SmallVector<CallInst *, 32> ToLower;
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *Call = dyn_cast<CallInst>(&I);
+        if (!Call)
+          continue;
+        Function *Callee = Call->getCalledFunction();
+        if (!Callee || !Callee->isIntrinsic() ||
+            !intrinsicManuallyLoweredForInterpreterOracle(
+                Callee->getIntrinsicID()))
+          continue;
+        ToLower.push_back(Call);
+      }
+    }
+  }
+
+  for (CallInst *Call : ToLower) {
+    IRBuilder<NoFolder> B(Call);
+    Value *Replacement = lowerOracleIntegerIntrinsic(B, Call);
+    if (!Replacement)
+      return false;
+    Call->replaceAllUsesWith(Replacement);
+    Call->eraseFromParent();
+  }
   return true;
 }
 
@@ -6497,7 +6836,10 @@ computeInterpreterOracleOutputs(const Module &Input,
   auto *OracleWI = new GlobalVariable(*OracleM, I32, false,
                                       GlobalValue::InternalLinkage, ci32(Ctx, 0),
                                       "fuzzx.oracle.wi");
-  scalarizeOracleVectorIntrinsics(*OracleM);
+  if (!scalarizeOracleVectorIntrinsics(*OracleM))
+    return std::nullopt;
+  if (!lowerOracleIntegerIntrinsics(*OracleM))
+    return std::nullopt;
   lowerOracleThreadIntrinsics(*OracleM, OracleWI);
   Kernel->setCallingConv(CallingConv::C);
   Kernel->setVisibility(GlobalValue::DefaultVisibility);
