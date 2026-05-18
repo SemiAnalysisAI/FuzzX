@@ -98,6 +98,8 @@ pub struct GenConfig {
     pub emit_signed_wide_bfind: bool,
     pub emit_predicated_bfind: bool,
     pub emit_predicated_wide_bfind: bool,
+    pub emit_fns: bool,
+    pub emit_predicated_fns: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
     pub emit_predicated_bitfield: bool,
@@ -140,6 +142,9 @@ pub struct GenConfig {
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
+    pub emit_szext: bool,
+    pub emit_signed_szext: bool,
+    pub emit_predicated_szext: bool,
     pub emit_setp_bool: bool,
     pub emit_setp_dual: bool,
     pub emit_pred_logic: bool,
@@ -226,6 +231,8 @@ impl Default for GenConfig {
             emit_signed_wide_bfind: true,
             emit_predicated_bfind: true,
             emit_predicated_wide_bfind: true,
+            emit_fns: true,
+            emit_predicated_fns: true,
             emit_bfi: true,
             emit_bmsk: true,
             emit_predicated_bitfield: true,
@@ -268,6 +275,9 @@ impl Default for GenConfig {
             emit_predicated_alu: true,
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
+            emit_szext: true,
+            emit_signed_szext: true,
+            emit_predicated_szext: true,
             emit_setp_bool: true,
             emit_setp_dual: true,
             emit_pred_logic: true,
@@ -469,6 +479,25 @@ impl CvtOp {
             CvtOp::S16ToU32 => "cvt.u32.s16",
             CvtOp::S8ToS32 => "cvt.s32.s8",
             CvtOp::S16ToS32 => "cvt.s32.s16",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SzextOp {
+    WrapU32,
+    ClampU32,
+    WrapS32,
+    ClampS32,
+}
+
+impl SzextOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            SzextOp::WrapU32 => "szext.wrap.u32",
+            SzextOp::ClampU32 => "szext.clamp.u32",
+            SzextOp::WrapS32 => "szext.wrap.s32",
+            SzextOp::ClampS32 => "szext.clamp.s32",
         }
     }
 }
@@ -1322,6 +1351,24 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `szext.{wrap,clamp}.{u32,s32} dst, src, width;`.
+    Szext {
+        op: SzextOp,
+        dst: u32,
+        src: Operand,
+        width: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred szext.{...} dst, src, width;`.
+    PredicatedSzext {
+        op: SzextOp,
+        dst: u32,
+        src: Operand,
+        width: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `bfind[.shiftamt].u32 dst, src;` — bit position / shift amount.
     Bfind { op: BfindOp, dst: u32, src: Operand },
     /// `setp.<cmp> pred, ca, cb; @pred bfind[.shiftamt].u32 dst, src;`.
@@ -1329,6 +1376,24 @@ enum Inst {
         op: BfindOp,
         dst: u32,
         src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// `fns.b32 dst, mask, base, offset;` with base in the defined 0..31 range.
+    Fns {
+        dst: u32,
+        mask: Operand,
+        base: u32,
+        offset: i32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred fns.b32 dst, mask, base, offset;`.
+    PredicatedFns {
+        dst: u32,
+        mask: Operand,
+        base: u32,
+        offset: i32,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2862,7 +2927,28 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 248 {
-            if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+            if self.cfg.emit_szext && u.arbitrary::<bool>()? {
+                let op = pick_szext(u, self.cfg.emit_signed_szext)?;
+                if self.cfg.emit_predicated_szext && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedSzext {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        width: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Szext {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        width: self.pick_operand(u)?,
+                    })
+                }
+            } else if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
                 Ok(Inst::PredicatedCvt {
                     op: pick_cvt(u)?,
                     dst: self.pick_dst(u)?,
@@ -2905,6 +2991,29 @@ impl<'a> Generator<'a> {
                         b: self.pick_operand(u)?,
                         c: self.pick_operand(u)?,
                         d: self.pick_operand(u)?,
+                    })
+                }
+            } else if self.cfg.emit_fns
+                && (!self.cfg.emit_bfind || u.arbitrary::<bool>()?)
+                && (!(self.cfg.emit_mad24 || self.cfg.emit_mul24) || u.arbitrary::<bool>()?)
+            {
+                if self.cfg.emit_predicated_fns && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedFns {
+                        dst: self.pick_dst(u)?,
+                        mask: self.pick_operand(u)?,
+                        base: u.int_in_range(0..=31)?,
+                        offset: pick_fns_offset(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Fns {
+                        dst: self.pick_dst(u)?,
+                        mask: self.pick_operand(u)?,
+                        base: u.int_in_range(0..=31)?,
+                        offset: pick_fns_offset(u)?,
                     })
                 }
             } else if self.cfg.emit_bfind {
@@ -3341,8 +3450,12 @@ impl<'a> Generator<'a> {
             | Inst::SpecialReg { dst, .. }
             | Inst::Cvt { dst, .. }
             | Inst::PredicatedCvt { dst, .. }
+            | Inst::Szext { dst, .. }
+            | Inst::PredicatedSzext { dst, .. }
             | Inst::Bfind { dst, .. }
             | Inst::PredicatedBfind { dst, .. }
+            | Inst::Fns { dst, .. }
+            | Inst::PredicatedFns { dst, .. }
             | Inst::DivRem { dst, .. }
             | Inst::RegDivRem { dst, .. }
             | Inst::PredicatedDivRem { dst, .. }
@@ -3981,6 +4094,41 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::Szext {
+                op,
+                dst,
+                src,
+                width,
+            } => {
+                write!(s, "    {:<17} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                write!(s, ", ").unwrap();
+                width.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedSzext {
+                op,
+                dst,
+                src,
+                width,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<12} %r{dst}, ",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                src.emit(s);
+                write!(s, ", ").unwrap();
+                width.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Bfind { op, dst, src } => {
                 if op.is_wide() {
                     write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
@@ -4019,6 +4167,31 @@ impl<'a> Generator<'a> {
                     src.emit(s);
                     writeln!(s, ";").unwrap();
                 }
+            }
+            Inst::Fns {
+                dst,
+                mask,
+                base,
+                offset,
+            } => {
+                write!(s, "    fns.b32       %r{dst}, ").unwrap();
+                mask.emit(s);
+                writeln!(s, ", {base}, {offset};").unwrap();
+            }
+            Inst::PredicatedFns {
+                dst,
+                mask,
+                base,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} fns.b32  %r{dst}, ", pred_guard(pred)).unwrap();
+                mask.emit(s);
+                writeln!(s, ", {base}, {offset};").unwrap();
             }
             Inst::DivRem {
                 op,
@@ -5375,6 +5548,22 @@ fn pick_cvt(u: &mut Unstructured) -> Result<CvtOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_szext(u: &mut Unstructured, emit_signed: bool) -> Result<SzextOp> {
+    let unsigned_ops = [SzextOp::WrapU32, SzextOp::ClampU32];
+    let all_ops = [
+        SzextOp::WrapU32,
+        SzextOp::ClampU32,
+        SzextOp::WrapS32,
+        SzextOp::ClampS32,
+    ];
+    let ops: &[SzextOp] = if emit_signed { &all_ops } else { &unsigned_ops };
+    Ok(*u.choose(&ops)?)
+}
+
+fn pick_fns_offset(u: &mut Unstructured) -> Result<i32> {
+    u.int_in_range(-31..=31)
+}
+
 fn pick_bfind(
     u: &mut Unstructured,
     emit_signed_bfind: bool,
@@ -5835,6 +6024,14 @@ mod tests {
         "cvt.s32.s8",
         "cvt.s32.s16",
     ];
+    const SZEXT_MNEMONICS: &[&str] = &[
+        "szext.wrap.u32",
+        "szext.clamp.u32",
+        "szext.wrap.s32",
+        "szext.clamp.s32",
+    ];
+    const SIGNED_SZEXT_MNEMONICS: &[&str] = &["szext.wrap.s32", "szext.clamp.s32"];
+    const FNS_MNEMONICS: &[&str] = &["fns.b32"];
     const BFIND_MNEMONICS: &[&str] = &[
         "bfind.u32",
         "bfind.shiftamt.u32",
@@ -6040,6 +6237,8 @@ mod tests {
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
+            SZEXT_MNEMONICS,
+            FNS_MNEMONICS,
             BFIND_MNEMONICS,
             BFE_MNEMONICS,
             WIDE_BITFIELD_MNEMONICS,
@@ -6082,6 +6281,8 @@ mod tests {
             POST_KNOWN_BIN_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
+            SZEXT_MNEMONICS,
+            FNS_MNEMONICS,
             BFE_MNEMONICS,
             WIDE_BITFIELD_MNEMONICS,
             DIVREM_MNEMONICS,
@@ -6256,6 +6457,18 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| CVT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_szext(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SZEXT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_fns(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| FNS_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_bfind(ptx: &str) -> bool {
@@ -9404,6 +9617,162 @@ mod tests {
             assert!(
                 !has_predicated_cvt(&ptx),
                 "seed {seed:x} emitted predicated cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn szext_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_predicated_szext: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 4096, SZEXT_MNEMONICS);
+    }
+
+    #[test]
+    fn szext_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_szext: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SZEXT_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_szext_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_szext: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_SZEXT_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_szext_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SZEXT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SZEXT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SZEXT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_szext_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_szext: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_szext(&ptx),
+                "seed {seed:x} emitted predicated szext"
+            );
+        }
+    }
+
+    #[test]
+    fn fns_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_predicated_fns: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 4096, FNS_MNEMONICS);
+    }
+
+    #[test]
+    fn fns_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_fns: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in FNS_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_fns_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_fns(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated fns.b32");
+    }
+
+    #[test]
+    fn predicated_fns_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_fns: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_fns(&ptx),
+                "seed {seed:x} emitted predicated fns"
             );
         }
     }

@@ -261,6 +261,8 @@ that feature.
 | `DIV_DISABLE_SIGNED_WIDE_BFIND` | `bfind.s64` and `bfind.shiftamt.s64`. |
 | `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind` and `bfind.shiftamt` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_BFIND` | Predicated 64-bit-source `bfind` and `bfind.shiftamt` instructions. |
+| `DIV_DISABLE_FNS` | `fns.b32`. |
+| `DIV_DISABLE_PREDICATED_FNS` | Predicated `fns.b32` instructions. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
@@ -303,6 +305,9 @@ that feature.
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
+| `DIV_DISABLE_SZEXT` | `szext.{wrap,clamp}.{u32,s32}`. |
+| `DIV_DISABLE_SIGNED_SZEXT` | `szext.*.s32`. |
+| `DIV_DISABLE_PREDICATED_SZEXT` | Predicated `szext` instructions. |
 | `DIV_DISABLE_SETP_BOOL` | `setp.<cmp>.{and,or,xor}` predicate-combiner instructions. |
 | `DIV_DISABLE_SETP_DUAL` | `setp.<cmp> %p|%q` complement-predicate instructions. |
 | `DIV_DISABLE_PRED_LOGIC` | `and.pred`, `or.pred`, `xor.pred`, and `not.pred`. |
