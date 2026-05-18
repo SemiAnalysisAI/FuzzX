@@ -128,10 +128,16 @@
 //!                         predicated 64-bit bfind generation
 //!   DIV_DISABLE_FNS      default: false; set 1/true/yes/on to suppress
 //!                         PTX fns.b32 generation
+//!   DIV_DISABLE_REG_FNS  default: false; set 1/true/yes/on to suppress
+//!                         fns.b32 with a sanitized register base/offset
 //!   DIV_DISABLE_PREDICATED_FNS default: false; set 1/true/yes/on to suppress
 //!                         predicated fns.b32 generation
+//!   DIV_DISABLE_PREDICATED_REG_FNS default: false; set 1/true/yes/on to suppress
+//!                         predicated fns.b32 with a sanitized register base/offset
 //!   DIV_DISABLE_BFI       default: false; set 1/true/yes/on to suppress
 //!                         PTX bfi.b32 generation
+//!   DIV_DISABLE_BFE       default: false; set 1/true/yes/on to suppress
+//!                         PTX bfe.{u32,s32} generation
 //!   DIV_DISABLE_BMSK      default: false; set 1/true/yes/on to suppress
 //!                         PTX bmsk.{clamp,wrap}.b32 generation
 //!   DIV_DISABLE_BMSK_WRAP default: false; set 1/true/yes/on to suppress
@@ -160,6 +166,12 @@
 //!                         PTX mul24.{lo,hi}.{u32,s32} generation
 //!   DIV_DISABLE_PREDICATED_24BIT default: false; set 1/true/yes/on to suppress
 //!                         predicated mad24/mul24 generation
+//!   DIV_DISABLE_SUBWORD_WIDE default: false; set 1/true/yes/on to suppress
+//!                         16-bit-source mul.wide/mad.wide generation
+//!   DIV_DISABLE_SIGNED_SUBWORD_WIDE default: false; set 1/true/yes/on to suppress
+//!                         signed 16-bit-source mul.wide/mad.wide generation
+//!   DIV_DISABLE_PREDICATED_SUBWORD_WIDE default: false; set 1/true/yes/on to suppress
+//!                         predicated 16-bit-source mul.wide/mad.wide generation
 //!   DIV_DISABLE_MUL_WIDE  default: false; set 1/true/yes/on to suppress
 //!                         PTX mul.wide.{u32,s32} generation
 //!   DIV_DISABLE_PREDICATED_MUL_WIDE default: false; set 1/true/yes/on to suppress
@@ -224,12 +236,20 @@
 //!                         64-bit sub.cc.u64/subc.u64 carry pair generation
 //!   DIV_DISABLE_PREDICATED_WIDE_CARRY default: false; set 1/true/yes/on to suppress
 //!                         predicated 64-bit add/sub carry pair generation
+//!   DIV_DISABLE_WIDE_CARRY_CHAIN default: false; set 1/true/yes/on to suppress
+//!                         three-instruction 64-bit add/sub carry chain generation
+//!   DIV_DISABLE_PREDICATED_WIDE_CARRY_CHAIN default: false; set 1/true/yes/on to suppress
+//!                         predicated three-instruction 64-bit add/sub carry chain generation
 //!   DIV_DISABLE_ADDC      default: false; set 1/true/yes/on to suppress
 //!                         PTX add.cc.u32/addc.u32 pair generation
 //!   DIV_DISABLE_SUBC      default: false; set 1/true/yes/on to suppress
 //!                         PTX sub.cc.u32/subc.u32 pair generation
 //!   DIV_DISABLE_PREDICATED_CARRY default: false; set 1/true/yes/on to suppress
 //!                         predicated add/sub carry pair generation
+//!   DIV_DISABLE_CARRY_CHAIN default: false; set 1/true/yes/on to suppress
+//!                         three-instruction add/sub carry chain generation
+//!   DIV_DISABLE_PREDICATED_CARRY_CHAIN default: false; set 1/true/yes/on to suppress
+//!                         predicated three-instruction add/sub carry chain generation
 //!   DIV_DISABLE_I32_BOUNDARY_IMMS default: false; set 1/true/yes/on to
 //!                         suppress immediate 0x7fffffff/0x80000000 generation
 //!   DIV_DISABLE_DP4A      default: false; set 1/true/yes/on to suppress
@@ -242,6 +262,8 @@
 //!                         predicated ALU instruction generation
 //!   DIV_DISABLE_PREDICATED_UNARY default: false; set 1/true/yes/on to suppress
 //!                         predicated unary instruction generation
+//!   DIV_DISABLE_CVT default: false; set 1/true/yes/on to suppress
+//!                         base cvt generation
 //!   DIV_DISABLE_PREDICATED_CVT default: false; set 1/true/yes/on to suppress
 //!                         predicated cvt generation
 //!   DIV_DISABLE_NARROW_CVT default: false; set 1/true/yes/on to suppress
@@ -272,10 +294,20 @@
 //!                         predicated mad.lo.{u32,s32} generation
 //!   DIV_DISABLE_PREDICATED_MAD_HI default: false; set 1/true/yes/on to suppress
 //!                         predicated mad.hi.{u32,s32} generation
+//!   DIV_DISABLE_MAD_CARRY default: false; set 1/true/yes/on to suppress
+//!                         mad.cc/madc.cc/madc carry-chain generation
+//!   DIV_DISABLE_SIGNED_MAD_CARRY default: false; set 1/true/yes/on to suppress
+//!                         signed mad.cc/madc.cc/madc carry-chain generation
+//!   DIV_DISABLE_PREDICATED_MAD_CARRY default: false; set 1/true/yes/on to suppress
+//!                         predicated mad.cc/madc.cc/madc carry-chain generation
 //!   DIV_DISABLE_PREDICATED_SET default: false; set 1/true/yes/on to suppress
 //!                         predicated set.{cmp} generation
 //!   DIV_DISABLE_PREDICATED_SELP default: false; set 1/true/yes/on to suppress
 //!                         instruction-predicated selp.b32 generation
+//!   DIV_DISABLE_SAD default: false; set 1/true/yes/on to suppress
+//!                         sad.{u32,s32} generation
+//!   DIV_DISABLE_SLCT default: false; set 1/true/yes/on to suppress
+//!                         slct generation
 //!   DIV_DISABLE_PREDICATED_SAD default: false; set 1/true/yes/on to suppress
 //!                         predicated sad.{u32,s32} generation
 //!   DIV_DISABLE_PREDICATED_SLCT default: false; set 1/true/yes/on to suppress
@@ -493,9 +525,15 @@ struct Args {
     #[arg(long)]
     disable_fns: bool,
     #[arg(long)]
+    disable_reg_fns: bool,
+    #[arg(long)]
     disable_predicated_fns: bool,
     #[arg(long)]
+    disable_predicated_reg_fns: bool,
+    #[arg(long)]
     disable_bfi: bool,
+    #[arg(long)]
+    disable_bfe: bool,
     #[arg(long)]
     disable_bmsk: bool,
     #[arg(long)]
@@ -524,6 +562,12 @@ struct Args {
     disable_mul24: bool,
     #[arg(long)]
     disable_predicated_24bit: bool,
+    #[arg(long)]
+    disable_subword_wide: bool,
+    #[arg(long)]
+    disable_signed_subword_wide: bool,
+    #[arg(long)]
+    disable_predicated_subword_wide: bool,
     #[arg(long)]
     disable_mul_wide: bool,
     #[arg(long)]
@@ -589,11 +633,19 @@ struct Args {
     #[arg(long)]
     disable_predicated_wide_carry: bool,
     #[arg(long)]
+    disable_wide_carry_chain: bool,
+    #[arg(long)]
+    disable_predicated_wide_carry_chain: bool,
+    #[arg(long)]
     disable_addc: bool,
     #[arg(long)]
     disable_subc: bool,
     #[arg(long)]
     disable_predicated_carry: bool,
+    #[arg(long)]
+    disable_carry_chain: bool,
+    #[arg(long)]
+    disable_predicated_carry_chain: bool,
     #[arg(long)]
     disable_i32_boundary_imms: bool,
     #[arg(long)]
@@ -606,6 +658,8 @@ struct Args {
     disable_predicated_alu: bool,
     #[arg(long)]
     disable_predicated_unary: bool,
+    #[arg(long)]
+    disable_cvt: bool,
     #[arg(long)]
     disable_predicated_cvt: bool,
     #[arg(long)]
@@ -637,9 +691,19 @@ struct Args {
     #[arg(long)]
     disable_predicated_mad_hi: bool,
     #[arg(long)]
+    disable_mad_carry: bool,
+    #[arg(long)]
+    disable_signed_mad_carry: bool,
+    #[arg(long)]
+    disable_predicated_mad_carry: bool,
+    #[arg(long)]
     disable_predicated_set: bool,
     #[arg(long)]
     disable_predicated_selp: bool,
+    #[arg(long)]
+    disable_sad: bool,
+    #[arg(long)]
+    disable_slct: bool,
     #[arg(long)]
     disable_predicated_sad: bool,
     #[arg(long)]
@@ -789,8 +853,14 @@ impl Args {
             "DIV_DISABLE_PREDICATED_WIDE_BFIND"
         );
         set_bool!(self.disable_fns, "DIV_DISABLE_FNS");
+        set_bool!(self.disable_reg_fns, "DIV_DISABLE_REG_FNS");
         set_bool!(self.disable_predicated_fns, "DIV_DISABLE_PREDICATED_FNS");
+        set_bool!(
+            self.disable_predicated_reg_fns,
+            "DIV_DISABLE_PREDICATED_REG_FNS"
+        );
         set_bool!(self.disable_bfi, "DIV_DISABLE_BFI");
+        set_bool!(self.disable_bfe, "DIV_DISABLE_BFE");
         set_bool!(self.disable_bmsk, "DIV_DISABLE_BMSK");
         set_bool!(self.disable_bmsk_wrap, "DIV_DISABLE_BMSK_WRAP");
         set_bool!(
@@ -822,6 +892,15 @@ impl Args {
         set_bool!(
             self.disable_predicated_24bit,
             "DIV_DISABLE_PREDICATED_24BIT"
+        );
+        set_bool!(self.disable_subword_wide, "DIV_DISABLE_SUBWORD_WIDE");
+        set_bool!(
+            self.disable_signed_subword_wide,
+            "DIV_DISABLE_SIGNED_SUBWORD_WIDE"
+        );
+        set_bool!(
+            self.disable_predicated_subword_wide,
+            "DIV_DISABLE_PREDICATED_SUBWORD_WIDE"
         );
         set_bool!(self.disable_mul_wide, "DIV_DISABLE_MUL_WIDE");
         set_bool!(self.disable_mad_wide, "DIV_DISABLE_MAD_WIDE");
@@ -897,11 +976,24 @@ impl Args {
             self.disable_predicated_wide_carry,
             "DIV_DISABLE_PREDICATED_WIDE_CARRY"
         );
+        set_bool!(
+            self.disable_wide_carry_chain,
+            "DIV_DISABLE_WIDE_CARRY_CHAIN"
+        );
+        set_bool!(
+            self.disable_predicated_wide_carry_chain,
+            "DIV_DISABLE_PREDICATED_WIDE_CARRY_CHAIN"
+        );
         set_bool!(self.disable_addc, "DIV_DISABLE_ADDC");
         set_bool!(self.disable_subc, "DIV_DISABLE_SUBC");
         set_bool!(
             self.disable_predicated_carry,
             "DIV_DISABLE_PREDICATED_CARRY"
+        );
+        set_bool!(self.disable_carry_chain, "DIV_DISABLE_CARRY_CHAIN");
+        set_bool!(
+            self.disable_predicated_carry_chain,
+            "DIV_DISABLE_PREDICATED_CARRY_CHAIN"
         );
         set_bool!(
             self.disable_i32_boundary_imms,
@@ -918,6 +1010,7 @@ impl Args {
             self.disable_predicated_unary,
             "DIV_DISABLE_PREDICATED_UNARY"
         );
+        set_bool!(self.disable_cvt, "DIV_DISABLE_CVT");
         set_bool!(self.disable_predicated_cvt, "DIV_DISABLE_PREDICATED_CVT");
         set_bool!(self.disable_narrow_cvt, "DIV_DISABLE_NARROW_CVT");
         set_bool!(
@@ -948,8 +1041,19 @@ impl Args {
             self.disable_predicated_mad_hi,
             "DIV_DISABLE_PREDICATED_MAD_HI"
         );
+        set_bool!(self.disable_mad_carry, "DIV_DISABLE_MAD_CARRY");
+        set_bool!(
+            self.disable_signed_mad_carry,
+            "DIV_DISABLE_SIGNED_MAD_CARRY"
+        );
+        set_bool!(
+            self.disable_predicated_mad_carry,
+            "DIV_DISABLE_PREDICATED_MAD_CARRY"
+        );
         set_bool!(self.disable_predicated_set, "DIV_DISABLE_PREDICATED_SET");
         set_bool!(self.disable_predicated_selp, "DIV_DISABLE_PREDICATED_SELP");
+        set_bool!(self.disable_sad, "DIV_DISABLE_SAD");
+        set_bool!(self.disable_slct, "DIV_DISABLE_SLCT");
         set_bool!(self.disable_predicated_sad, "DIV_DISABLE_PREDICATED_SAD");
         set_bool!(self.disable_predicated_slct, "DIV_DISABLE_PREDICATED_SLCT");
         set_bool!(self.disable_predicated_dp, "DIV_DISABLE_PREDICATED_DP");
@@ -1086,8 +1190,12 @@ impl Config {
         let disable_predicated_wide_bfind =
             env_bool("DIV_DISABLE_PREDICATED_WIDE_BFIND")?.unwrap_or(false);
         let disable_fns = env_bool("DIV_DISABLE_FNS")?.unwrap_or(false);
+        let disable_reg_fns = env_bool("DIV_DISABLE_REG_FNS")?.unwrap_or(false);
         let disable_predicated_fns = env_bool("DIV_DISABLE_PREDICATED_FNS")?.unwrap_or(false);
+        let disable_predicated_reg_fns =
+            env_bool("DIV_DISABLE_PREDICATED_REG_FNS")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
+        let disable_bfe = env_bool("DIV_DISABLE_BFE")?.unwrap_or(false);
         let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
         let disable_bmsk_wrap = env_bool("DIV_DISABLE_BMSK_WRAP")?.unwrap_or(false);
         let disable_predicated_bitfield =
@@ -1106,6 +1214,11 @@ impl Config {
         let disable_mad24 = env_bool("DIV_DISABLE_MAD24")?.unwrap_or(false);
         let disable_mul24 = env_bool("DIV_DISABLE_MUL24")?.unwrap_or(false);
         let disable_predicated_24bit = env_bool("DIV_DISABLE_PREDICATED_24BIT")?.unwrap_or(false);
+        let disable_subword_wide = env_bool("DIV_DISABLE_SUBWORD_WIDE")?.unwrap_or(false);
+        let disable_signed_subword_wide =
+            env_bool("DIV_DISABLE_SIGNED_SUBWORD_WIDE")?.unwrap_or(false);
+        let disable_predicated_subword_wide =
+            env_bool("DIV_DISABLE_PREDICATED_SUBWORD_WIDE")?.unwrap_or(false);
         let disable_mul_wide = env_bool("DIV_DISABLE_MUL_WIDE")?.unwrap_or(false);
         let disable_mad_wide = env_bool("DIV_DISABLE_MAD_WIDE")?.unwrap_or(false);
         let disable_signed_mad_wide = env_bool("DIV_DISABLE_SIGNED_MAD_WIDE")?.unwrap_or(false);
@@ -1150,9 +1263,15 @@ impl Config {
         let disable_wide_subc = env_bool("DIV_DISABLE_WIDE_SUBC")?.unwrap_or(false);
         let disable_predicated_wide_carry =
             env_bool("DIV_DISABLE_PREDICATED_WIDE_CARRY")?.unwrap_or(false);
+        let disable_wide_carry_chain = env_bool("DIV_DISABLE_WIDE_CARRY_CHAIN")?.unwrap_or(false);
+        let disable_predicated_wide_carry_chain =
+            env_bool("DIV_DISABLE_PREDICATED_WIDE_CARRY_CHAIN")?.unwrap_or(false);
         let disable_addc = env_bool("DIV_DISABLE_ADDC")?.unwrap_or(false);
         let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
         let disable_predicated_carry = env_bool("DIV_DISABLE_PREDICATED_CARRY")?.unwrap_or(false);
+        let disable_carry_chain = env_bool("DIV_DISABLE_CARRY_CHAIN")?.unwrap_or(false);
+        let disable_predicated_carry_chain =
+            env_bool("DIV_DISABLE_PREDICATED_CARRY_CHAIN")?.unwrap_or(false);
         let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
         let disable_dp4a = env_bool("DIV_DISABLE_DP4A")?.unwrap_or(false);
         let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
@@ -1160,6 +1279,7 @@ impl Config {
             env_bool("DIV_DISABLE_NEGATED_PREDICATES")?.unwrap_or(false);
         let disable_predicated_alu = env_bool("DIV_DISABLE_PREDICATED_ALU")?.unwrap_or(false);
         let disable_predicated_unary = env_bool("DIV_DISABLE_PREDICATED_UNARY")?.unwrap_or(false);
+        let disable_cvt = env_bool("DIV_DISABLE_CVT")?.unwrap_or(false);
         let disable_predicated_cvt = env_bool("DIV_DISABLE_PREDICATED_CVT")?.unwrap_or(false);
         let disable_narrow_cvt = env_bool("DIV_DISABLE_NARROW_CVT")?.unwrap_or(false);
         let disable_signed_narrow_cvt = env_bool("DIV_DISABLE_SIGNED_NARROW_CVT")?.unwrap_or(false);
@@ -1177,8 +1297,14 @@ impl Config {
         let disable_pred_logic = env_bool("DIV_DISABLE_PRED_LOGIC")?.unwrap_or(false);
         let disable_predicated_mad = env_bool("DIV_DISABLE_PREDICATED_MAD")?.unwrap_or(false);
         let disable_predicated_mad_hi = env_bool("DIV_DISABLE_PREDICATED_MAD_HI")?.unwrap_or(false);
+        let disable_mad_carry = env_bool("DIV_DISABLE_MAD_CARRY")?.unwrap_or(false);
+        let disable_signed_mad_carry = env_bool("DIV_DISABLE_SIGNED_MAD_CARRY")?.unwrap_or(false);
+        let disable_predicated_mad_carry =
+            env_bool("DIV_DISABLE_PREDICATED_MAD_CARRY")?.unwrap_or(false);
         let disable_predicated_set = env_bool("DIV_DISABLE_PREDICATED_SET")?.unwrap_or(false);
         let disable_predicated_selp = env_bool("DIV_DISABLE_PREDICATED_SELP")?.unwrap_or(false);
+        let disable_sad = env_bool("DIV_DISABLE_SAD")?.unwrap_or(false);
+        let disable_slct = env_bool("DIV_DISABLE_SLCT")?.unwrap_or(false);
         let disable_predicated_sad = env_bool("DIV_DISABLE_PREDICATED_SAD")?.unwrap_or(false);
         let disable_predicated_slct = env_bool("DIV_DISABLE_PREDICATED_SLCT")?.unwrap_or(false);
         let disable_predicated_dp = env_bool("DIV_DISABLE_PREDICATED_DP")?.unwrap_or(false);
@@ -1265,8 +1391,15 @@ impl Config {
                 && !disable_wide_bfind
                 && !disable_bfind,
             emit_fns: !disable_fns,
+            emit_reg_fns: !disable_reg_fns && !disable_fns && !disable_bitwise_binops,
             emit_predicated_fns: !disable_predicated_fns && !disable_fns,
+            emit_predicated_reg_fns: !disable_predicated_reg_fns
+                && !disable_reg_fns
+                && !disable_predicated_fns
+                && !disable_fns
+                && !disable_bitwise_binops,
             emit_bfi: !disable_bfi,
+            emit_bfe: !disable_bfe,
             emit_bmsk: !disable_bmsk,
             emit_bmsk_wrap: !disable_bmsk_wrap && !disable_bmsk,
             emit_predicated_bitfield: !disable_predicated_bitfield,
@@ -1292,6 +1425,9 @@ impl Config {
             emit_mad24: !disable_mad24,
             emit_mul24: !disable_mul24,
             emit_predicated_24bit: !disable_predicated_24bit,
+            emit_subword_wide: !disable_subword_wide,
+            emit_signed_subword_wide: !disable_signed_subword_wide && !disable_subword_wide,
+            emit_predicated_subword_wide: !disable_predicated_subword_wide && !disable_subword_wide,
             emit_mul_wide: !disable_mul_wide,
             emit_mad_wide: !disable_mad_wide,
             emit_signed_mad_wide: !disable_signed_mad_wide,
@@ -1341,16 +1477,28 @@ impl Config {
             emit_wide_subc: !disable_wide_subc,
             emit_predicated_wide_carry: !disable_predicated_wide_carry
                 && (!disable_wide_addc || !disable_wide_subc),
+            emit_wide_carry_chain: !disable_wide_carry_chain
+                && (!disable_wide_addc || !disable_wide_subc),
+            emit_predicated_wide_carry_chain: !disable_predicated_wide_carry_chain
+                && !disable_wide_carry_chain
+                && !disable_predicated_wide_carry
+                && (!disable_wide_addc || !disable_wide_subc),
             emit_addc: !disable_addc,
             emit_subc: !disable_subc,
             emit_predicated_carry: !disable_predicated_carry && (!disable_addc || !disable_subc),
+            emit_carry_chain: !disable_carry_chain && (!disable_addc || !disable_subc),
+            emit_predicated_carry_chain: !disable_predicated_carry_chain
+                && !disable_carry_chain
+                && !disable_predicated_carry
+                && (!disable_addc || !disable_subc),
             emit_i32_boundary_immediates: !disable_i32_boundary_imms,
             emit_dp4a: !disable_dp4a,
             emit_dp2a: !disable_dp2a,
             emit_negated_predicates: !disable_negated_predicates,
             emit_predicated_alu: !disable_predicated_alu,
             emit_predicated_unary: !disable_predicated_unary,
-            emit_predicated_cvt: !disable_predicated_cvt,
+            emit_cvt: !disable_cvt,
+            emit_predicated_cvt: !disable_predicated_cvt && !disable_cvt,
             emit_narrow_cvt: !disable_narrow_cvt,
             emit_signed_narrow_cvt: !disable_signed_narrow_cvt,
             emit_predicated_narrow_cvt: !disable_predicated_narrow_cvt
@@ -1369,14 +1517,19 @@ impl Config {
             emit_pred_logic: !disable_pred_logic && !disable_predicated_alu,
             emit_predicated_mad: !disable_predicated_mad && !disable_mul_lo,
             emit_predicated_mad_hi: !disable_predicated_mad_hi && !disable_mad_hi,
+            emit_mad_carry: !disable_mad_carry,
+            emit_signed_mad_carry: !disable_signed_mad_carry && !disable_mad_carry,
+            emit_predicated_mad_carry: !disable_predicated_mad_carry && !disable_mad_carry,
             emit_predicated_set: !disable_predicated_set && !disable_set,
             emit_predicated_selp: !disable_predicated_selp && !disable_selp,
-            emit_predicated_sad: !disable_predicated_sad,
-            emit_predicated_slct: !disable_predicated_slct,
+            emit_sad: !disable_sad,
+            emit_slct: !disable_slct,
+            emit_predicated_sad: !disable_predicated_sad && !disable_sad,
+            emit_predicated_slct: !disable_predicated_slct && !disable_slct,
             emit_predicated_dp: !disable_predicated_dp,
             emit_predicated_video: !disable_predicated_video && !disable_video,
             emit_set: !disable_set,
-            emit_s32_slct: !disable_s32_slct,
+            emit_s32_slct: !disable_s32_slct && !disable_slct,
             emit_video: !disable_video,
             emit_vsub4: !disable_vsub4,
             ..GenConfig::default()
@@ -1563,7 +1716,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_packed_add={} emit_signed_packed_add={} emit_predicated_packed_add={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_reg_prmt={} emit_predicated_reg_prmt={} emit_prmt_modes={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_predicated_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_predicated_fns={} emit_bfi={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_reg_wide_bitfield={} emit_predicated_reg_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_mad64={} emit_signed_wide_mad64={} emit_predicated_wide_mad64={} emit_wide_set={} emit_predicated_wide_set={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_reg_wide_divrem={} emit_predicated_reg_wide_divrem={} emit_predicated_wide_divrem={} emit_wide_addc={} emit_wide_subc={} emit_predicated_wide_carry={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_narrow_cvt={} emit_signed_narrow_cvt={} emit_predicated_narrow_cvt={} emit_wide_cvt={} emit_signed_wide_cvt={} emit_predicated_wide_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_packed_add={} emit_signed_packed_add={} emit_predicated_packed_add={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_reg_prmt={} emit_predicated_reg_prmt={} emit_prmt_modes={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_predicated_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_reg_fns={} emit_predicated_fns={} emit_predicated_reg_fns={} emit_bfi={} emit_bfe={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_reg_wide_bitfield={} emit_predicated_reg_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_subword_wide={} emit_signed_subword_wide={} emit_predicated_subword_wide={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_mad64={} emit_signed_wide_mad64={} emit_predicated_wide_mad64={} emit_wide_set={} emit_predicated_wide_set={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_reg_wide_divrem={} emit_predicated_reg_wide_divrem={} emit_predicated_wide_divrem={} emit_wide_addc={} emit_wide_subc={} emit_predicated_wide_carry={} emit_wide_carry_chain={} emit_predicated_wide_carry_chain={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_carry_chain={} emit_predicated_carry_chain={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_cvt={} emit_predicated_cvt={} emit_narrow_cvt={} emit_signed_narrow_cvt={} emit_predicated_narrow_cvt={} emit_wide_cvt={} emit_signed_wide_cvt={} emit_predicated_wide_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_mad_carry={} emit_signed_mad_carry={} emit_predicated_mad_carry={} emit_predicated_set={} emit_sad={} emit_slct={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1636,8 +1789,11 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_predicated_bfind,
         cfg.gen_config.emit_predicated_wide_bfind,
         cfg.gen_config.emit_fns,
+        cfg.gen_config.emit_reg_fns,
         cfg.gen_config.emit_predicated_fns,
+        cfg.gen_config.emit_predicated_reg_fns,
         cfg.gen_config.emit_bfi,
+        cfg.gen_config.emit_bfe,
         cfg.gen_config.emit_bmsk,
         cfg.gen_config.emit_bmsk_wrap,
         cfg.gen_config.emit_predicated_bitfield,
@@ -1652,6 +1808,9 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_mad24,
         cfg.gen_config.emit_mul24,
         cfg.gen_config.emit_predicated_24bit,
+        cfg.gen_config.emit_subword_wide,
+        cfg.gen_config.emit_signed_subword_wide,
+        cfg.gen_config.emit_predicated_subword_wide,
         cfg.gen_config.emit_mul_wide,
         cfg.gen_config.emit_mad_wide,
         cfg.gen_config.emit_signed_mad_wide,
@@ -1684,15 +1843,20 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_wide_addc,
         cfg.gen_config.emit_wide_subc,
         cfg.gen_config.emit_predicated_wide_carry,
+        cfg.gen_config.emit_wide_carry_chain,
+        cfg.gen_config.emit_predicated_wide_carry_chain,
         cfg.gen_config.emit_addc,
         cfg.gen_config.emit_subc,
         cfg.gen_config.emit_predicated_carry,
+        cfg.gen_config.emit_carry_chain,
+        cfg.gen_config.emit_predicated_carry_chain,
         cfg.gen_config.emit_i32_boundary_immediates,
         cfg.gen_config.emit_dp4a,
         cfg.gen_config.emit_dp2a,
         cfg.gen_config.emit_negated_predicates,
         cfg.gen_config.emit_predicated_alu,
         cfg.gen_config.emit_predicated_unary,
+        cfg.gen_config.emit_cvt,
         cfg.gen_config.emit_predicated_cvt,
         cfg.gen_config.emit_narrow_cvt,
         cfg.gen_config.emit_signed_narrow_cvt,
@@ -1708,7 +1872,12 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_pred_logic,
         cfg.gen_config.emit_predicated_mad,
         cfg.gen_config.emit_predicated_mad_hi,
+        cfg.gen_config.emit_mad_carry,
+        cfg.gen_config.emit_signed_mad_carry,
+        cfg.gen_config.emit_predicated_mad_carry,
         cfg.gen_config.emit_predicated_set,
+        cfg.gen_config.emit_sad,
+        cfg.gen_config.emit_slct,
         cfg.gen_config.emit_predicated_sad,
         cfg.gen_config.emit_predicated_slct,
         cfg.gen_config.emit_predicated_dp,

@@ -274,8 +274,11 @@ that feature.
 | `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind` and `bfind.shiftamt` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_BFIND` | Predicated 64-bit-source `bfind` and `bfind.shiftamt` instructions. |
 | `DIV_DISABLE_FNS` | `fns.b32`. |
+| `DIV_DISABLE_REG_FNS` | `fns.b32` with a sanitized register base or offset operand. |
 | `DIV_DISABLE_PREDICATED_FNS` | Predicated `fns.b32` instructions. |
+| `DIV_DISABLE_PREDICATED_REG_FNS` | Predicated `fns.b32` instructions with a sanitized register base or offset operand. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
+| `DIV_DISABLE_BFE` | `bfe.{u32,s32}`. |
 | `DIV_DISABLE_BMSK` | `bmsk.{clamp,wrap}.b32`. |
 | `DIV_DISABLE_BMSK_WRAP` | `bmsk.wrap.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
@@ -290,6 +293,9 @@ that feature.
 | `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_24BIT` | Predicated `mad24` and `mul24` instructions. |
+| `DIV_DISABLE_SUBWORD_WIDE` | 16-bit-source `mul.wide` and `mad.wide` through `.b16` scratch registers. |
+| `DIV_DISABLE_SIGNED_SUBWORD_WIDE` | Signed 16-bit-source `mul.wide.s16` and `mad.wide.s16`. |
+| `DIV_DISABLE_PREDICATED_SUBWORD_WIDE` | Predicated 16-bit-source `mul.wide` and `mad.wide` instructions. |
 | `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_MUL_WIDE` | Predicated `mul.wide.{u32,s32}` instructions. |
 | `DIV_DISABLE_MAD_WIDE` | `mad.wide.{u32,s32}`. |
@@ -322,15 +328,20 @@ that feature.
 | `DIV_DISABLE_WIDE_ADDC` | 64-bit scratch-register `add.cc.u64` / `addc.u64` pairs. |
 | `DIV_DISABLE_WIDE_SUBC` | 64-bit scratch-register `sub.cc.u64` / `subc.u64` pairs. |
 | `DIV_DISABLE_PREDICATED_WIDE_CARRY` | Predicated 64-bit scratch-register carry pairs. |
+| `DIV_DISABLE_WIDE_CARRY_CHAIN` | Three-instruction 64-bit scratch-register carry chains using `addc.cc.u64` or `subc.cc.u64`. |
+| `DIV_DISABLE_PREDICATED_WIDE_CARRY_CHAIN` | Predicated three-instruction 64-bit scratch-register carry chains. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_PREDICATED_CARRY` | Predicated `add.cc` / `addc` and `sub.cc` / `subc` pairs. |
+| `DIV_DISABLE_CARRY_CHAIN` | Three-instruction `add/sub.cc` plus `addc/subc.cc` carry chains. |
+| `DIV_DISABLE_PREDICATED_CARRY_CHAIN` | Predicated three-instruction `add/sub` carry chains. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
 | `DIV_DISABLE_DP4A` | `dp4a.{u32,s32}.{u32,s32}`. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.{u32,s32}.{u32,s32}`. |
 | `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
+| `DIV_DISABLE_CVT` | Direct base `cvt.{u32,s32}.{u8,u16,s8,s16}` instructions; narrow and wide round-trips have separate flags. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated `cvt` instructions. |
 | `DIV_DISABLE_NARROW_CVT` | Narrow `cvt` round-trips through 8/16-bit destination types. |
 | `DIV_DISABLE_SIGNED_NARROW_CVT` | Signed narrow `cvt` round-trips. |
@@ -346,8 +357,13 @@ that feature.
 | `DIV_DISABLE_PRED_LOGIC` | `and.pred`, `or.pred`, `xor.pred`, and `not.pred`. |
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_MAD_HI` | Predicated `mad.hi.{u32,s32}` instructions. |
+| `DIV_DISABLE_MAD_CARRY` | Three-instruction `mad.cc` / `madc.cc` / `madc` carry chains. |
+| `DIV_DISABLE_SIGNED_MAD_CARRY` | Signed `mad.cc` / `madc.cc` / `madc` carry chains. |
+| `DIV_DISABLE_PREDICATED_MAD_CARRY` | Predicated `mad.cc` / `madc.cc` / `madc` carry chains. |
 | `DIV_DISABLE_PREDICATED_SET` | Predicated `set.{cmp}` instructions. |
 | `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32` instructions. |
+| `DIV_DISABLE_SAD` | `sad.{u32,s32}`. |
+| `DIV_DISABLE_SLCT` | `slct.{u32,s32,b32}.s32`. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SLCT` | Predicated `slct` instructions. |
 | `DIV_DISABLE_PREDICATED_DP` | Predicated `dp4a` and `dp2a` instructions. |

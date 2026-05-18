@@ -106,8 +106,11 @@ pub struct GenConfig {
     pub emit_predicated_bfind: bool,
     pub emit_predicated_wide_bfind: bool,
     pub emit_fns: bool,
+    pub emit_reg_fns: bool,
     pub emit_predicated_fns: bool,
+    pub emit_predicated_reg_fns: bool,
     pub emit_bfi: bool,
+    pub emit_bfe: bool,
     pub emit_bmsk: bool,
     pub emit_bmsk_wrap: bool,
     pub emit_predicated_bitfield: bool,
@@ -122,6 +125,9 @@ pub struct GenConfig {
     pub emit_mad24: bool,
     pub emit_mul24: bool,
     pub emit_predicated_24bit: bool,
+    pub emit_subword_wide: bool,
+    pub emit_signed_subword_wide: bool,
+    pub emit_predicated_subword_wide: bool,
     pub emit_mul_wide: bool,
     pub emit_mad_wide: bool,
     pub emit_signed_mad_wide: bool,
@@ -154,15 +160,20 @@ pub struct GenConfig {
     pub emit_wide_addc: bool,
     pub emit_wide_subc: bool,
     pub emit_predicated_wide_carry: bool,
+    pub emit_wide_carry_chain: bool,
+    pub emit_predicated_wide_carry_chain: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
+    pub emit_carry_chain: bool,
+    pub emit_predicated_carry_chain: bool,
     pub emit_i32_boundary_immediates: bool,
     pub emit_dp4a: bool,
     pub emit_dp2a: bool,
     pub emit_negated_predicates: bool,
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
+    pub emit_cvt: bool,
     pub emit_predicated_cvt: bool,
     pub emit_narrow_cvt: bool,
     pub emit_signed_narrow_cvt: bool,
@@ -178,9 +189,14 @@ pub struct GenConfig {
     pub emit_pred_logic: bool,
     pub emit_predicated_mad: bool,
     pub emit_predicated_mad_hi: bool,
+    pub emit_mad_carry: bool,
+    pub emit_signed_mad_carry: bool,
+    pub emit_predicated_mad_carry: bool,
     pub emit_predicated_set: bool,
     pub emit_predicated_selp: bool,
     pub emit_predicated_divrem: bool,
+    pub emit_sad: bool,
+    pub emit_slct: bool,
     pub emit_predicated_sad: bool,
     pub emit_predicated_slct: bool,
     pub emit_predicated_dp: bool,
@@ -267,8 +283,11 @@ impl Default for GenConfig {
             emit_predicated_bfind: true,
             emit_predicated_wide_bfind: true,
             emit_fns: true,
+            emit_reg_fns: true,
             emit_predicated_fns: true,
+            emit_predicated_reg_fns: true,
             emit_bfi: true,
+            emit_bfe: true,
             emit_bmsk: true,
             emit_bmsk_wrap: true,
             emit_predicated_bitfield: true,
@@ -283,6 +302,9 @@ impl Default for GenConfig {
             emit_mad24: true,
             emit_mul24: true,
             emit_predicated_24bit: true,
+            emit_subword_wide: true,
+            emit_signed_subword_wide: true,
+            emit_predicated_subword_wide: true,
             emit_mul_wide: true,
             emit_mad_wide: true,
             emit_signed_mad_wide: true,
@@ -315,15 +337,20 @@ impl Default for GenConfig {
             emit_wide_addc: true,
             emit_wide_subc: true,
             emit_predicated_wide_carry: true,
+            emit_wide_carry_chain: true,
+            emit_predicated_wide_carry_chain: true,
             emit_addc: true,
             emit_subc: true,
             emit_predicated_carry: true,
+            emit_carry_chain: true,
+            emit_predicated_carry_chain: true,
             emit_i32_boundary_immediates: true,
             emit_dp4a: true,
             emit_dp2a: true,
             emit_negated_predicates: true,
             emit_predicated_alu: true,
             emit_predicated_unary: true,
+            emit_cvt: true,
             emit_predicated_cvt: true,
             emit_narrow_cvt: true,
             emit_signed_narrow_cvt: true,
@@ -339,9 +366,14 @@ impl Default for GenConfig {
             emit_pred_logic: true,
             emit_predicated_mad: true,
             emit_predicated_mad_hi: true,
+            emit_mad_carry: true,
+            emit_signed_mad_carry: true,
+            emit_predicated_mad_carry: true,
             emit_predicated_set: true,
             emit_predicated_selp: true,
             emit_predicated_divrem: true,
+            emit_sad: true,
+            emit_slct: true,
             emit_predicated_sad: true,
             emit_predicated_slct: true,
             emit_predicated_dp: true,
@@ -698,6 +730,12 @@ enum BitfieldParamSlot {
     Len,
 }
 
+#[derive(Clone, Copy)]
+enum FnsParamSlot {
+    Base,
+    Offset,
+}
+
 impl BmskMode {
     fn mnemonic(self) -> &'static str {
         match self {
@@ -799,6 +837,25 @@ impl MadHiOp {
 }
 
 #[derive(Clone, Copy)]
+enum MadCarryOp {
+    LoU32,
+    HiU32,
+    LoS32,
+    HiS32,
+}
+
+impl MadCarryOp {
+    fn mnemonic_triple(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            MadCarryOp::LoU32 => ("mad.lo.cc.u32", "madc.lo.cc.u32", "madc.lo.u32"),
+            MadCarryOp::HiU32 => ("mad.hi.cc.u32", "madc.hi.cc.u32", "madc.hi.u32"),
+            MadCarryOp::LoS32 => ("mad.lo.cc.s32", "madc.lo.cc.s32", "madc.lo.s32"),
+            MadCarryOp::HiS32 => ("mad.hi.cc.s32", "madc.hi.cc.s32", "madc.hi.s32"),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum Mad24Op {
     LoU32,
     HiU32,
@@ -833,6 +890,36 @@ impl Mul24Op {
             Mul24Op::LoS32 => "mul24.lo.s32",
             Mul24Op::HiS32 => "mul24.hi.s32",
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SubwordWideOp {
+    MulU16,
+    MulS16,
+    MadU16,
+    MadS16,
+}
+
+impl SubwordWideOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            SubwordWideOp::MulU16 => "mul.wide.u16",
+            SubwordWideOp::MulS16 => "mul.wide.s16",
+            SubwordWideOp::MadU16 => "mad.wide.u16",
+            SubwordWideOp::MadS16 => "mad.wide.s16",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            SubwordWideOp::MulU16 | SubwordWideOp::MadU16 => "cvt.u16.u32",
+            SubwordWideOp::MulS16 | SubwordWideOp::MadS16 => "cvt.s16.s32",
+        }
+    }
+
+    fn is_mad(self) -> bool {
+        matches!(self, SubwordWideOp::MadU16 | SubwordWideOp::MadS16)
     }
 }
 
@@ -1092,6 +1179,20 @@ impl AddCarryOp {
         match self {
             AddCarryOp::Add => ("add.cc.u64", "addc.u64"),
             AddCarryOp::Sub => ("sub.cc.u64", "subc.u64"),
+        }
+    }
+
+    fn mnemonic_triple(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            AddCarryOp::Add => ("add.cc.u32", "addc.cc.u32", "addc.u32"),
+            AddCarryOp::Sub => ("sub.cc.u32", "subc.cc.u32", "subc.u32"),
+        }
+    }
+
+    fn wide_mnemonic_triple(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            AddCarryOp::Add => ("add.cc.u64", "addc.cc.u64", "addc.u64"),
+            AddCarryOp::Sub => ("sub.cc.u64", "subc.cc.u64", "subc.u64"),
         }
     }
 }
@@ -1724,6 +1825,26 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `fns.b32` with one base/offset parameter sanitized through a register.
+    RegFns {
+        dst: u32,
+        mask: Operand,
+        param: Operand,
+        slot: FnsParamSlot,
+        imm: i32,
+    },
+    /// Predicated `fns.b32` with one sanitized register base/offset parameter.
+    PredicatedRegFns {
+        dst: u32,
+        mask: Operand,
+        param: Operand,
+        slot: FnsParamSlot,
+        imm: i32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `div/rem.u32 dst, src, divisor;` with a nonzero immediate divisor.
     DivRem {
         op: DivRemOp,
@@ -1793,6 +1914,26 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// 16-bit source `mul/mad.wide` through `.b16` scratch registers.
+    SubwordWide {
+        op: SubwordWideOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Predicated 16-bit source `mul/mad.wide`.
+    PredicatedSubwordWide {
+        op: SubwordWideOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2027,6 +2168,36 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// Three-instruction 64-bit add/sub carry chain through scratch b64 registers.
+    WideCarryChain {
+        op: AddCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
+    },
+    /// Predicated three-instruction 64-bit add/sub carry chain.
+    PredicatedWideCarryChain {
+        op: AddCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `add/sub.cc.u32` followed by `addc/subc.u32`, keeping carry dataflow explicit.
     AddCarry {
         op: AddCarryOp,
@@ -2046,6 +2217,36 @@ enum Inst {
         b: Operand,
         c: Operand,
         d: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Three-instruction `add/sub.cc` followed by `addc/subc.cc` and `addc/subc`.
+    CarryChain {
+        op: AddCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
+    },
+    /// Predicated three-instruction add/sub carry chain.
+    PredicatedCarryChain {
+        op: AddCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2167,6 +2368,42 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Three-instruction `mad.cc` / `madc.cc` / `madc` carry chain.
+    MadCarry {
+        op: MadCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
+        g: Operand,
+        h: Operand,
+        i: Operand,
+    },
+    /// Predicated `mad.cc` / `madc.cc` / `madc` carry chain.
+    PredicatedMadCarry {
+        op: MadCarryOp,
+        dst0: u32,
+        dst1: u32,
+        dst2: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        e: Operand,
+        f: Operand,
+        g: Operand,
+        h: Operand,
+        i: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2696,6 +2933,44 @@ impl<'a> Generator<'a> {
         Ok((self.pick_reg_operand(u)?, slot, u.int_in_range(0..=63)?))
     }
 
+    fn pick_reg_fns_param(&mut self, u: &mut Unstructured) -> Result<(Operand, FnsParamSlot, i32)> {
+        let slot = if u.arbitrary::<bool>()? {
+            FnsParamSlot::Base
+        } else {
+            FnsParamSlot::Offset
+        };
+        let imm = match slot {
+            FnsParamSlot::Base => pick_fns_offset(u)?,
+            FnsParamSlot::Offset => i32::from(u.int_in_range(0..=31)?),
+        };
+        Ok((self.pick_reg_operand(u)?, slot, imm))
+    }
+
+    fn pick_reg_fns(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let (param, slot, imm) = self.pick_reg_fns_param(u)?;
+        if self.cfg.emit_predicated_reg_fns && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedRegFns {
+                dst: self.pick_dst(u)?,
+                mask: self.pick_operand(u)?,
+                param,
+                slot,
+                imm,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::RegFns {
+                dst: self.pick_dst(u)?,
+                mask: self.pick_operand(u)?,
+                param,
+                slot,
+                imm,
+            })
+        }
+    }
+
     fn pick_prmt_ctrl(
         &mut self,
         u: &mut Unstructured,
@@ -3026,6 +3301,142 @@ impl<'a> Generator<'a> {
                 b: self.pick_operand(u)?,
                 c: self.pick_operand(u)?,
                 d: self.pick_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_wide_carry_chain(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_add_carry(u, self.cfg.emit_wide_addc, self.cfg.emit_wide_subc)?;
+        if self.cfg.emit_predicated_wide_carry_chain && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedWideCarryChain {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideCarryChain {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_carry_chain(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_add_carry(u, self.cfg.emit_addc, self.cfg.emit_subc)?;
+        if self.cfg.emit_predicated_carry_chain && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedCarryChain {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::CarryChain {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_mad_carry(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_mad_carry(u, self.cfg.emit_signed_mad_carry)?;
+        if self.cfg.emit_predicated_mad_carry && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedMadCarry {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+                g: self.pick_operand(u)?,
+                h: self.pick_operand(u)?,
+                i: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::MadCarry {
+                op,
+                dst0: self.pick_dst(u)?,
+                dst1: self.pick_dst(u)?,
+                dst2: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                e: self.pick_operand(u)?,
+                f: self.pick_operand(u)?,
+                g: self.pick_operand(u)?,
+                h: self.pick_operand(u)?,
+                i: self.pick_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_subword_wide(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_subword_wide(u, self.cfg.emit_signed_subword_wide)?;
+        if self.cfg.emit_predicated_subword_wide && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedSubwordWide {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::SubwordWide {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_operand(u)?,
             })
         }
     }
@@ -3473,6 +3884,9 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 235 {
+            if !self.cfg.emit_wide_bfe && !self.cfg.emit_bfe && !self.cfg.emit_bmsk {
+                return self.pick_mad_or_add(u);
+            }
             if self.cfg.emit_wide_bfe && u.arbitrary::<bool>()? {
                 let op = pick_wide_bfe(u, self.cfg.emit_signed_wide_bfe)?;
                 let predicated = self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()?;
@@ -3525,8 +3939,13 @@ impl<'a> Generator<'a> {
                         len: u.int_in_range(0..=63)?,
                     })
                 }
-            } else if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
-                if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
+            } else if self.cfg.emit_predicated_bitfield
+                && (self.cfg.emit_bfe || self.cfg.emit_bmsk)
+                && u.arbitrary::<bool>()?
+            {
+                let use_bmsk =
+                    self.cfg.emit_bmsk && (!self.cfg.emit_bfe || u.arbitrary::<bool>()?);
+                if use_bmsk {
                     Ok(Inst::PredicatedBmsk {
                         mode: pick_bmsk_mode(u, self.cfg.emit_bmsk_wrap)?,
                         dst: self.pick_dst(u)?,
@@ -3543,7 +3962,7 @@ impl<'a> Generator<'a> {
                         cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
-                } else {
+                } else if self.cfg.emit_bfe {
                     Ok(Inst::PredicatedBfe {
                         op: pick_bfe(u)?,
                         dst: self.pick_dst(u)?,
@@ -3561,6 +3980,8 @@ impl<'a> Generator<'a> {
                         cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     })
+                } else {
+                    self.pick_mad_or_add(u)
                 }
             } else if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
                 Ok(Inst::Bmsk {
@@ -3569,7 +3990,7 @@ impl<'a> Generator<'a> {
                     pos: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                     len: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                 })
-            } else {
+            } else if self.cfg.emit_bfe {
                 Ok(Inst::Bfe {
                     op: pick_bfe(u)?,
                     dst: self.pick_dst(u)?,
@@ -3577,6 +3998,8 @@ impl<'a> Generator<'a> {
                     pos: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                     len: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                 })
+            } else {
+                self.pick_mad_or_add(u)
             }
         } else if pick < 245 {
             if self.cfg.emit_bfi || self.cfg.emit_wide_bfi {
@@ -3691,7 +4114,7 @@ impl<'a> Generator<'a> {
                         width: self.pick_operand(u)?,
                     })
                 }
-            } else if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+            } else if self.cfg.emit_cvt && self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
                 Ok(Inst::PredicatedCvt {
                     op: pick_cvt(u)?,
                     dst: self.pick_dst(u)?,
@@ -3701,15 +4124,27 @@ impl<'a> Generator<'a> {
                     cb: self.pick_guard_operand(u)?,
                     pred: self.alloc_inst_pred(u)?,
                 })
-            } else {
+            } else if self.cfg.emit_cvt {
                 Ok(Inst::Cvt {
                     op: pick_cvt(u)?,
                     dst: self.pick_dst(u)?,
                     src: self.pick_cvt_operand(u)?,
                 })
+            } else {
+                self.pick_mad_or_add(u)
             }
         } else if pick < 251 {
-            if (self.cfg.emit_addc || self.cfg.emit_subc) && u.arbitrary::<bool>()? {
+            let aux_pick: u8 = u.int_in_range(0..=5)?;
+            if self.cfg.emit_mad_carry && aux_pick == 0 {
+                self.pick_mad_carry(u)
+            } else if (self.cfg.emit_addc || self.cfg.emit_subc)
+                && self.cfg.emit_carry_chain
+                && aux_pick == 1
+            {
+                self.pick_carry_chain(u)
+            } else if self.cfg.emit_subword_wide && aux_pick == 2 {
+                self.pick_subword_wide(u)
+            } else if (self.cfg.emit_addc || self.cfg.emit_subc) && u.arbitrary::<bool>()? {
                 let op = pick_add_carry(u, self.cfg.emit_addc, self.cfg.emit_subc)?;
                 if self.cfg.emit_predicated_carry && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedAddCarry {
@@ -3740,7 +4175,9 @@ impl<'a> Generator<'a> {
                 && (!self.cfg.emit_bfind || u.arbitrary::<bool>()?)
                 && (!(self.cfg.emit_mad24 || self.cfg.emit_mul24) || u.arbitrary::<bool>()?)
             {
-                if self.cfg.emit_predicated_fns && u.arbitrary::<bool>()? {
+                if self.cfg.emit_reg_fns && self.cfg.emit_bitwise_binops && u.arbitrary::<bool>()? {
+                    self.pick_reg_fns(u)
+                } else if self.cfg.emit_predicated_fns && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedFns {
                         dst: self.pick_dst(u)?,
                         mask: self.pick_operand(u)?,
@@ -3838,7 +4275,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=13)?;
+            let wide_pick: u8 = u.int_in_range(0..=14)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -3971,6 +4408,11 @@ impl<'a> Generator<'a> {
                 self.pick_wide_divrem(u)
             } else if (self.cfg.emit_wide_addc || self.cfg.emit_wide_subc) && wide_pick == 11 {
                 self.pick_wide_carry(u)
+            } else if (self.cfg.emit_wide_addc || self.cfg.emit_wide_subc)
+                && self.cfg.emit_wide_carry_chain
+                && wide_pick == 12
+            {
+                self.pick_wide_carry_chain(u)
             } else {
                 let can_emit_reg_divrem =
                     self.cfg.emit_reg_divrem && self.cfg.emit_bitwise_binops && self.cfg.emit_or;
@@ -4046,7 +4488,7 @@ impl<'a> Generator<'a> {
                         c: self.pick_reg_operand(u)?,
                     })
                 }
-            } else {
+            } else if self.cfg.emit_sad {
                 let op = pick_sad(u)?;
                 if self.cfg.emit_predicated_sad && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedSad {
@@ -4069,29 +4511,35 @@ impl<'a> Generator<'a> {
                         c: self.pick_operand(u)?,
                     })
                 }
+            } else {
+                self.pick_mad_or_add(u)
             }
         } else if pick < 255 {
-            let op = pick_slct(u, self.cfg.emit_s32_slct)?;
-            if self.cfg.emit_predicated_slct && u.arbitrary::<bool>()? {
-                Ok(Inst::PredicatedSlct {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_guard_operand(u)?,
-                    cb: self.pick_guard_operand(u)?,
-                    pred: self.alloc_inst_pred(u)?,
-                })
+            if self.cfg.emit_slct {
+                let op = pick_slct(u, self.cfg.emit_s32_slct)?;
+                if self.cfg.emit_predicated_slct && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedSlct {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Slct {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                    })
+                }
             } else {
-                Ok(Inst::Slct {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.pick_mad_or_add(u)
             }
         } else if self.cfg.emit_dp2a || self.cfg.emit_dp4a {
             let use_dp2a = if self.cfg.emit_dp2a && self.cfg.emit_dp4a {
@@ -4188,6 +4636,28 @@ impl<'a> Generator<'a> {
                 self.forget_tracked_write(*dst_lo);
                 self.forget_tracked_write(*dst_hi);
             }
+            Inst::CarryChain {
+                dst0, dst1, dst2, ..
+            }
+            | Inst::PredicatedCarryChain {
+                dst0, dst1, dst2, ..
+            }
+            | Inst::WideCarryChain {
+                dst0, dst1, dst2, ..
+            }
+            | Inst::PredicatedWideCarryChain {
+                dst0, dst1, dst2, ..
+            }
+            | Inst::MadCarry {
+                dst0, dst1, dst2, ..
+            }
+            | Inst::PredicatedMadCarry {
+                dst0, dst1, dst2, ..
+            } => {
+                self.forget_tracked_write(*dst0);
+                self.forget_tracked_write(*dst1);
+                self.forget_tracked_write(*dst2);
+            }
             Inst::Bin { dst, .. }
             | Inst::PackedAdd { dst, .. }
             | Inst::Sel { dst, .. }
@@ -4217,6 +4687,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedBfind { dst, .. }
             | Inst::Fns { dst, .. }
             | Inst::PredicatedFns { dst, .. }
+            | Inst::RegFns { dst, .. }
+            | Inst::PredicatedRegFns { dst, .. }
             | Inst::DivRem { dst, .. }
             | Inst::RegDivRem { dst, .. }
             | Inst::PredicatedDivRem { dst, .. }
@@ -4225,6 +4697,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedMad24 { dst, .. }
             | Inst::Mul24 { dst, .. }
             | Inst::PredicatedMul24 { dst, .. }
+            | Inst::SubwordWide { dst, .. }
+            | Inst::PredicatedSubwordWide { dst, .. }
             | Inst::MulWide { dst, .. }
             | Inst::PredicatedMulWide { dst, .. }
             | Inst::MadWide { dst, .. }
@@ -4412,8 +4886,9 @@ impl<'a> Generator<'a> {
         if self.n_pred > 0 {
             writeln!(s, "    .reg .pred  %p<{}>;", self.n_pred).unwrap();
         }
+        writeln!(s, "    .reg .b16   %h<4>;").unwrap();
         writeln!(s, "    .reg .b32   %r<{total_regs}>;").unwrap();
-        writeln!(s, "    .reg .b64   %rd<8>;").unwrap();
+        writeln!(s, "    .reg .b64   %rd<10>;").unwrap();
         writeln!(s).unwrap();
 
         // Prologue: load params; compute tid into the reserved tid reg; load
@@ -5084,6 +5559,55 @@ impl<'a> Generator<'a> {
                 mask.emit(s);
                 writeln!(s, ", {base}, {offset};").unwrap();
             }
+            Inst::RegFns {
+                dst,
+                mask,
+                param,
+                slot,
+                imm,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 31;").unwrap();
+                write!(s, "    fns.b32       %r{dst}, ").unwrap();
+                mask.emit(s);
+                match slot {
+                    FnsParamSlot::Base => {
+                        writeln!(s, ", %r{scratch}, {imm};").unwrap();
+                    }
+                    FnsParamSlot::Offset => {
+                        writeln!(s, ", {imm}, %r{scratch};").unwrap();
+                    }
+                }
+            }
+            Inst::PredicatedRegFns {
+                dst,
+                mask,
+                param,
+                slot,
+                imm,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 31;").unwrap();
+                write!(s, "    {} fns.b32  %r{dst}, ", pred_guard(pred)).unwrap();
+                mask.emit(s);
+                match slot {
+                    FnsParamSlot::Base => {
+                        writeln!(s, ", %r{scratch}, {imm};").unwrap();
+                    }
+                    FnsParamSlot::Offset => {
+                        writeln!(s, ", {imm}, %r{scratch};").unwrap();
+                    }
+                }
+            }
             Inst::DivRem {
                 op,
                 dst,
@@ -5193,6 +5717,51 @@ impl<'a> Generator<'a> {
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::SubwordWide { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %h0, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %h1, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %r{dst}, %h0, %h1", op.mnemonic()).unwrap();
+                if op.is_mad() {
+                    write!(s, ", ").unwrap();
+                    c.emit(s);
+                }
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedSubwordWide {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %h0, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %h1, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(
+                    s,
+                    "    {} {:<8} %r{dst}, %h0, %h1",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                if op.is_mad() {
+                    write!(s, ", ").unwrap();
+                    c.emit(s);
+                }
                 writeln!(s, ";").unwrap();
             }
             Inst::MulWide {
@@ -5808,6 +6377,104 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
+            Inst::WideCarryChain {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                let (first, second, third) = op.wide_mnemonic_triple();
+                write!(s, "    cvt.u64.u32  %rd4, ").unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd5, ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd8, ").unwrap();
+                e.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd9, ").unwrap();
+                f.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {first:<13} %rd4, %rd4, %rd5;").unwrap();
+                writeln!(s, "    {second:<13} %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    {third:<13} %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst0}, %r{scratch_hi}}}, %rd4;").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst1}, %r{scratch_hi}}}, %rd6;").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst2}, %r{scratch_hi}}}, %rd8;").unwrap();
+            }
+            Inst::PredicatedWideCarryChain {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                let (first, second, third) = op.wide_mnemonic_triple();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    cvt.u64.u32  %rd4, ").unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd5, ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd8, ").unwrap();
+                e.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd9, ").unwrap();
+                f.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {} {first:<8} %rd4, %rd4, %rd5;", pred_guard(pred)).unwrap();
+                writeln!(s, "    {} {second:<8} %rd6, %rd6, %rd7;", pred_guard(pred)).unwrap();
+                writeln!(s, "    {} {third:<8} %rd8, %rd8, %rd9;", pred_guard(pred)).unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst0}, %r{scratch_hi}}}, %rd4;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst1}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst2}, %r{scratch_hi}}}, %rd8;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::AddCarry {
                 op,
                 dst_lo,
@@ -5853,6 +6520,69 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 write!(s, ", ").unwrap();
                 d.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::CarryChain {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+            } => {
+                let (first, second, third) = op.mnemonic_triple();
+                write!(s, "    {first:<13} %r{dst0}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {second:<13} %r{dst1}, ").unwrap();
+                c.emit(s);
+                write!(s, ", ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {third:<13} %r{dst2}, ").unwrap();
+                e.emit(s);
+                write!(s, ", ").unwrap();
+                f.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedCarryChain {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let (first, second, third) = op.mnemonic_triple();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {first:<8} %r{dst0}, ", pred_guard(pred)).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {} {second:<8} %r{dst1}, ", pred_guard(pred)).unwrap();
+                c.emit(s);
+                write!(s, ", ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {} {third:<8} %r{dst2}, ", pred_guard(pred)).unwrap();
+                e.emit(s);
+                write!(s, ", ").unwrap();
+                f.emit(s);
                 writeln!(s, ";").unwrap();
             }
             Inst::Sad { op, dst, a, b, c } => {
@@ -6047,6 +6777,87 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 write!(s, ", ").unwrap();
                 c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::MadCarry {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                g,
+                h,
+                i,
+            } => {
+                let (first, second, third) = op.mnemonic_triple();
+                write!(s, "    {first:<13} %r{dst0}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {second:<13} %r{dst1}, ").unwrap();
+                d.emit(s);
+                write!(s, ", ").unwrap();
+                e.emit(s);
+                write!(s, ", ").unwrap();
+                f.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {third:<13} %r{dst2}, ").unwrap();
+                g.emit(s);
+                write!(s, ", ").unwrap();
+                h.emit(s);
+                write!(s, ", ").unwrap();
+                i.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedMadCarry {
+                op,
+                dst0,
+                dst1,
+                dst2,
+                a,
+                b,
+                c,
+                d,
+                e,
+                f,
+                g,
+                h,
+                i,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let (first, second, third) = op.mnemonic_triple();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {first:<8} %r{dst0}, ", pred_guard(pred)).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {} {second:<8} %r{dst1}, ", pred_guard(pred)).unwrap();
+                d.emit(s);
+                write!(s, ", ").unwrap();
+                e.emit(s);
+                write!(s, ", ").unwrap();
+                f.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {} {third:<8} %r{dst2}, ", pred_guard(pred)).unwrap();
+                g.emit(s);
+                write!(s, ", ").unwrap();
+                h.emit(s);
+                write!(s, ", ").unwrap();
+                i.emit(s);
                 writeln!(s, ";").unwrap();
             }
             Inst::MadHi { op, dst, a, b, c } => {
@@ -7127,6 +7938,41 @@ fn pick_add_carry(u: &mut Unstructured, emit_addc: bool, emit_subc: bool) -> Res
     Ok(*u.choose(ops)?)
 }
 
+fn pick_mad_carry(u: &mut Unstructured, emit_signed_mad_carry: bool) -> Result<MadCarryOp> {
+    let unsigned_ops = [MadCarryOp::LoU32, MadCarryOp::HiU32];
+    let all_ops = [
+        MadCarryOp::LoU32,
+        MadCarryOp::HiU32,
+        MadCarryOp::LoS32,
+        MadCarryOp::HiS32,
+    ];
+    let ops: &[MadCarryOp] = if emit_signed_mad_carry {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
+fn pick_subword_wide(
+    u: &mut Unstructured,
+    emit_signed_subword_wide: bool,
+) -> Result<SubwordWideOp> {
+    let unsigned_ops = [SubwordWideOp::MulU16, SubwordWideOp::MadU16];
+    let all_ops = [
+        SubwordWideOp::MulU16,
+        SubwordWideOp::MulS16,
+        SubwordWideOp::MadU16,
+        SubwordWideOp::MadS16,
+    ];
+    let ops: &[SubwordWideOp] = if emit_signed_subword_wide {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
 fn pick_dp4a(u: &mut Unstructured) -> Result<Dp4aOp> {
     let ops = [
         Dp4aOp::U32U32,
@@ -7479,6 +8325,13 @@ mod tests {
     const MUL_WIDE_MNEMONICS: &[&str] = &["mul.wide.u32", "mul.wide.s32"];
     const MAD_WIDE_MNEMONICS: &[&str] = &["mad.wide.u32", "mad.wide.s32"];
     const SIGNED_MAD_WIDE_MNEMONICS: &[&str] = &["mad.wide.s32"];
+    const SUBWORD_WIDE_MNEMONICS: &[&str] = &[
+        "mul.wide.u16",
+        "mul.wide.s16",
+        "mad.wide.u16",
+        "mad.wide.s16",
+    ];
+    const SIGNED_SUBWORD_WIDE_MNEMONICS: &[&str] = &["mul.wide.s16", "mad.wide.s16"];
     const WIDE_INT_MNEMONICS: &[&str] = &[
         "add.u64",
         "sub.u64",
@@ -7563,9 +8416,33 @@ mod tests {
     const WIDE_DIVREM_MNEMONICS: &[&str] = &["div.u64", "rem.u64", "div.s64", "rem.s64"];
     const SIGNED_WIDE_DIVREM_MNEMONICS: &[&str] = &["div.s64", "rem.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
+    const CARRY_CHAIN_CC_MNEMONICS: &[&str] = &["addc.cc.u32", "subc.cc.u32"];
     const WIDE_ADDC_MNEMONICS: &[&str] = &["add.cc.u64", "addc.u64"];
     const WIDE_SUBC_MNEMONICS: &[&str] = &["sub.cc.u64", "subc.u64"];
     const WIDE_CARRY_MNEMONICS: &[&str] = &["add.cc.u64", "addc.u64", "sub.cc.u64", "subc.u64"];
+    const WIDE_CARRY_CHAIN_CC_MNEMONICS: &[&str] = &["addc.cc.u64", "subc.cc.u64"];
+    const MAD_CARRY_MNEMONICS: &[&str] = &[
+        "mad.lo.cc.u32",
+        "mad.hi.cc.u32",
+        "madc.lo.cc.u32",
+        "madc.hi.cc.u32",
+        "madc.lo.u32",
+        "madc.hi.u32",
+        "mad.lo.cc.s32",
+        "mad.hi.cc.s32",
+        "madc.lo.cc.s32",
+        "madc.hi.cc.s32",
+        "madc.lo.s32",
+        "madc.hi.s32",
+    ];
+    const SIGNED_MAD_CARRY_MNEMONICS: &[&str] = &[
+        "mad.lo.cc.s32",
+        "mad.hi.cc.s32",
+        "madc.lo.cc.s32",
+        "madc.hi.cc.s32",
+        "madc.lo.s32",
+        "madc.hi.s32",
+    ];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.u32",
         "setp.ne.u32",
@@ -8019,6 +8896,12 @@ mod tests {
             .any(|op| MAD_WIDE_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_subword_wide(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SUBWORD_WIDE_MNEMONICS.contains(&op))
+    }
+
     fn has_predicated_wide_int(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -8125,6 +9008,24 @@ mod tests {
             .any(|op| WIDE_CARRY_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_wide_carry_chain(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_CARRY_CHAIN_CC_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_carry_chain(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| CARRY_CHAIN_CC_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_mad_carry(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| MAD_CARRY_MNEMONICS.contains(&op))
+    }
+
     fn has_predicated_sad(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -8205,6 +9106,42 @@ mod tests {
         ptx.lines()
             .filter_map(bitfield_param_registers)
             .any(|(predicated, pos_reg, len_reg)| predicated && (pos_reg || len_reg))
+    }
+
+    fn fns_param_registers(line: &str) -> Option<(bool, bool, bool)> {
+        let line = line.trim_start();
+        let predicated = line.starts_with('@');
+        let inst = if predicated {
+            line.split_once(char::is_whitespace)?.1.trim_start()
+        } else {
+            line
+        };
+        let op = inst.split_whitespace().next()?;
+        if op != "fns.b32" {
+            return None;
+        }
+        let args: Vec<_> = inst
+            .strip_prefix(op)?
+            .trim()
+            .trim_end_matches(';')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let base = args.get(2)?;
+        let offset = args.get(3)?;
+        Some((predicated, base.starts_with("%r"), offset.starts_with("%r")))
+    }
+
+    fn has_register_fns_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(fns_param_registers)
+            .any(|(_, base_reg, offset_reg)| base_reg || offset_reg)
+    }
+
+    fn has_predicated_register_fns_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(fns_param_registers)
+            .any(|(predicated, base_reg, offset_reg)| predicated && (base_reg || offset_reg))
     }
 
     fn wide_bitfield_param_registers(line: &str) -> Option<(bool, bool, bool)> {
@@ -9068,6 +10005,110 @@ mod tests {
     }
 
     #[test]
+    fn mad_carry_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_bfind: false,
+            emit_fns: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_subword_wide: false,
+            emit_predicated_mad_carry: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, MAD_CARRY_MNEMONICS);
+    }
+
+    #[test]
+    fn mad_carry_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mad_carry: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in MAD_CARRY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signed_mad_carry_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_mad_carry: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_MAD_CARRY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_unsigned |=
+                has_mnemonic(&ptx, "mad.lo.cc.u32") || has_mnemonic(&ptx, "mad.hi.cc.u32");
+        }
+        assert!(
+            saw_unsigned,
+            "sample did not retain unsigned mad carry coverage"
+        );
+    }
+
+    #[test]
+    fn predicated_mad_carry_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_bfind: false,
+            emit_fns: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_mad_carry(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated mad carry chain");
+    }
+
+    #[test]
+    fn predicated_mad_carry_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_mad_carry: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_mad_carry(&ptx),
+                "seed {seed:x} emitted predicated mad carry chain"
+            );
+        }
+    }
+
+    #[test]
     fn mulhi_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_mulhi: false,
@@ -9914,6 +10955,25 @@ mod tests {
     }
 
     #[test]
+    fn bfe_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfe: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in BFE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn register_bitfield_generation_is_reachable() {
         let cfg = GenConfig {
             emit_predicated_bitfield: false,
@@ -10430,6 +11490,106 @@ mod tests {
             assert!(
                 !has_predicated_24bit(&ptx),
                 "seed {seed:x} emitted predicated 24-bit instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn subword_wide_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_fns: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_predicated_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, SUBWORD_WIDE_MNEMONICS);
+    }
+
+    #[test]
+    fn subword_wide_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SUBWORD_WIDE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signed_subword_wide_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_SUBWORD_WIDE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_unsigned |=
+                has_mnemonic(&ptx, "mul.wide.u16") || has_mnemonic(&ptx, "mad.wide.u16");
+        }
+        assert!(
+            saw_unsigned,
+            "sample did not retain unsigned subword wide coverage"
+        );
+    }
+
+    #[test]
+    fn predicated_subword_wide_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_fns: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_subword_wide(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated subword wide instruction");
+    }
+
+    #[test]
+    fn predicated_subword_wide_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_subword_wide(&ptx),
+                "seed {seed:x} emitted predicated subword wide instruction"
             );
         }
     }
@@ -11739,6 +12899,7 @@ mod tests {
     fn predicated_wide_carry_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_predicated_wide_carry: false,
+            emit_predicated_wide_carry_chain: false,
             ..GenConfig::default()
         };
 
@@ -11748,6 +12909,88 @@ mod tests {
             assert!(
                 !has_predicated_wide_carry(&ptx),
                 "seed {seed:x} emitted predicated wide carry"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_carry_chain_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_mad64: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            emit_predicated_wide_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_CARRY_CHAIN_CC_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_carry_chain_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_CARRY_CHAIN_CC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_carry_chain_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_mad64: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_carry_chain(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated wide carry chain");
+    }
+
+    #[test]
+    fn predicated_wide_carry_chain_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_carry_chain(&ptx),
+                "seed {seed:x} emitted predicated wide carry chain"
             );
         }
     }
@@ -11861,6 +13104,7 @@ mod tests {
             emit_mad24: false,
             emit_mul24: false,
             emit_predicated_carry: false,
+            emit_predicated_carry_chain: false,
             ..GenConfig::default()
         };
 
@@ -11870,6 +13114,80 @@ mod tests {
             assert!(
                 !has_predicated_carry(&ptx),
                 "seed {seed:x} emitted predicated carry pair"
+            );
+        }
+    }
+
+    #[test]
+    fn carry_chain_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_fns: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_mad_carry: false,
+            emit_subword_wide: false,
+            emit_predicated_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, CARRY_CHAIN_CC_MNEMONICS);
+    }
+
+    #[test]
+    fn carry_chain_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in CARRY_CHAIN_CC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_carry_chain_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_fns: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_mad_carry: false,
+            emit_subword_wide: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_carry_chain(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated carry chain");
+    }
+
+    #[test]
+    fn predicated_carry_chain_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_carry_chain: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_carry_chain(&ptx),
+                "seed {seed:x} emitted predicated carry chain"
             );
         }
     }
@@ -11967,6 +13285,26 @@ mod tests {
     }
 
     #[test]
+    fn cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_cvt: false,
+            emit_narrow_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn predicated_cvt_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; CVT_MNEMONICS.len()];
@@ -12028,6 +13366,7 @@ mod tests {
         let cfg = GenConfig {
             emit_narrow_cvt: false,
             emit_predicated_narrow_cvt: false,
+            emit_subword_wide: false,
             ..GenConfig::default()
         };
 
@@ -12051,6 +13390,7 @@ mod tests {
     fn signed_narrow_cvt_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_signed_narrow_cvt: false,
+            emit_signed_subword_wide: false,
             ..GenConfig::default()
         };
 
@@ -12335,6 +13675,7 @@ mod tests {
     fn predicated_fns_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_predicated_fns: false,
+            emit_predicated_reg_fns: false,
             ..coverage_heavy_config()
         };
 
@@ -12344,6 +13685,85 @@ mod tests {
             assert!(
                 !has_predicated_fns(&ptx),
                 "seed {seed:x} emitted predicated fns"
+            );
+        }
+    }
+
+    #[test]
+    fn register_fns_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_predicated_reg_fns: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_register_fns_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit fns.b32 with register base/offset");
+    }
+
+    #[test]
+    fn register_fns_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_fns: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_register_fns_param(&ptx),
+                "seed {seed:x} emitted fns.b32 with register base/offset"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_register_fns_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_addc: false,
+            emit_subc: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_register_fns_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated fns.b32 with register base/offset");
+    }
+
+    #[test]
+    fn predicated_register_fns_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_reg_fns: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_register_fns_param(&ptx),
+                "seed {seed:x} emitted predicated fns.b32 with register base/offset"
             );
         }
     }
@@ -12703,6 +14123,25 @@ mod tests {
     }
 
     #[test]
+    fn sad_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_sad: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SAD_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn predicated_sad_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; SAD_MNEMONICS.len()];
@@ -12770,6 +14209,25 @@ mod tests {
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SLCT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
     }
 
     #[test]
