@@ -219,6 +219,7 @@ that feature.
 | `DIV_DISABLE_SELP` | `selp.b32`. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
 | `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
+| `DIV_DISABLE_SIGNED_LO_ALU` | Signed `add`, `sub`, `mul.lo`, and `mad.lo` spellings. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
@@ -242,6 +243,7 @@ that feature.
 | `DIV_DISABLE_REG_SHIFTS` | Masked register-count shifts. |
 | `DIV_DISABLE_PREDICATED_SHIFTS` | Predicated immediate-count shifts. |
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
+| `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
@@ -255,6 +257,7 @@ that feature.
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
+| `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |

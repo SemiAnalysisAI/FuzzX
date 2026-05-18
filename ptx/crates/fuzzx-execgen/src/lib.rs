@@ -58,6 +58,7 @@ pub struct GenConfig {
     pub emit_selp: bool,
     pub emit_sub: bool,
     pub emit_mul_lo: bool,
+    pub emit_signed_lo_alu: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_bitwise_binops: bool,
@@ -81,6 +82,7 @@ pub struct GenConfig {
     pub emit_reg_shifts: bool,
     pub emit_predicated_shifts: bool,
     pub emit_bfind: bool,
+    pub emit_predicated_bfind: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
     pub emit_predicated_bitfield: bool,
@@ -94,6 +96,7 @@ pub struct GenConfig {
     pub emit_dp2a: bool,
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
+    pub emit_predicated_cvt: bool,
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_video: bool,
@@ -128,6 +131,7 @@ impl Default for GenConfig {
             emit_selp: true,
             emit_sub: true,
             emit_mul_lo: true,
+            emit_signed_lo_alu: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_bitwise_binops: true,
@@ -151,6 +155,7 @@ impl Default for GenConfig {
             emit_reg_shifts: true,
             emit_predicated_shifts: true,
             emit_bfind: true,
+            emit_predicated_bfind: true,
             emit_bfi: true,
             emit_bmsk: true,
             emit_predicated_bitfield: true,
@@ -164,6 +169,7 @@ impl Default for GenConfig {
             emit_dp2a: true,
             emit_predicated_alu: true,
             emit_predicated_unary: true,
+            emit_predicated_cvt: true,
             emit_set: true,
             emit_s32_slct: true,
             emit_video: true,
@@ -221,17 +227,17 @@ pub fn input_for_seed(seed: u64) -> Vec<u8> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BinOp {
     Add,
+    AddS,
     Sub,
+    SubS,
     Mul,
+    MulS,
     MulHi,
     And,
     Or,
     Xor,
     Min,
     Max,
-    // Signed-only variants. add.s32/sub.s32/mul.lo.s32 are bit-identical to
-    // the u32 forms (mod 2^32, no overflow checks), so only the ops with
-    // genuinely different semantics are duplicated here.
     MulHiS,
     MinS,
     MaxS,
@@ -241,8 +247,11 @@ impl BinOp {
     fn mnemonic(self) -> &'static str {
         match self {
             BinOp::Add => "add.u32",
+            BinOp::AddS => "add.s32",
             BinOp::Sub => "sub.u32",
+            BinOp::SubS => "sub.s32",
             BinOp::Mul => "mul.lo.u32",
+            BinOp::MulS => "mul.lo.s32",
             BinOp::MulHi => "mul.hi.u32",
             BinOp::And => "and.b32",
             BinOp::Or => "or.b32",
@@ -764,8 +773,28 @@ enum Inst {
     },
     /// `cvt.{u32,s32}.{u8,u16,s8,s16} dst, src;` — subword integer extension.
     Cvt { op: CvtOp, dst: u32, src: Operand },
+    /// `setp.<cmp> pred, ca, cb; @pred cvt.{...} dst, src;`.
+    PredicatedCvt {
+        op: CvtOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `bfind[.shiftamt].u32 dst, src;` — bit position / shift amount.
     Bfind { op: BfindOp, dst: u32, src: Operand },
+    /// `setp.<cmp> pred, ca, cb; @pred bfind[.shiftamt].u32 dst, src;`.
+    PredicatedBfind {
+        op: BfindOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `div/rem.u32 dst, src, divisor;` with a nonzero immediate divisor.
     DivRem {
         op: DivRemOp,
@@ -855,6 +884,7 @@ enum Inst {
     /// `mad.lo.u32 dst, a, b, c;` — (a*b + c) low 32 bits. Heavy optimizer
     /// fold target (mul+add → mad).
     Mad {
+        signed: bool,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -1120,6 +1150,7 @@ impl<'a> Generator<'a> {
     fn pick_mad_or_add(&mut self, u: &mut Unstructured) -> Result<Inst> {
         if self.cfg.emit_mul_lo {
             Ok(Inst::Mad {
+                signed: self.cfg.emit_signed_lo_alu && u.arbitrary::<bool>()?,
                 dst: self.pick_dst(u)?,
                 a: self.pick_operand(u)?,
                 b: self.pick_operand(u)?,
@@ -1162,6 +1193,7 @@ impl<'a> Generator<'a> {
                 self.cfg.emit_minmax,
                 self.cfg.emit_sub,
                 self.cfg.emit_mul_lo,
+                self.cfg.emit_signed_lo_alu,
                 self.cfg.emit_mulhi,
                 self.cfg.emit_signed_mulhi,
                 self.cfg.emit_bitwise_binops,
@@ -1181,6 +1213,7 @@ impl<'a> Generator<'a> {
                     self.cfg.emit_minmax,
                     self.cfg.emit_sub,
                     self.cfg.emit_mul_lo,
+                    self.cfg.emit_signed_lo_alu,
                     self.cfg.emit_mulhi,
                     self.cfg.emit_signed_mulhi,
                     self.cfg.emit_bitwise_binops,
@@ -1419,11 +1452,23 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 248 {
-            Ok(Inst::Cvt {
-                op: pick_cvt(u)?,
-                dst: self.pick_dst(u)?,
-                src: self.pick_operand(u)?,
-            })
+            if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedCvt {
+                    op: pick_cvt(u)?,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            } else {
+                Ok(Inst::Cvt {
+                    op: pick_cvt(u)?,
+                    dst: self.pick_dst(u)?,
+                    src: self.pick_operand(u)?,
+                })
+            }
         } else if pick < 251 {
             if (self.cfg.emit_addc || self.cfg.emit_subc) && u.arbitrary::<bool>()? {
                 Ok(Inst::AddCarry {
@@ -1436,11 +1481,23 @@ impl<'a> Generator<'a> {
                     d: self.pick_operand(u)?,
                 })
             } else if self.cfg.emit_bfind {
-                Ok(Inst::Bfind {
-                    op: pick_bfind(u)?,
-                    dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
-                })
+                if self.cfg.emit_predicated_bfind && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedBfind {
+                        op: pick_bfind(u)?,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else {
+                    Ok(Inst::Bfind {
+                        op: pick_bfind(u)?,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                    })
+                }
             } else if self.cfg.emit_mad24 || self.cfg.emit_mul24 {
                 let emit_mul24 = if self.cfg.emit_mad24 && self.cfg.emit_mul24 {
                     u.arbitrary::<bool>()?
@@ -1907,8 +1964,44 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedCvt {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Bfind { op, dst, src } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedBfind {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
@@ -2027,8 +2120,15 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
-            Inst::Mad { dst, a, b, c } => {
-                write!(s, "    mad.lo.u32    %r{dst}, ").unwrap();
+            Inst::Mad {
+                signed,
+                dst,
+                a,
+                b,
+                c,
+            } => {
+                let mnemonic = if signed { "mad.lo.s32" } else { "mad.lo.u32" };
+                write!(s, "    {mnemonic:<13} %r{dst}, ").unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2238,6 +2338,7 @@ fn pick_binop(
     emit_minmax: bool,
     emit_sub: bool,
     emit_mul_lo: bool,
+    emit_signed_lo_alu: bool,
     emit_mulhi: bool,
     emit_signed_mulhi: bool,
     emit_bitwise_binops: bool,
@@ -2245,11 +2346,20 @@ fn pick_binop(
     emit_xor: bool,
 ) -> Result<BinOp> {
     let mut ops = vec![BinOp::Add];
+    if emit_signed_lo_alu {
+        ops.push(BinOp::AddS);
+    }
     if emit_mul_lo {
         ops.push(BinOp::Mul);
+        if emit_signed_lo_alu {
+            ops.push(BinOp::MulS);
+        }
     }
     if emit_sub {
         ops.push(BinOp::Sub);
+        if emit_signed_lo_alu {
+            ops.push(BinOp::SubS);
+        }
     }
     if emit_bitwise_binops {
         ops.push(BinOp::And);
@@ -2636,8 +2746,11 @@ mod tests {
 
     const BIN_MNEMONICS: &[&str] = &[
         "add.u32",
+        "add.s32",
         "sub.u32",
+        "sub.s32",
         "mul.lo.u32",
+        "mul.lo.s32",
         "mul.hi.u32",
         "mul.hi.s32",
         "and.b32",
@@ -2648,6 +2761,8 @@ mod tests {
         "min.s32",
         "max.s32",
     ];
+    const SIGNED_LO_BIN_MNEMONICS: &[&str] = &["add.s32", "sub.s32", "mul.lo.s32"];
+    const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
     const SHIFT_MNEMONICS: &[&str] = &["shl.b32", "shr.u32", "shr.s32"];
     const UNARY_MNEMONICS: &[&str] = &[
@@ -2888,6 +3003,18 @@ mod tests {
             .any(|op| UNARY_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_cvt(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| CVT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_bfind(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| BFIND_MNEMONICS.contains(&op))
+    }
+
     fn has_predicated_funnel(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -3113,7 +3240,7 @@ mod tests {
             emit_lop3: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&mad_cfg, 32768, 128, &["mad.lo.u32"]);
+        assert_mnemonic_coverage(&mad_cfg, 32768, 256, MAD_LO_MNEMONICS);
 
         let mad24_cfg = GenConfig {
             emit_addc: false,
@@ -3267,6 +3394,7 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("sub.u32"), "seed {seed:x} emitted sub.u32");
+            assert!(!ptx.contains("sub.s32"), "seed {seed:x} emitted sub.s32");
         }
     }
 
@@ -3288,6 +3416,43 @@ mod tests {
                 !ptx.contains("mad.lo.u32"),
                 "seed {seed:x} emitted mad.lo.u32"
             );
+            assert!(
+                !ptx.contains("mul.lo.s32"),
+                "seed {seed:x} emitted mul.lo.s32"
+            );
+            assert!(
+                !ptx.contains("mad.lo.s32"),
+                "seed {seed:x} emitted mad.lo.s32"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_low_alu_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 2048, SIGNED_LO_BIN_MNEMONICS);
+
+        let mad_cfg = GenConfig {
+            emit_lop3: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&mad_cfg, 32768, 256, &["mad.lo.s32"]);
+    }
+
+    #[test]
+    fn signed_low_alu_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_lo_alu: false,
+            emit_lop3: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ["add.s32", "sub.s32", "mul.lo.s32", "mad.lo.s32"] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
         }
     }
 
@@ -4258,6 +4423,52 @@ mod tests {
     }
 
     #[test]
+    fn predicated_cvt_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; CVT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in CVT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = CVT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_cvt(&ptx),
+                "seed {seed:x} emitted predicated cvt"
+            );
+        }
+    }
+
+    #[test]
     fn bfind_generation_is_reachable() {
         let mut saw_bfind = false;
         for seed in 0..1024 {
@@ -4269,6 +4480,52 @@ mod tests {
             }
         }
         assert!(saw_bfind, "no seed in sample emitted bfind");
+    }
+
+    #[test]
+    fn predicated_bfind_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; BFIND_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in BFIND_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = BFIND_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_bfind: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_bfind(&ptx),
+                "seed {seed:x} emitted predicated bfind"
+            );
+        }
     }
 
     #[test]
