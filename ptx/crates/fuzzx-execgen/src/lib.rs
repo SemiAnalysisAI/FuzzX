@@ -96,6 +96,7 @@ pub struct GenConfig {
     pub emit_abs: bool,
     pub emit_special_regs: bool,
     pub emit_predicated_special_regs: bool,
+    pub emit_global_loads: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
     pub emit_reg_divrem: bool,
@@ -285,6 +286,7 @@ impl Default for GenConfig {
             emit_abs: true,
             emit_special_regs: true,
             emit_predicated_special_regs: true,
+            emit_global_loads: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
             emit_reg_divrem: true,
@@ -657,6 +659,35 @@ impl Scalar16Op {
                 | Scalar16Op::NegS16
                 | Scalar16Op::ShrS16
         )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GlobalLoadOp {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+}
+
+impl GlobalLoadOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            GlobalLoadOp::U8 => "ld.global.u8",
+            GlobalLoadOp::S8 => "ld.global.s8",
+            GlobalLoadOp::U16 => "ld.global.u16",
+            GlobalLoadOp::S16 => "ld.global.s16",
+            GlobalLoadOp::U32 => "ld.global.u32",
+        }
+    }
+
+    fn width(self) -> u32 {
+        match self {
+            GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
+            GlobalLoadOp::U16 | GlobalLoadOp::S16 => 2,
+            GlobalLoadOp::U32 => 4,
+        }
     }
 }
 
@@ -1817,6 +1848,12 @@ enum Inst {
         a: Operand,
         b: Operand,
         pred: u32,
+    },
+    /// Bounded read-only load from the existing input buffer.
+    GlobalLoad {
+        op: GlobalLoadOp,
+        dst: u32,
+        offset: u32,
     },
     Sel {
         dst: u32,
@@ -3800,6 +3837,25 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+        ];
+        let op = *u.choose(&ops)?;
+        let width = op.width();
+        let max_offset = input_len() as u32 - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        Ok(Inst::GlobalLoad {
+            op,
+            dst: self.pick_dst(u)?,
+            offset,
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -3822,6 +3878,9 @@ impl<'a> Generator<'a> {
         //   255..256 (<1%) Dp4a/Dp2a
         let pick: u8 = u.arbitrary()?;
         if pick < 90 {
+            if self.cfg.emit_global_loads && u.int_in_range(0..=7)? == 0 {
+                return self.pick_global_load(u);
+            }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
             {
@@ -5050,6 +5109,7 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16 { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
+            | Inst::GlobalLoad { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
@@ -5527,6 +5587,10 @@ impl<'a> Generator<'a> {
                     cmp.scalar16_output_cvt_mnemonic()
                 )
                 .unwrap();
+            }
+            Inst::GlobalLoad { op, dst, offset } => {
+                writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+                writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
             }
             Inst::Sel {
                 dst,
@@ -8951,6 +9015,13 @@ mod tests {
         "not.b32", "cnot.b32", "popc.b32", "clz.b32", "brev.b32", "abs.s32", "neg.s32",
     ];
     const POST_KNOWN_UNARY_MNEMONICS: &[&str] = &["popc.b32", "clz.b32"];
+    const GLOBAL_LOAD_MNEMONICS: &[&str] = &[
+        "ld.global.u8",
+        "ld.global.s8",
+        "ld.global.u16",
+        "ld.global.s16",
+        "ld.global.u32",
+    ];
     const SPECIAL_REG_NAMES: &[&str] = &[
         "%tid.x",
         "%tid.y",
@@ -9266,6 +9337,7 @@ mod tests {
             SCALAR_16BIT_MNEMONICS,
             SCALAR_16BIT_COMPARE_MNEMONICS,
             SCALAR_16BIT_SELP_MNEMONICS,
+            GLOBAL_LOAD_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -9314,6 +9386,7 @@ mod tests {
             POST_KNOWN_BIN_MNEMONICS,
             PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_POST_KNOWN_MNEMONICS,
+            GLOBAL_LOAD_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
@@ -9350,6 +9423,30 @@ mod tests {
         ptx.lines()
             .filter_map(|line| line.trim_start().split_whitespace().next())
             .any(|token| token == mnemonic)
+    }
+
+    fn body_global_load(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd6 + ") {
+            return None;
+        }
+        let mnemonic = line.split_whitespace().next()?;
+        if !GLOBAL_LOAD_MNEMONICS.contains(&mnemonic) {
+            return None;
+        }
+        let offset = line
+            .split("[%rd6 + ")
+            .nth(1)?
+            .trim_end_matches("];")
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_global_load(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_global_load)
+            .any(|(op, _)| op == mnemonic)
     }
 
     fn has_special_reg(ptx: &str, reg_name: &str) -> bool {
@@ -11626,6 +11723,79 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("abs.s32"), "seed {seed:x} emitted abs.s32");
+        }
+    }
+
+    #[test]
+    fn global_load_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GLOBAL_LOAD_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in GLOBAL_LOAD_MNEMONICS.iter().enumerate() {
+                found[i] |= has_body_global_load(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GLOBAL_LOAD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit body global loads {missing:?}"
+        );
+    }
+
+    #[test]
+    fn global_load_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_loads: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in GLOBAL_LOAD_MNEMONICS {
+                assert!(
+                    !has_body_global_load(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_load_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_global_load) {
+                let width = match mnemonic {
+                    "ld.global.u8" | "ld.global.s8" => 1,
+                    "ld.global.u16" | "ld.global.s16" => 2,
+                    "ld.global.u32" => 4,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= input_len() as u32,
+                    "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
         }
     }
 
