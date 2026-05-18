@@ -110,6 +110,7 @@ pub struct GenConfig {
     pub emit_shared_memory: bool,
     pub emit_predicated_memory: bool,
     pub emit_vector_memory: bool,
+    pub emit_wide_memory: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -320,6 +321,7 @@ impl Default for GenConfig {
             emit_shared_memory: true,
             emit_predicated_memory: true,
             emit_vector_memory: true,
+            emit_wide_memory: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -716,6 +718,8 @@ enum GlobalLoadOp {
     U16,
     S16,
     U32,
+    U64,
+    S64,
 }
 
 impl GlobalLoadOp {
@@ -726,6 +730,8 @@ impl GlobalLoadOp {
             GlobalLoadOp::U16 => "ld.global.u16",
             GlobalLoadOp::S16 => "ld.global.s16",
             GlobalLoadOp::U32 => "ld.global.u32",
+            GlobalLoadOp::U64 => "ld.global.u64",
+            GlobalLoadOp::S64 => "ld.global.s64",
         }
     }
 
@@ -734,7 +740,12 @@ impl GlobalLoadOp {
             GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
             GlobalLoadOp::U16 | GlobalLoadOp::S16 => 2,
             GlobalLoadOp::U32 => 4,
+            GlobalLoadOp::U64 | GlobalLoadOp::S64 => 8,
         }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(self, GlobalLoadOp::U64 | GlobalLoadOp::S64)
     }
 }
 
@@ -745,6 +756,8 @@ enum GlobalStoreRoundtripOp {
     U16,
     S16,
     U32,
+    U64,
+    S64,
 }
 
 impl GlobalStoreRoundtripOp {
@@ -755,6 +768,8 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U16 => "ld.global.u16",
             GlobalStoreRoundtripOp::S16 => "ld.global.s16",
             GlobalStoreRoundtripOp::U32 => "ld.global.u32",
+            GlobalStoreRoundtripOp::U64 => "ld.global.u64",
+            GlobalStoreRoundtripOp::S64 => "ld.global.s64",
         }
     }
 
@@ -763,6 +778,7 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => "st.global.u8",
             GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "st.global.u16",
             GlobalStoreRoundtripOp::U32 => "st.global.u32",
+            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => "st.global.u64",
         }
     }
 
@@ -771,7 +787,15 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => 1,
             GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => 2,
             GlobalStoreRoundtripOp::U32 => 4,
+            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => 8,
         }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(
+            self,
+            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64
+        )
     }
 }
 
@@ -782,6 +806,8 @@ enum ConstLoadOp {
     U16,
     S16,
     U32,
+    U64,
+    S64,
 }
 
 impl ConstLoadOp {
@@ -792,6 +818,8 @@ impl ConstLoadOp {
             ConstLoadOp::U16 => "ld.const.u16",
             ConstLoadOp::S16 => "ld.const.s16",
             ConstLoadOp::U32 => "ld.const.u32",
+            ConstLoadOp::U64 => "ld.const.u64",
+            ConstLoadOp::S64 => "ld.const.s64",
         }
     }
 
@@ -800,7 +828,12 @@ impl ConstLoadOp {
             ConstLoadOp::U8 | ConstLoadOp::S8 => 1,
             ConstLoadOp::U16 | ConstLoadOp::S16 => 2,
             ConstLoadOp::U32 => 4,
+            ConstLoadOp::U64 | ConstLoadOp::S64 => 8,
         }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(self, ConstLoadOp::U64 | ConstLoadOp::S64)
     }
 }
 
@@ -811,6 +844,8 @@ enum LocalMemOp {
     U16,
     S16,
     U32,
+    U64,
+    S64,
 }
 
 impl LocalMemOp {
@@ -821,6 +856,8 @@ impl LocalMemOp {
             LocalMemOp::U16 => "ld.local.u16",
             LocalMemOp::S16 => "ld.local.s16",
             LocalMemOp::U32 => "ld.local.u32",
+            LocalMemOp::U64 => "ld.local.u64",
+            LocalMemOp::S64 => "ld.local.s64",
         }
     }
 
@@ -829,6 +866,7 @@ impl LocalMemOp {
             LocalMemOp::U8 | LocalMemOp::S8 => "st.local.u8",
             LocalMemOp::U16 | LocalMemOp::S16 => "st.local.u16",
             LocalMemOp::U32 => "st.local.u32",
+            LocalMemOp::U64 | LocalMemOp::S64 => "st.local.u64",
         }
     }
 
@@ -837,7 +875,12 @@ impl LocalMemOp {
             LocalMemOp::U8 | LocalMemOp::S8 => 1,
             LocalMemOp::U16 | LocalMemOp::S16 => 2,
             LocalMemOp::U32 => 4,
+            LocalMemOp::U64 | LocalMemOp::S64 => 8,
         }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(self, LocalMemOp::U64 | LocalMemOp::S64)
     }
 }
 
@@ -848,6 +891,8 @@ enum SharedMemOp {
     U16,
     S16,
     U32,
+    U64,
+    S64,
 }
 
 impl SharedMemOp {
@@ -858,6 +903,8 @@ impl SharedMemOp {
             SharedMemOp::U16 => "ld.shared.u16",
             SharedMemOp::S16 => "ld.shared.s16",
             SharedMemOp::U32 => "ld.shared.u32",
+            SharedMemOp::U64 => "ld.shared.u64",
+            SharedMemOp::S64 => "ld.shared.s64",
         }
     }
 
@@ -866,6 +913,7 @@ impl SharedMemOp {
             SharedMemOp::U8 | SharedMemOp::S8 => "st.shared.u8",
             SharedMemOp::U16 | SharedMemOp::S16 => "st.shared.u16",
             SharedMemOp::U32 => "st.shared.u32",
+            SharedMemOp::U64 | SharedMemOp::S64 => "st.shared.u64",
         }
     }
 
@@ -874,7 +922,12 @@ impl SharedMemOp {
             SharedMemOp::U8 | SharedMemOp::S8 => 1,
             SharedMemOp::U16 | SharedMemOp::S16 => 2,
             SharedMemOp::U32 => 4,
+            SharedMemOp::U64 | SharedMemOp::S64 => 8,
         }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(self, SharedMemOp::U64 | SharedMemOp::S64)
     }
 }
 
@@ -5632,14 +5685,28 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [
+        let base_ops = [
             GlobalLoadOp::U8,
             GlobalLoadOp::S8,
             GlobalLoadOp::U16,
             GlobalLoadOp::S16,
             GlobalLoadOp::U32,
         ];
-        let op = *u.choose(&ops)?;
+        let wide_ops = [
+            GlobalLoadOp::U8,
+            GlobalLoadOp::S8,
+            GlobalLoadOp::U16,
+            GlobalLoadOp::S16,
+            GlobalLoadOp::U32,
+            GlobalLoadOp::U64,
+            GlobalLoadOp::S64,
+        ];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = input_len() as u32 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5660,14 +5727,28 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_global_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [
+        let base_ops = [
             GlobalStoreRoundtripOp::U8,
             GlobalStoreRoundtripOp::S8,
             GlobalStoreRoundtripOp::U16,
             GlobalStoreRoundtripOp::S16,
             GlobalStoreRoundtripOp::U32,
         ];
-        let op = *u.choose(&ops)?;
+        let wide_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+        ];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = N_OUTPUTS * 4 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5695,14 +5776,28 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_const_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [
+        let base_ops = [
             ConstLoadOp::U8,
             ConstLoadOp::S8,
             ConstLoadOp::U16,
             ConstLoadOp::S16,
             ConstLoadOp::U32,
         ];
-        let op = *u.choose(&ops)?;
+        let wide_ops = [
+            ConstLoadOp::U8,
+            ConstLoadOp::S8,
+            ConstLoadOp::U16,
+            ConstLoadOp::S16,
+            ConstLoadOp::U32,
+            ConstLoadOp::U64,
+            ConstLoadOp::S64,
+        ];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = CONST_MEM_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5723,14 +5818,28 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_local_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [
+        let base_ops = [
             LocalMemOp::U8,
             LocalMemOp::S8,
             LocalMemOp::U16,
             LocalMemOp::S16,
             LocalMemOp::U32,
         ];
-        let op = *u.choose(&ops)?;
+        let wide_ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+            LocalMemOp::U64,
+            LocalMemOp::S64,
+        ];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = LOCAL_MEM_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5758,14 +5867,28 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_shared_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [
+        let base_ops = [
             SharedMemOp::U8,
             SharedMemOp::S8,
             SharedMemOp::U16,
             SharedMemOp::S16,
             SharedMemOp::U32,
         ];
-        let op = *u.choose(&ops)?;
+        let wide_ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+            SharedMemOp::U64,
+            SharedMemOp::S64,
+        ];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        let op = *u.choose(ops)?;
         let width = op.width();
         let max_offset = SHARED_SLOT_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -8490,6 +8613,75 @@ impl<'a> Generator<'a> {
         write!(s, "}}").unwrap();
     }
 
+    fn emit_memory_load(
+        &self,
+        s: &mut String,
+        mnemonic: &str,
+        dst: u32,
+        addr: &str,
+        offset: u32,
+        is_wide: bool,
+        pred: Option<u32>,
+    ) {
+        if is_wide {
+            let scratch = self.wide_scratch_hi_reg();
+            if let Some(pred) = pred {
+                let guard = pred_guard(pred);
+                writeln!(s, "    {guard} {mnemonic:<8} %rd7, [{addr} + {offset}];").unwrap();
+                writeln!(s, "    {guard} mov.b64 {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+            } else {
+                writeln!(s, "    {mnemonic:<13} %rd7, [{addr} + {offset}];").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+            }
+        } else if let Some(pred) = pred {
+            writeln!(
+                s,
+                "    {} {:<8} %r{dst}, [{addr} + {offset}];",
+                pred_guard(pred),
+                mnemonic
+            )
+            .unwrap();
+        } else {
+            writeln!(s, "    {mnemonic:<13} %r{dst}, [{addr} + {offset}];").unwrap();
+        }
+    }
+
+    fn emit_memory_store(
+        &self,
+        s: &mut String,
+        mnemonic: &str,
+        src: u32,
+        addr: &str,
+        offset: u32,
+        is_wide: bool,
+        pred: Option<u32>,
+    ) {
+        if is_wide {
+            writeln!(s, "    mov.b64       %rd7, {{%r{src}, %r{src}}};").unwrap();
+            if let Some(pred) = pred {
+                writeln!(
+                    s,
+                    "    {} {:<8} [{addr} + {offset}], %rd7;",
+                    pred_guard(pred),
+                    mnemonic
+                )
+                .unwrap();
+            } else {
+                writeln!(s, "    {mnemonic:<13} [{addr} + {offset}], %rd7;").unwrap();
+            }
+        } else if let Some(pred) = pred {
+            writeln!(
+                s,
+                "    {} {:<8} [{addr} + {offset}], %r{src};",
+                pred_guard(pred),
+                mnemonic
+            )
+            .unwrap();
+        } else {
+            writeln!(s, "    {mnemonic:<13} [{addr} + {offset}], %r{src};").unwrap();
+        }
+    }
+
     fn emit_wide_divisor(&self, s: &mut String, op: WideDivRemOp, divisor: WideDivisor) -> String {
         match divisor {
             WideDivisor::Imm(value) => value.to_string(),
@@ -8679,7 +8871,7 @@ impl<'a> Generator<'a> {
             }
             Inst::GlobalLoad { op, dst, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
+                self.emit_memory_load(s, op.mnemonic(), dst, "%rd6", offset, op.is_wide(), None);
             }
             Inst::PredicatedGlobalLoad {
                 op,
@@ -8692,13 +8884,15 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                writeln!(
+                self.emit_memory_load(
                     s,
-                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
-                    pred_guard(pred),
-                    op.mnemonic()
-                )
-                .unwrap();
+                    op.mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
             }
             Inst::GlobalStoreRoundtrip {
                 op,
@@ -8710,18 +8904,24 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {:<13} [%rd8 + {offset}], %r{src};",
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
+                self.emit_memory_load(
                     s,
-                    "    {:<13} %r{dst}, [%rd8 + {offset}];",
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
             }
             Inst::PredicatedGlobalStoreRoundtrip {
                 op,
@@ -8738,24 +8938,28 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {} {:<8} [%rd8 + {offset}], %r{src};",
-                    pred_guard(pred),
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
+                self.emit_memory_load(
                     s,
-                    "    {} {:<8} %r{dst}, [%rd8 + {offset}];",
-                    pred_guard(pred),
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
             }
             Inst::ConstLoad { op, dst, offset } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
-                writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
+                self.emit_memory_load(s, op.mnemonic(), dst, "%rd6", offset, op.is_wide(), None);
             }
             Inst::PredicatedConstLoad {
                 op,
@@ -8768,13 +8972,15 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
-                writeln!(
+                self.emit_memory_load(
                     s,
-                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
-                    pred_guard(pred),
-                    op.mnemonic()
-                )
-                .unwrap();
+                    op.mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
             }
             Inst::LocalMem {
                 op,
@@ -8783,18 +8989,24 @@ impl<'a> Generator<'a> {
                 offset,
             } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {:<13} [%rd6 + {offset}], %r{src};",
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
+                self.emit_memory_load(
                     s,
-                    "    {:<13} %r{dst}, [%rd6 + {offset}];",
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
             }
             Inst::PredicatedLocalMem {
                 op,
@@ -8808,20 +9020,24 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {} {:<8} [%rd6 + {offset}], %r{src};",
-                    pred_guard(pred),
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
+                self.emit_memory_load(
                     s,
-                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
-                    pred_guard(pred),
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
             }
             Inst::SharedMem {
                 op,
@@ -8837,18 +9053,24 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {:<13} [%rd6 + {offset}], %r{src};",
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
+                self.emit_memory_load(
                     s,
-                    "    {:<13} %r{dst}, [%rd6 + {offset}];",
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    None,
+                );
             }
             Inst::PredicatedSharedMem {
                 op,
@@ -8869,20 +9091,24 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                writeln!(
+                self.emit_memory_store(
                     s,
-                    "    {} {:<8} [%rd6 + {offset}], %r{src};",
-                    pred_guard(pred),
-                    op.store_mnemonic()
-                )
-                .unwrap();
-                writeln!(
+                    op.store_mnemonic(),
+                    src,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
+                self.emit_memory_load(
                     s,
-                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
-                    pred_guard(pred),
-                    op.load_mnemonic()
-                )
-                .unwrap();
+                    op.load_mnemonic(),
+                    dst,
+                    "%rd6",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
             }
             Inst::GlobalVectorLoad { op, dsts, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
@@ -13310,14 +13536,23 @@ mod tests {
         "ld.global.u16",
         "ld.global.s16",
         "ld.global.u32",
+        "ld.global.u64",
+        "ld.global.s64",
     ];
-    const GLOBAL_STORE_MNEMONICS: &[&str] = &["st.global.u8", "st.global.u16", "st.global.u32"];
+    const GLOBAL_STORE_MNEMONICS: &[&str] = &[
+        "st.global.u8",
+        "st.global.u16",
+        "st.global.u32",
+        "st.global.u64",
+    ];
     const CONST_LOAD_MNEMONICS: &[&str] = &[
         "ld.const.u8",
         "ld.const.s8",
         "ld.const.u16",
         "ld.const.s16",
         "ld.const.u32",
+        "ld.const.u64",
+        "ld.const.s64",
     ];
     const LOCAL_MEM_LOAD_MNEMONICS: &[&str] = &[
         "ld.local.u8",
@@ -13325,16 +13560,43 @@ mod tests {
         "ld.local.u16",
         "ld.local.s16",
         "ld.local.u32",
+        "ld.local.u64",
+        "ld.local.s64",
     ];
-    const LOCAL_MEM_STORE_MNEMONICS: &[&str] = &["st.local.u8", "st.local.u16", "st.local.u32"];
+    const LOCAL_MEM_STORE_MNEMONICS: &[&str] = &[
+        "st.local.u8",
+        "st.local.u16",
+        "st.local.u32",
+        "st.local.u64",
+    ];
     const SHARED_MEM_LOAD_MNEMONICS: &[&str] = &[
         "ld.shared.u8",
         "ld.shared.s8",
         "ld.shared.u16",
         "ld.shared.s16",
         "ld.shared.u32",
+        "ld.shared.u64",
+        "ld.shared.s64",
     ];
-    const SHARED_MEM_STORE_MNEMONICS: &[&str] = &["st.shared.u8", "st.shared.u16", "st.shared.u32"];
+    const SHARED_MEM_STORE_MNEMONICS: &[&str] = &[
+        "st.shared.u8",
+        "st.shared.u16",
+        "st.shared.u32",
+        "st.shared.u64",
+    ];
+    const WIDE_MEMORY_MNEMONICS: &[&str] = &[
+        "ld.global.u64",
+        "ld.global.s64",
+        "st.global.u64",
+        "ld.const.u64",
+        "ld.const.s64",
+        "ld.local.u64",
+        "ld.local.s64",
+        "st.local.u64",
+        "ld.shared.u64",
+        "ld.shared.s64",
+        "st.shared.u64",
+    ];
     const VECTOR_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.v2.u32",
         "ld.global.v4.u32",
@@ -17035,6 +17297,7 @@ mod tests {
                     "ld.global.u8" | "ld.global.s8" => 1,
                     "ld.global.u16" | "ld.global.s16" => 2,
                     "ld.global.u32" => 4,
+                    "ld.global.u64" | "ld.global.s64" => 8,
                     _ => unreachable!(),
                 };
                 assert_eq!(
@@ -17120,6 +17383,7 @@ mod tests {
                     "ld.global.u8" | "ld.global.s8" | "st.global.u8" => 1,
                     "ld.global.u16" | "ld.global.s16" | "st.global.u16" => 2,
                     "ld.global.u32" | "st.global.u32" => 4,
+                    "ld.global.u64" | "ld.global.s64" | "st.global.u64" => 8,
                     _ => unreachable!(),
                 };
                 assert_eq!(
@@ -17193,6 +17457,7 @@ mod tests {
                     "ld.const.u8" | "ld.const.s8" => 1,
                     "ld.const.u16" | "ld.const.s16" => 2,
                     "ld.const.u32" => 4,
+                    "ld.const.u64" | "ld.const.s64" => 8,
                     _ => unreachable!(),
                 };
                 assert_eq!(
@@ -17278,6 +17543,7 @@ mod tests {
                     "ld.local.u8" | "ld.local.s8" | "st.local.u8" => 1,
                     "ld.local.u16" | "ld.local.s16" | "st.local.u16" => 2,
                     "ld.local.u32" | "st.local.u32" => 4,
+                    "ld.local.u64" | "ld.local.s64" | "st.local.u64" => 8,
                     _ => unreachable!(),
                 };
                 assert_eq!(
@@ -17363,6 +17629,7 @@ mod tests {
                     "ld.shared.u8" | "ld.shared.s8" | "st.shared.u8" => 1,
                     "ld.shared.u16" | "ld.shared.s16" | "st.shared.u16" => 2,
                     "ld.shared.u32" | "st.shared.u32" => 4,
+                    "ld.shared.u64" | "ld.shared.s64" | "st.shared.u64" => 8,
                     _ => unreachable!(),
                 };
                 assert_eq!(
@@ -17494,6 +17761,30 @@ mod tests {
                 assert!(
                     offset + width <= limit,
                     "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_memory_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 32768, 8192, WIDE_MEMORY_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_MEMORY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
                 );
             }
         }

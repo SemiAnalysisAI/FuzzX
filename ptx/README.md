@@ -265,13 +265,14 @@ that feature.
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
 | `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
-| `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32}` loads from the input buffer. |
-| `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32}` plus `ld.global.{u8,s8,u16,s16,u32}` roundtrips through the output buffer. |
-| `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32}` loads from a module-scope constant buffer. |
-| `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips. |
-| `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips. |
+| `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32,u64,s64}` loads from the input buffer. |
+| `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32,u64}` plus `ld.global.{u8,s8,u16,s16,u32,u64,s64}` roundtrips through the output buffer. |
+| `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32,u64,s64}` loads from a module-scope constant buffer. |
+| `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips, including 64-bit forms. |
+| `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips, including 64-bit forms. |
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded memory loads and store/load roundtrips. |
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
+| `DIV_DISABLE_WIDE_MEMORY` | Scalar 64-bit memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |
