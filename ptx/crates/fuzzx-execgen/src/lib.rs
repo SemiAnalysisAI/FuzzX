@@ -104,6 +104,8 @@ pub struct GenConfig {
     pub emit_wide_minmax: bool,
     pub emit_wide_mulhi: bool,
     pub emit_predicated_wide_int: bool,
+    pub emit_wide_setp: bool,
+    pub emit_wide_selp: bool,
     pub emit_wide_shifts: bool,
     pub emit_predicated_wide_shifts: bool,
     pub emit_addc: bool,
@@ -207,6 +209,8 @@ impl Default for GenConfig {
             emit_wide_minmax: true,
             emit_wide_mulhi: true,
             emit_predicated_wide_int: true,
+            emit_wide_setp: true,
+            emit_wide_selp: true,
             emit_wide_shifts: true,
             emit_predicated_wide_shifts: true,
             emit_addc: true,
@@ -783,6 +787,28 @@ impl CmpOp {
         }
     }
 
+    fn wide_setp_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "setp.eq.u64",
+            CmpOp::Ne => "setp.ne.u64",
+            CmpOp::Lt => "setp.lt.u64",
+            CmpOp::Le => "setp.le.u64",
+            CmpOp::Gt => "setp.gt.u64",
+            CmpOp::Ge => "setp.ge.u64",
+            CmpOp::LtS => "setp.lt.s64",
+            CmpOp::LeS => "setp.le.s64",
+            CmpOp::GtS => "setp.gt.s64",
+            CmpOp::GeS => "setp.ge.s64",
+        }
+    }
+
+    fn wide_cvt_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "cvt.s64.s32",
+            CmpOp::Eq | CmpOp::Ne | CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => "cvt.u64.u32",
+        }
+    }
+
     fn setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
         let suffix = op.suffix();
         match self {
@@ -1181,6 +1207,27 @@ enum Inst {
         ca: Operand,
         cb: Operand,
         pred: u32,
+    },
+    /// 64-bit `setp` through scratch b64 registers, feeding a guarded ALU op.
+    WideSetpBin {
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+        op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// 64-bit compare plus `selp.b64`, keeping the selected low 32 bits.
+    WideSelp {
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+        dst: u32,
+        true_value: Operand,
+        false_value: Operand,
     },
     /// 64-bit shift through scratch b64 registers, low 32 bits kept.
     WideShift {
@@ -1891,6 +1938,44 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_wide_setp_bin(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_binop(
+            u,
+            self.cfg.emit_minmax,
+            self.cfg.emit_sub,
+            self.cfg.emit_mul_lo,
+            self.cfg.emit_signed_lo_alu,
+            self.cfg.emit_sat_arith,
+            self.cfg.emit_mulhi,
+            self.cfg.emit_signed_mulhi,
+            self.cfg.emit_bitwise_binops,
+            self.cfg.emit_or,
+            self.cfg.emit_xor,
+        )?;
+        Ok(Inst::WideSetpBin {
+            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            ca: self.pick_guard_operand(u)?,
+            cb: self.pick_guard_operand(u)?,
+            pred: self.alloc_inst_pred(u)?,
+            op,
+            dst: self.pick_dst(u)?,
+            a: self.pick_bin_operand(u, op)?,
+            b: self.pick_bin_operand(u, op)?,
+        })
+    }
+
+    fn pick_wide_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::WideSelp {
+            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            ca: self.pick_guard_operand(u)?,
+            cb: self.pick_guard_operand(u)?,
+            pred: self.alloc_pred(),
+            dst: self.pick_dst(u)?,
+            true_value: self.pick_operand(u)?,
+            false_value: self.pick_operand(u)?,
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -2380,7 +2465,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=3)?;
+            let wide_pick: u8 = u.int_in_range(0..=5)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -2402,7 +2487,7 @@ impl<'a> Generator<'a> {
                         b: self.pick_operand(u)?,
                     })
                 }
-            } else if self.cfg.emit_mul_wide && wide_pick <= 1 {
+            } else if self.cfg.emit_mul_wide && wide_pick == 1 {
                 let op = pick_mul_wide(u)?;
                 if self.cfg.emit_predicated_mul_wide && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedMulWide {
@@ -2444,6 +2529,10 @@ impl<'a> Generator<'a> {
                         amount: u.int_in_range(0..=63)?,
                     })
                 }
+            } else if self.cfg.emit_wide_setp && self.cfg.emit_predicated_alu && wide_pick == 3 {
+                self.pick_wide_setp_bin(u)
+            } else if self.cfg.emit_wide_selp && wide_pick == 4 {
+                self.pick_wide_selp(u)
             } else {
                 let can_emit_reg_divrem =
                     self.cfg.emit_reg_divrem && self.cfg.emit_bitwise_binops && self.cfg.emit_or;
@@ -2676,6 +2765,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedMulWide { dst, .. }
             | Inst::WideInt { dst, .. }
             | Inst::PredicatedWideInt { dst, .. }
+            | Inst::WideSetpBin { dst, .. }
+            | Inst::WideSelp { dst, .. }
             | Inst::WideShift { dst, .. }
             | Inst::PredicatedWideShift { dst, .. }
             | Inst::Sad { dst, .. }
@@ -3489,6 +3580,66 @@ impl<'a> Generator<'a> {
                     pred_guard(pred)
                 )
                 .unwrap();
+            }
+            Inst::WideSetpBin {
+                cmp,
+                ca,
+                cb,
+                pred,
+                op,
+                dst,
+                a,
+                b,
+            } => {
+                write!(s, "    {:<13} %rd6, ", cmp.wide_cvt_mnemonic()).unwrap();
+                ca.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", cmp.wide_cvt_mnemonic()).unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %p{}, %rd6, %rd7;",
+                    cmp.wide_setp_mnemonic(),
+                    pred_id(pred)
+                )
+                .unwrap();
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::WideSelp {
+                cmp,
+                ca,
+                cb,
+                pred,
+                dst,
+                true_value,
+                false_value,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", cmp.wide_cvt_mnemonic()).unwrap();
+                ca.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", cmp.wide_cvt_mnemonic()).unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %rd6, %rd7;",
+                    cmp.wide_setp_mnemonic()
+                )
+                .unwrap();
+                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                true_value.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
+                false_value.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    selp.b64     %rd6, %rd6, %rd7, %p{pred};").unwrap();
+                writeln!(s, "    mov.b64      {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
             Inst::WideShift {
                 op,
@@ -4597,6 +4748,19 @@ mod tests {
     ];
     const WIDE_MINMAX_MNEMONICS: &[&str] = &["min.u64", "max.u64", "min.s64", "max.s64"];
     const WIDE_MULHI_MNEMONICS: &[&str] = &["mul.hi.u64", "mul.hi.s64"];
+    const WIDE_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.u64",
+        "setp.ne.u64",
+        "setp.lt.u64",
+        "setp.le.u64",
+        "setp.gt.u64",
+        "setp.ge.u64",
+        "setp.lt.s64",
+        "setp.le.s64",
+        "setp.gt.s64",
+        "setp.ge.s64",
+    ];
+    const WIDE_SELP_MNEMONICS: &[&str] = &["selp.b64"];
     const WIDE_SHIFT_MNEMONICS: &[&str] = &["shl.b64", "shr.u64", "shr.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
@@ -4693,6 +4857,8 @@ mod tests {
             DIVREM_MNEMONICS,
             MUL_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_SETP_MNEMONICS,
+            WIDE_SELP_MNEMONICS,
             WIDE_SHIFT_MNEMONICS,
             CARRY_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
@@ -6787,6 +6953,70 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn wide_setp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_selp: false,
+            emit_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_SETP_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_setp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_setp: false,
+            emit_wide_selp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_SETP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_mnemonic(&ptx, "selp.b64"),
+                "seed {seed:x} emitted selp.b64"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 1024, WIDE_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_selp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "selp.b64"),
+                "seed {seed:x} emitted selp.b64"
+            );
         }
     }
 

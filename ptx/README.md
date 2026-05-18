@@ -267,6 +267,8 @@ that feature.
 | `DIV_DISABLE_WIDE_MINMAX` | 64-bit scratch-register `min/max.{u64,s64}` instructions. |
 | `DIV_DISABLE_WIDE_MULHI` | 64-bit scratch-register `mul.hi.{u64,s64}` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_INT` | Predicated 64-bit scratch-register ALU generation. |
+| `DIV_DISABLE_WIDE_SETP` | 64-bit scratch-register `setp`-fed guarded ALU instructions. |
+| `DIV_DISABLE_WIDE_SELP` | 64-bit scratch-register `selp.b64` instructions. |
 | `DIV_DISABLE_WIDE_SHIFTS` | 64-bit scratch-register shifts. |
 | `DIV_DISABLE_PREDICATED_WIDE_SHIFTS` | Predicated 64-bit scratch-register shifts. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
