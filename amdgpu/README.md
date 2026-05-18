@@ -80,8 +80,9 @@ optional tail CFG inside an outer bounded loop. A complex-CFG mutation chains
 several nested subgraphs before the final store, so a single corpus entry can
 contain multiple high-fanout joins and loop nests instead of just one wrapper
 around the result. Some generated loops carry two independent `i32` accumulator
-phis, combine them after the loop, or take a guarded early exit from the loop
-body through an exit phi, so corpus entries exercise both expression
+phis, combine them after the loop, take a guarded early exit from the loop
+body through an exit phi, or switch from the loop body to multiple distinct exit
+values before one joined exit phi, so corpus entries exercise both expression
 simplification and CFG and loop transforms. CFG arms include the same scalar
 integer, bit, boolean, narrowing, saturating, funnel-shift, finite-FP, and vector
 expression families as the linear mutator. Scalar and CFG expressions can also

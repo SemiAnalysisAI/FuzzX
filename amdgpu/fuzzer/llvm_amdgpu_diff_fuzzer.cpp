@@ -4423,6 +4423,95 @@ void mutateIRAddLoopNest(Module &M, std::minstd_rand &Gen) {
   Store->setOperand(0, Acc);
 }
 
+void mutateIRAddMultiExitLoop(Module &M, std::minstd_rand &Gen) {
+  Function *F = findIRKernel(M);
+  if (!F || !canAddCFGBlocks(*F, 6))
+    return;
+  StoreInst *Store = findIRResultStore(*F);
+  if (!Store)
+    return;
+
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Current = Store->getValueOperand();
+  Value *Other = chooseI32Value(Store, Gen);
+
+  BasicBlock *Preheader = Store->getParent();
+  BasicBlock *Exit =
+      Preheader->splitBasicBlock(Store->getIterator(), "fuzz.loop.multi.exit");
+  BasicBlock *Header =
+      BasicBlock::Create(Ctx, "fuzz.loop.multi.header", F, Exit);
+  BasicBlock *Body =
+      BasicBlock::Create(Ctx, "fuzz.loop.multi.body", F, Exit);
+  BasicBlock *BreakA =
+      BasicBlock::Create(Ctx, "fuzz.loop.multi.break.a", F, Exit);
+  BasicBlock *BreakB =
+      BasicBlock::Create(Ctx, "fuzz.loop.multi.break.b", F, Exit);
+  BasicBlock *Continue =
+      BasicBlock::Create(Ctx, "fuzz.loop.multi.continue", F, Exit);
+
+  Instruction *OldTerm = Preheader->getTerminator();
+  IRBuilder<NoFolder> PreB(OldTerm);
+  Value *TripCount = nullptr;
+  if ((Gen() % 2) == 0) {
+    TripCount = ci32(Ctx, 1 + (Gen() % 8));
+  } else {
+    Value *TripSeed = (Gen() % 2) == 0 ? Current : Other;
+    Value *Masked =
+        PreB.CreateAnd(TripSeed, ci32(Ctx, 7), "fuzz.loop.multi.trip.mask");
+    TripCount = PreB.CreateAdd(Masked, ci32(Ctx, 1),
+                               "fuzz.loop.multi.trip");
+  }
+  PreB.CreateBr(Header);
+  OldTerm->eraseFromParent();
+
+  IRBuilder<NoFolder> HeaderB(Header);
+  PHINode *Index = HeaderB.CreatePHI(I32, 2, "fuzz.loop.iv.multi");
+  PHINode *Acc = HeaderB.CreatePHI(I32, 2, "fuzz.loop.acc.multi");
+  Index->addIncoming(ci32(Ctx, 0), Preheader);
+  Acc->addIncoming(Current, Preheader);
+  Value *Cond =
+      HeaderB.CreateICmpULT(Index, TripCount, "fuzz.loop.multi.cond");
+  HeaderB.CreateCondBr(Cond, Body, Exit);
+
+  IRBuilder<NoFolder> BodyB(Body);
+  CFGFragment BodyFrag = emitRandomCFGSubgraph(
+      BodyB, M, Exit, Acc, Other, chooseCFGDepth(*F, 6, Gen), Gen);
+
+  IRBuilder<NoFolder> TailB(BodyFrag.Tail);
+  Value *Key = TailB.CreateAnd(BodyFrag.Result, ci32(Ctx, 3),
+                               "fuzz.loop.multi.exit.key");
+  SwitchInst *Sw = TailB.CreateSwitch(Key, Continue, 2);
+  Sw->addCase(ci32(Ctx, 0), BreakA);
+  Sw->addCase(ci32(Ctx, 1), BreakB);
+
+  IRBuilder<NoFolder> BreakAB(BreakA);
+  Value *BreakAValue =
+      BreakAB.CreateXor(BodyFrag.Result, Index, "fuzz.loop.multi.break.a.val");
+  BreakAB.CreateBr(Exit);
+
+  IRBuilder<NoFolder> BreakBB(BreakB);
+  Value *BreakBValue =
+      BreakBB.CreateAdd(BodyFrag.Result, Other, "fuzz.loop.multi.break.b.val");
+  BreakBB.CreateBr(Exit);
+
+  IRBuilder<NoFolder> ContinueB(Continue);
+  Value *NextAcc =
+      ContinueB.CreateXor(BodyFrag.Result, Other, "fuzz.loop.multi.acc.next");
+  Value *NextIndex =
+      ContinueB.CreateAdd(Index, ci32(Ctx, 1), "fuzz.loop.multi.next");
+  ContinueB.CreateBr(Header);
+  Index->addIncoming(NextIndex, Continue);
+  Acc->addIncoming(NextAcc, Continue);
+
+  PHINode *ExitValue =
+      PHINode::Create(I32, 3, "fuzz.loop.multi.exit.value", Exit->begin());
+  ExitValue->addIncoming(Acc, Header);
+  ExitValue->addIncoming(BreakAValue, BreakA);
+  ExitValue->addIncoming(BreakBValue, BreakB);
+  Store->setOperand(0, ExitValue);
+}
+
 void mutateIRAddCascade(Module &M, std::minstd_rand &Gen) {
   Function *F = findIRKernel(M);
   if (!F || !canGrowCFG(*F))
@@ -4587,7 +4676,7 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
   while (NumMutations < 32 && (Gen() % 3) == 0)
     ++NumMutations;
   for (unsigned I = 0; I < NumMutations; ++I) {
-    switch (Gen() % 32) {
+    switch (Gen() % 36) {
     case 0:
     case 1:
     case 2:
@@ -4632,10 +4721,16 @@ void mutateIRModule(Module &M, std::minstd_rand &Gen) {
       break;
     case 28:
     case 29:
-      mutateIRModifyConstant(M, Gen);
-      break;
     case 30:
     case 31:
+      mutateIRAddMultiExitLoop(M, Gen);
+      break;
+    case 32:
+    case 33:
+      mutateIRModifyConstant(M, Gen);
+      break;
+    case 34:
+    case 35:
     default:
       mutateIRRemoveInstruction(M, Gen);
       break;
