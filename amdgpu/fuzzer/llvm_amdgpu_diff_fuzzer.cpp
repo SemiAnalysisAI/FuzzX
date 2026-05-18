@@ -2646,6 +2646,70 @@ Value *emitRandomBitfieldIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *emitRandomWideningMulIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                  std::minstd_rand &Gen,
+                                  StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+
+  Value *AZ = B.CreateZExt(A, I64, Twine(NamePrefix) + ".a.zext");
+  Value *BZ = B.CreateZExt(Bv, I64, Twine(NamePrefix) + ".b.zext");
+  Value *AS = B.CreateSExt(A, I64, Twine(NamePrefix) + ".a.sext");
+  Value *BS = B.CreateSExt(Bv, I64, Twine(NamePrefix) + ".b.sext");
+
+  switch (Gen() % 6) {
+  case 0: {
+    Value *Product = B.CreateMul(AZ, BZ, Twine(NamePrefix) + ".umul");
+    Value *High = B.CreateLShr(Product, ConstantInt::get(I64, 32),
+                               Twine(NamePrefix) + ".uhi");
+    return B.CreateTrunc(High, I32, Twine(NamePrefix) + ".uhi.i32");
+  }
+  case 1: {
+    Value *Product = B.CreateMul(AS, BS, Twine(NamePrefix) + ".smul");
+    Value *High = B.CreateAShr(Product, ConstantInt::get(I64, 32),
+                               Twine(NamePrefix) + ".shi");
+    return B.CreateTrunc(High, I32, Twine(NamePrefix) + ".shi.i32");
+  }
+  case 2: {
+    Value *Product = B.CreateMul(AZ, BZ, Twine(NamePrefix) + ".umul");
+    Value *Low = B.CreateTrunc(Product, I32, Twine(NamePrefix) + ".ulo.i32");
+    Value *High = B.CreateTrunc(
+        B.CreateLShr(Product, ConstantInt::get(I64, 32),
+                     Twine(NamePrefix) + ".uhi"),
+        I32, Twine(NamePrefix) + ".uhi.i32");
+    return B.CreateXor(Low, High, Twine(NamePrefix) + ".u.xor");
+  }
+  case 3: {
+    Value *Product = B.CreateMul(AS, BS, Twine(NamePrefix) + ".smul");
+    Value *Low = B.CreateTrunc(Product, I32, Twine(NamePrefix) + ".slo.i32");
+    Value *High = B.CreateTrunc(
+        B.CreateAShr(Product, ConstantInt::get(I64, 32),
+                     Twine(NamePrefix) + ".shi"),
+        I32, Twine(NamePrefix) + ".shi.i32");
+    return B.CreateAdd(Low, High, Twine(NamePrefix) + ".s.add");
+  }
+  case 4: {
+    Value *Product = B.CreateMul(AS, BZ, Twine(NamePrefix) + ".mixed.mul");
+    Value *High = B.CreateAShr(Product, ConstantInt::get(I64, 32),
+                               Twine(NamePrefix) + ".mixed.hi");
+    return B.CreateTrunc(High, I32, Twine(NamePrefix) + ".mixed.hi.i32");
+  }
+  default: {
+    Value *AMasked = B.CreateAnd(A, ci32(Ctx, 0xffff),
+                                 Twine(NamePrefix) + ".a.masked");
+    Value *BMasked = B.CreateAnd(Bv, ci32(Ctx, 0xffff),
+                                 Twine(NamePrefix) + ".b.masked");
+    Value *Product = B.CreateMul(B.CreateZExt(AMasked, I64,
+                                              Twine(NamePrefix) + ".a16.zext"),
+                                 B.CreateZExt(BMasked, I64,
+                                              Twine(NamePrefix) + ".b16.zext"),
+                                 Twine(NamePrefix) + ".u16.mul");
+    return B.CreateTrunc(Product, I32, Twine(NamePrefix) + ".u16.lo");
+  }
+  }
+}
+
 Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
                                      Value *Bv, std::minstd_rand &Gen,
                                      StringRef NamePrefix) {
@@ -3891,7 +3955,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 132) {
+  switch (Gen() % 138) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4108,6 +4172,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 114:
   case 115:
     return emitRandomBitfieldIdiom(B, A, Bv, Gen, "fuzz.bitfield.idiom");
+  case 116:
+  case 117:
+  case 118:
+  case 119:
+  case 120:
+  case 121:
+    return emitRandomWideningMulIdiom(B, A, Bv, Gen, "fuzz.widemul.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4142,7 +4213,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 116) {
+  switch (Gen() % 122) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4351,6 +4422,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 107:
     return emitRandomBitfieldIdiom(B, A, Bv, Gen,
                                    "fuzz.cfg.bitfield.idiom");
+  case 108:
+  case 109:
+  case 110:
+  case 111:
+  case 112:
+  case 113:
+    return emitRandomWideningMulIdiom(B, A, Bv, Gen,
+                                      "fuzz.cfg.widemul.idiom");
   default:
     switch (Gen() % 5) {
     case 0:

@@ -64,8 +64,8 @@ denominators, explicit `i1` boolean subexpressions reduced back to `i32`,
 pure-IR unsigned min/max and saturating add/sub select idioms, and
 pure-IR masked funnel-shift/rotate idioms, pure-IR signed add/sub overflow
 select idioms, pure-IR predicate-mask blend/sign idioms, and pure-IR bitfield
-extract/insert idioms, alongside LLVM bit, min/max, saturation, absolute-value,
-funnel-shift, and integer
+extract/insert idioms, pure-IR widening multiply-high/low idioms, alongside
+LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
