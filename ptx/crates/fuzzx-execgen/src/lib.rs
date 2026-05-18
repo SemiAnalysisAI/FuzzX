@@ -44,7 +44,7 @@ const LOCAL_MEM_BYTES: u32 = 64;
 const SHARED_SLOT_BYTES: u32 = 16;
 const SHARED_MEM_BYTES: u32 = N_THREADS * SHARED_SLOT_BYTES;
 const CONST_MEM_BYTES: u32 = 64;
-const F32_INPUT_MASK: u32 = 1023;
+const FLOAT_INPUT_MASK: u32 = 1023;
 
 #[derive(Debug, Clone)]
 pub struct GenConfig {
@@ -116,6 +116,9 @@ pub struct GenConfig {
     pub emit_f32_cvt: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
+    pub emit_f64_arith: bool,
+    pub emit_f64_compare: bool,
+    pub emit_f64_selp: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
     pub emit_reg_divrem: bool,
@@ -318,6 +321,9 @@ impl Default for GenConfig {
             emit_f32_cvt: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
+            emit_f64_arith: true,
+            emit_f64_compare: true,
+            emit_f64_selp: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
             emit_reg_divrem: true,
@@ -1053,6 +1059,33 @@ impl F32ToIntCvtOp {
             F32ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f32",
             F32ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f32",
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Fma,
+    Min,
+    Max,
+}
+
+impl F64ArithOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64ArithOp::Add => "add.rn.f64",
+            F64ArithOp::Sub => "sub.rn.f64",
+            F64ArithOp::Mul => "mul.rn.f64",
+            F64ArithOp::Fma => "fma.rn.f64",
+            F64ArithOp::Min => "min.f64",
+            F64ArithOp::Max => "max.f64",
+        }
+    }
+
+    fn uses_c(self) -> bool {
+        matches!(self, F64ArithOp::Fma)
     }
 }
 
@@ -1956,6 +1989,30 @@ impl CmpOp {
         }
     }
 
+    fn f64_set_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "set.eq.u32.f64",
+            CmpOp::Ne => "set.ne.u32.f64",
+            CmpOp::Lt => "set.lt.u32.f64",
+            CmpOp::Le => "set.le.u32.f64",
+            CmpOp::Gt => "set.gt.u32.f64",
+            CmpOp::Ge => "set.ge.u32.f64",
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => unreachable!(),
+        }
+    }
+
+    fn f64_setp_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "setp.eq.f64",
+            CmpOp::Ne => "setp.ne.f64",
+            CmpOp::Lt => "setp.lt.f64",
+            CmpOp::Le => "setp.le.f64",
+            CmpOp::Gt => "setp.gt.f64",
+            CmpOp::Ge => "setp.ge.f64",
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => unreachable!(),
+        }
+    }
+
     fn scalar16_input_cvt_mnemonic(self) -> &'static str {
         match self {
             CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "cvt.s16.s32",
@@ -2395,6 +2452,29 @@ enum Inst {
     },
     /// Sanitized single-precision compare feeding `selp.f32`.
     F32Selp {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+    },
+    /// Sanitized double-precision floating-point arithmetic.
+    F64Arith {
+        op: F64ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Sanitized double-precision compare materialized as u32.
+    F64Set {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Sanitized double-precision compare feeding `selp.f64`.
+    F64Selp {
         cmp: CmpOp,
         dst: u32,
         a: Operand,
@@ -4756,6 +4836,43 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_f64_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F64ArithOp::Add,
+            F64ArithOp::Sub,
+            F64ArithOp::Mul,
+            F64ArithOp::Fma,
+            F64ArithOp::Min,
+            F64ArithOp::Max,
+        ];
+        Ok(Inst::F64Arith {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            c: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f64_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F64Set {
+            cmp: pick_f32_cmp(u)?,
+            dst: self.pick_non_output_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f64_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F64Selp {
+            cmp: pick_f32_cmp(u)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            pred: self.alloc_pred(),
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -4826,6 +4943,12 @@ impl<'a> Generator<'a> {
             if self.cfg.emit_f32_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f32_cvt(u);
+            }
+            if self.cfg.emit_f64_arith
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f64_arith(u);
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -4953,6 +5076,19 @@ impl<'a> Generator<'a> {
                     self.pick_f32_set(u)
                 } else {
                     self.pick_f32_selp(u)
+                }
+            } else if self.cfg.emit_f64_compare
+                && self.cfg.emit_bitwise_binops
+                && (self.cfg.emit_f64_selp || self.cfg.emit_set)
+                && u.int_in_range(0..=3)? == 0
+            {
+                let use_selp = self.cfg.emit_f64_selp && u.arbitrary::<bool>()?;
+                if use_selp {
+                    self.pick_f64_selp(u)
+                } else if self.cfg.emit_set {
+                    self.pick_f64_set(u)
+                } else {
+                    self.pick_f64_selp(u)
                 }
             } else if self.cfg.emit_scalar_16bit
                 && self.cfg.emit_scalar_16bit_compare
@@ -6026,6 +6162,7 @@ impl<'a> Generator<'a> {
             Inst::Set { dst, .. }
             | Inst::Scalar16Set { dst, .. }
             | Inst::F32Set { dst, .. }
+            | Inst::F64Set { dst, .. }
             | Inst::PredicatedSet { dst, .. }
             | Inst::WideSet { dst, .. }
             | Inst::PredicatedWideSet { dst, .. } => {
@@ -6093,6 +6230,8 @@ impl<'a> Generator<'a> {
             | Inst::F32Unary { dst, .. }
             | Inst::F32Cvt { dst, .. }
             | Inst::F32Selp { dst, .. }
+            | Inst::F64Arith { dst, .. }
+            | Inst::F64Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
@@ -6337,6 +6476,7 @@ impl<'a> Generator<'a> {
         writeln!(s, "    .reg .b32   %r<{total_regs}>;").unwrap();
         writeln!(s, "    .reg .b64   %rd<10>;").unwrap();
         writeln!(s, "    .reg .f32   %f<4>;").unwrap();
+        writeln!(s, "    .reg .f64   %fd<4>;").unwrap();
         writeln!(
             s,
             "    .local .align 16 .b8 fuzzx_local[{LOCAL_MEM_BYTES}];"
@@ -6495,8 +6635,16 @@ impl<'a> Generator<'a> {
         let scratch = self.wide_scratch_hi_reg();
         write!(s, "    and.b32       %r{scratch}, ").unwrap();
         operand.emit(s);
-        writeln!(s, ", {F32_INPUT_MASK};").unwrap();
+        writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
         writeln!(s, "    cvt.rn.f32.u32 %f{freg}, %r{scratch};").unwrap();
+    }
+
+    fn emit_sanitized_f64_operand(&self, s: &mut String, freg: u32, operand: Operand) {
+        let scratch = self.wide_scratch_hi_reg();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
+        writeln!(s, "    cvt.rn.f64.u32 %fd{freg}, %r{scratch};").unwrap();
     }
 
     fn emit_inst(&self, s: &mut String, inst: &Inst) {
@@ -6935,7 +7083,7 @@ impl<'a> Generator<'a> {
                 let scratch = self.wide_scratch_hi_reg();
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 src.emit(s);
-                writeln!(s, ", {F32_INPUT_MASK};").unwrap();
+                writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
                 writeln!(s, "    {:<13} %f0, %r{scratch};", from_int.mnemonic()).unwrap();
                 writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
             }
@@ -6956,6 +7104,40 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.f32_setp_mnemonic()).unwrap();
                 writeln!(s, "    selp.f32      %f2, %f0, %f1, %p{pred};").unwrap();
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f2;").unwrap();
+            }
+            Inst::F64Arith { op, dst, a, b, c } => {
+                self.emit_sanitized_f64_operand(s, 0, a);
+                self.emit_sanitized_f64_operand(s, 1, b);
+                if op.uses_c() {
+                    self.emit_sanitized_f64_operand(s, 2, c);
+                    writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %fd2;", op.mnemonic()).unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %fd3, %fd0, %fd1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+            }
+            Inst::F64Set { cmp, dst, a, b } => {
+                self.emit_sanitized_f64_operand(s, 0, a);
+                self.emit_sanitized_f64_operand(s, 1, b);
+                writeln!(s, "    {:<13} %r{dst}, %fd0, %fd1;", cmp.f64_set_mnemonic()).unwrap();
+            }
+            Inst::F64Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                self.emit_sanitized_f64_operand(s, 0, a);
+                self.emit_sanitized_f64_operand(s, 1, b);
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %fd0, %fd1;",
+                    cmp.f64_setp_mnemonic()
+                )
+                .unwrap();
+                writeln!(s, "    selp.f64      %fd2, %fd0, %fd1, %p{pred};").unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd2;").unwrap();
             }
             Inst::Sel {
                 dst,
@@ -10491,6 +10673,31 @@ mod tests {
         "setp.ge.f32",
     ];
     const F32_SELP_MNEMONICS: &[&str] = &["selp.f32"];
+    const F64_ARITH_MNEMONICS: &[&str] = &[
+        "add.rn.f64",
+        "sub.rn.f64",
+        "mul.rn.f64",
+        "fma.rn.f64",
+        "min.f64",
+        "max.f64",
+    ];
+    const F64_COMPARE_MNEMONICS: &[&str] = &[
+        "set.eq.u32.f64",
+        "set.ne.u32.f64",
+        "set.lt.u32.f64",
+        "set.le.u32.f64",
+        "set.gt.u32.f64",
+        "set.ge.u32.f64",
+    ];
+    const F64_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.f64",
+        "setp.ne.f64",
+        "setp.lt.f64",
+        "setp.le.f64",
+        "setp.gt.f64",
+        "setp.ge.f64",
+    ];
+    const F64_SELP_MNEMONICS: &[&str] = &["selp.f64"];
     const SPECIAL_REG_NAMES: &[&str] = &[
         "%tid.x",
         "%tid.y",
@@ -10821,6 +11028,10 @@ mod tests {
             F32_COMPARE_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
+            F64_ARITH_MNEMONICS,
+            F64_COMPARE_MNEMONICS,
+            F64_SETP_MNEMONICS,
+            F64_SELP_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -10883,6 +11094,9 @@ mod tests {
             F32_CVT_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
+            F64_ARITH_MNEMONICS,
+            F64_SETP_MNEMONICS,
+            F64_SELP_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
@@ -14056,6 +14270,98 @@ mod tests {
                 "seed {seed:x} emitted selp.f32"
             );
             for mnemonic in F32_SETP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_arith_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F64_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_arith_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_arith: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_ARITH_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_compare_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_selp: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F64_COMPARE_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_compare_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_compare: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_COMPARE_MNEMONICS
+                .iter()
+                .chain(F64_SETP_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_mnemonic(&ptx, "selp.f64"),
+                "seed {seed:x} emitted selp.f64"
+            );
+        }
+    }
+
+    #[test]
+    fn f64_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_set: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F64_SETP_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F64_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_selp: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "selp.f64"),
+                "seed {seed:x} emitted selp.f64"
+            );
+            for mnemonic in F64_SETP_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
