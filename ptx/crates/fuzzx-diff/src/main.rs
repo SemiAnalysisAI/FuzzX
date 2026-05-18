@@ -126,8 +126,14 @@
 //!                         predicated 64-bit ALU scratch-register generation
 //!   DIV_DISABLE_WIDE_SETP default: false; set 1/true/yes/on to suppress
 //!                         64-bit setp-fed guarded ALU generation
+//!   DIV_DISABLE_WIDE_SETP_BOOL default: false; set 1/true/yes/on to suppress
+//!                         64-bit setp.<cmp>.<and|or|xor> guarded ALU generation
 //!   DIV_DISABLE_WIDE_SELP default: false; set 1/true/yes/on to suppress
 //!                         64-bit scratch-register selp.b64 generation
+//!   DIV_DISABLE_WIDE_UNARY default: false; set 1/true/yes/on to suppress
+//!                         PTX not/cnot/popc/clz/brev.b64 generation
+//!   DIV_DISABLE_PREDICATED_WIDE_UNARY default: false; set 1/true/yes/on to suppress
+//!                         predicated wide unary generation
 //!   DIV_DISABLE_WIDE_SHIFTS default: false; set 1/true/yes/on to suppress
 //!                         PTX 64-bit scratch-register shift generation
 //!   DIV_DISABLE_PREDICATED_WIDE_SHIFTS default: false; set 1/true/yes/on to suppress
@@ -379,7 +385,13 @@ struct Args {
     #[arg(long)]
     disable_wide_setp: bool,
     #[arg(long)]
+    disable_wide_setp_bool: bool,
+    #[arg(long)]
     disable_wide_selp: bool,
+    #[arg(long)]
+    disable_wide_unary: bool,
+    #[arg(long)]
+    disable_predicated_wide_unary: bool,
     #[arg(long)]
     disable_wide_shifts: bool,
     #[arg(long)]
@@ -558,7 +570,13 @@ impl Args {
             "DIV_DISABLE_PREDICATED_WIDE_INT"
         );
         set_bool!(self.disable_wide_setp, "DIV_DISABLE_WIDE_SETP");
+        set_bool!(self.disable_wide_setp_bool, "DIV_DISABLE_WIDE_SETP_BOOL");
         set_bool!(self.disable_wide_selp, "DIV_DISABLE_WIDE_SELP");
+        set_bool!(self.disable_wide_unary, "DIV_DISABLE_WIDE_UNARY");
+        set_bool!(
+            self.disable_predicated_wide_unary,
+            "DIV_DISABLE_PREDICATED_WIDE_UNARY"
+        );
         set_bool!(self.disable_wide_shifts, "DIV_DISABLE_WIDE_SHIFTS");
         set_bool!(
             self.disable_predicated_wide_shifts,
@@ -729,7 +747,11 @@ impl Config {
         let disable_predicated_wide_int =
             env_bool("DIV_DISABLE_PREDICATED_WIDE_INT")?.unwrap_or(false);
         let disable_wide_setp = env_bool("DIV_DISABLE_WIDE_SETP")?.unwrap_or(false);
+        let disable_wide_setp_bool = env_bool("DIV_DISABLE_WIDE_SETP_BOOL")?.unwrap_or(false);
         let disable_wide_selp = env_bool("DIV_DISABLE_WIDE_SELP")?.unwrap_or(false);
+        let disable_wide_unary = env_bool("DIV_DISABLE_WIDE_UNARY")?.unwrap_or(false);
+        let disable_predicated_wide_unary =
+            env_bool("DIV_DISABLE_PREDICATED_WIDE_UNARY")?.unwrap_or(false);
         let disable_wide_shifts = env_bool("DIV_DISABLE_WIDE_SHIFTS")?.unwrap_or(false);
         let disable_predicated_wide_shifts =
             env_bool("DIV_DISABLE_PREDICATED_WIDE_SHIFTS")?.unwrap_or(false);
@@ -824,7 +846,10 @@ impl Config {
             emit_wide_mulhi: !disable_wide_mulhi && !disable_wide_int,
             emit_predicated_wide_int: !disable_predicated_wide_int && !disable_wide_int,
             emit_wide_setp: !disable_wide_setp && !disable_predicated_alu,
+            emit_wide_setp_bool: !disable_wide_setp_bool && !disable_predicated_alu,
             emit_wide_selp: !disable_wide_selp,
+            emit_wide_unary: !disable_wide_unary,
+            emit_predicated_wide_unary: !disable_predicated_wide_unary && !disable_wide_unary,
             emit_wide_shifts: !disable_wide_shifts,
             emit_predicated_wide_shifts: !disable_predicated_wide_shifts && !disable_wide_shifts,
             emit_addc: !disable_addc,
@@ -1035,7 +1060,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_selp={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1107,7 +1132,10 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_wide_mulhi,
         cfg.gen_config.emit_predicated_wide_int,
         cfg.gen_config.emit_wide_setp,
+        cfg.gen_config.emit_wide_setp_bool,
         cfg.gen_config.emit_wide_selp,
+        cfg.gen_config.emit_wide_unary,
+        cfg.gen_config.emit_predicated_wide_unary,
         cfg.gen_config.emit_wide_shifts,
         cfg.gen_config.emit_predicated_wide_shifts,
         cfg.gen_config.emit_addc,
