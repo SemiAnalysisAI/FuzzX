@@ -488,6 +488,18 @@ bool isKnownNonZeroInteger(const Value *V) {
   return false;
 }
 
+bool isKnownNonZeroFP(const Value *V) {
+  if (const auto *C = dyn_cast<ConstantFP>(V))
+    return !C->isZero();
+  if (const auto *UIToFP = dyn_cast<UIToFPInst>(V))
+    return isKnownNonZeroInteger(UIToFP->getOperand(0));
+  if (const auto *SIToFP = dyn_cast<SIToFPInst>(V))
+    return isKnownNonZeroInteger(SIToFP->getOperand(0));
+  if (const auto *Ext = dyn_cast<FPExtInst>(V))
+    return isKnownNonZeroFP(Ext->getOperand(0));
+  return false;
+}
+
 bool isKnownNonNegativeI32(const Value *V) {
   if (const auto *C = dyn_cast<ConstantInt>(V))
     return C->getType()->isIntegerTy(32) && !C->isNegative();
@@ -750,6 +762,9 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::FMul:
       return isAllowedFPScalarType(BO->getType()) ||
              isAllowedFPVectorType(BO->getType());
+    case Instruction::FDiv:
+      return isAllowedFPScalarType(BO->getType()) &&
+             isKnownNonZeroFP(BO->getOperand(1));
     case Instruction::UDiv:
     case Instruction::URem:
       if (BO->hasName() && BO->getName().starts_with("fuzz.load.idx"))
@@ -2388,7 +2403,7 @@ Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
   Value *FB = B.CreateUIToFP(BMasked, F32, Twine(NamePrefix) + ".uitofp.b");
 
   Value *Result = nullptr;
-  switch (Gen() % 7) {
+  switch (Gen() % 8) {
   case 0:
     Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
     break;
@@ -2420,6 +2435,14 @@ Value *emitRandomFiniteFPInstruction(IRBuilder<NoFolder> &B, Value *A,
     Value *FSmall =
         B.CreateUIToFP(Small, F32, Twine(NamePrefix) + ".uitofp.small");
     Result = B.CreateFMul(FA, FSmall, Twine(NamePrefix) + ".smallmul");
+    break;
+  }
+  case 6: {
+    Value *Den = B.CreateOr(B.CreateAnd(Bv, ci32(Ctx, 31),
+                                        Twine(NamePrefix) + ".den.mask"),
+                            ci32(Ctx, 1), Twine(NamePrefix) + ".den.nz");
+    Value *FDen = B.CreateUIToFP(Den, F32, Twine(NamePrefix) + ".uitofp.den");
+    Result = B.CreateFDiv(FA, FDen, Twine(NamePrefix) + ".fdiv");
     break;
   }
   default: {
@@ -2471,7 +2494,7 @@ Value *emitRandomFiniteHalfFPInstruction(IRBuilder<NoFolder> &B, Value *A,
         B.CreateUIToFP(Small, F16, Twine(NamePrefix) + ".uitofp.small");
 
     Value *Result = nullptr;
-    switch (Gen() % 7) {
+    switch (Gen() % 8) {
     case 0:
       Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
       break;
@@ -2504,6 +2527,15 @@ Value *emitRandomFiniteHalfFPInstruction(IRBuilder<NoFolder> &B, Value *A,
       Result = B.CreateFSub(Hi, Lo, Twine(NamePrefix) + ".fsub");
       break;
     }
+    case 6: {
+      Value *Den = B.CreateOr(B.CreateAnd(Bv, ci32(Ctx, 15),
+                                          Twine(NamePrefix) + ".den.mask"),
+                              ci32(Ctx, 1), Twine(NamePrefix) + ".den.nz");
+      Value *FDen =
+          B.CreateUIToFP(Den, F16, Twine(NamePrefix) + ".uitofp.den");
+      Result = B.CreateFDiv(FA, FDen, Twine(NamePrefix) + ".fdiv");
+      break;
+    }
     default: {
       Value *Cmp = B.CreateFCmp(randomFCmpPredicate(Gen), FA, FB,
                                 Twine(NamePrefix) + ".fcmp");
@@ -2531,7 +2563,7 @@ Value *emitRandomFiniteHalfFPInstruction(IRBuilder<NoFolder> &B, Value *A,
         B.CreateSIToFP(Tiny, F16, Twine(NamePrefix) + ".sitofp.tiny");
 
     Value *Result = nullptr;
-    switch (Gen() % 6) {
+    switch (Gen() % 7) {
     case 0:
       Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
       break;
@@ -2553,6 +2585,15 @@ Value *emitRandomFiniteHalfFPInstruction(IRBuilder<NoFolder> &B, Value *A,
       Value *F32Result =
           B.CreateFSub(FA32, FB32, Twine(NamePrefix) + ".f32.sub");
       Result = B.CreateFPTrunc(F32Result, F16, Twine(NamePrefix) + ".fptrunc");
+      break;
+    }
+    case 5: {
+      Value *Den = B.CreateOr(B.CreateAnd(Bv, ci32(Ctx, 15),
+                                          Twine(NamePrefix) + ".den.mask"),
+                              ci32(Ctx, 1), Twine(NamePrefix) + ".den.nz");
+      Value *FDen =
+          B.CreateUIToFP(Den, F16, Twine(NamePrefix) + ".uitofp.den");
+      Result = B.CreateFDiv(FA, FDen, Twine(NamePrefix) + ".fdiv");
       break;
     }
     default:
@@ -2592,7 +2633,7 @@ Value *emitRandomFiniteSignedFPInstruction(IRBuilder<NoFolder> &B, Value *A,
   Value *FB = B.CreateSIToFP(BSmall, F32, Twine(NamePrefix) + ".sitofp.b");
 
   Value *Result = nullptr;
-  switch (Gen() % 6) {
+  switch (Gen() % 7) {
   case 0:
     Result = B.CreateFAdd(FA, FB, Twine(NamePrefix) + ".fadd");
     break;
@@ -2614,6 +2655,14 @@ Value *emitRandomFiniteSignedFPInstruction(IRBuilder<NoFolder> &B, Value *A,
     Value *F64Result =
         B.CreateFSub(FA64, FB64, Twine(NamePrefix) + ".f64.sub");
     Result = B.CreateFPTrunc(F64Result, F32, Twine(NamePrefix) + ".fptrunc");
+    break;
+  }
+  case 5: {
+    Value *Den = B.CreateOr(B.CreateAnd(Bv, ci32(Ctx, 31),
+                                        Twine(NamePrefix) + ".den.mask"),
+                            ci32(Ctx, 1), Twine(NamePrefix) + ".den.nz");
+    Value *FDen = B.CreateUIToFP(Den, F32, Twine(NamePrefix) + ".uitofp.den");
+    Result = B.CreateFDiv(FA, FDen, Twine(NamePrefix) + ".fdiv");
     break;
   }
   default: {

@@ -63,9 +63,10 @@ operations, plus bounded AMDGPU FP/packing intrinsics such as
 default. It also emits a finite
 scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
-`fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
-`fptoui`; a signed variant uses small sign-extended integers, `sitofp`,
-`fadd` / `fsub` / `fmul`, and in-range `fptosi`. It also emits finite scalar
+`fadd` / `fmul` / nonzero-denominator `fdiv` / `fcmp` / `select` shapes, and
+converting back with in-range `fptoui`; a signed variant uses small
+sign-extended integers, `sitofp`, `fadd` / `fsub` / `fmul` /
+nonzero-denominator `fdiv`, and in-range `fptosi`. It also emits finite scalar
 `half` and `<2/4 x half>` / `<2/4 x float>` vector FP subexpressions reduced
 back to `i32`. The mutator can
 also wrap the current result in structured two-way
