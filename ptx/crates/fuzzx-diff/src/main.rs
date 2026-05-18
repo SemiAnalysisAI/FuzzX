@@ -60,6 +60,8 @@
 //!                         PTX shf.{l,r}.wrap.b32 generation
 //!   DIV_DISABLE_REG_FUNNEL default: false; set 1/true/yes/on to suppress
 //!                         register-count shf.{l,r}.wrap.b32 generation
+//!   DIV_DISABLE_PREDICATED_FUNNEL default: false; set 1/true/yes/on to suppress
+//!                         predicated shf.{l,r}.wrap.b32 generation
 //!   DIV_DISABLE_NEG       default: false; set 1/true/yes/on to suppress
 //!                         PTX neg.s32 generation
 //!   DIV_DISABLE_SHL       default: false; set 1/true/yes/on to suppress
@@ -78,6 +80,8 @@
 //!                         PTX bfi.b32 generation
 //!   DIV_DISABLE_BMSK      default: false; set 1/true/yes/on to suppress
 //!                         PTX bmsk.clamp.b32 generation
+//!   DIV_DISABLE_PREDICATED_BITFIELD default: false; set 1/true/yes/on to suppress
+//!                         predicated bfe.{u32,s32}/bfi.b32/bmsk.clamp.b32 generation
 //!   DIV_DISABLE_MAD24     default: false; set 1/true/yes/on to suppress
 //!                         PTX mad24.lo.u32/mad24.hi.u32 generation
 //!   DIV_DISABLE_MUL24     default: false; set 1/true/yes/on to suppress
@@ -239,6 +243,8 @@ struct Args {
     #[arg(long)]
     disable_reg_funnel: bool,
     #[arg(long)]
+    disable_predicated_funnel: bool,
+    #[arg(long)]
     disable_neg: bool,
     #[arg(long)]
     disable_shl: bool,
@@ -256,6 +262,8 @@ struct Args {
     disable_bfi: bool,
     #[arg(long)]
     disable_bmsk: bool,
+    #[arg(long)]
+    disable_predicated_bitfield: bool,
     #[arg(long)]
     disable_mad24: bool,
     #[arg(long)]
@@ -347,6 +355,10 @@ impl Args {
         set_bool!(self.disable_signed_divrem, "DIV_DISABLE_SIGNED_DIVREM");
         set_bool!(self.disable_funnel, "DIV_DISABLE_FUNNEL");
         set_bool!(self.disable_reg_funnel, "DIV_DISABLE_REG_FUNNEL");
+        set_bool!(
+            self.disable_predicated_funnel,
+            "DIV_DISABLE_PREDICATED_FUNNEL"
+        );
         set_bool!(self.disable_neg, "DIV_DISABLE_NEG");
         set_bool!(self.disable_shl, "DIV_DISABLE_SHL");
         set_bool!(self.disable_shr, "DIV_DISABLE_SHR");
@@ -359,6 +371,10 @@ impl Args {
         set_bool!(self.disable_bfind, "DIV_DISABLE_BFIND");
         set_bool!(self.disable_bfi, "DIV_DISABLE_BFI");
         set_bool!(self.disable_bmsk, "DIV_DISABLE_BMSK");
+        set_bool!(
+            self.disable_predicated_bitfield,
+            "DIV_DISABLE_PREDICATED_BITFIELD"
+        );
         set_bool!(self.disable_mad24, "DIV_DISABLE_MAD24");
         set_bool!(self.disable_mul24, "DIV_DISABLE_MUL24");
         set_bool!(self.disable_mul_wide, "DIV_DISABLE_MUL_WIDE");
@@ -464,6 +480,7 @@ impl Config {
         let disable_signed_divrem = env_bool("DIV_DISABLE_SIGNED_DIVREM")?.unwrap_or(false);
         let disable_funnel = env_bool("DIV_DISABLE_FUNNEL")?.unwrap_or(false);
         let disable_reg_funnel = env_bool("DIV_DISABLE_REG_FUNNEL")?.unwrap_or(false);
+        let disable_predicated_funnel = env_bool("DIV_DISABLE_PREDICATED_FUNNEL")?.unwrap_or(false);
         let disable_neg = env_bool("DIV_DISABLE_NEG")?.unwrap_or(false);
         let disable_shl = env_bool("DIV_DISABLE_SHL")?.unwrap_or(false);
         let disable_shr = env_bool("DIV_DISABLE_SHR")?.unwrap_or(false);
@@ -473,6 +490,8 @@ impl Config {
         let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
         let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
+        let disable_predicated_bitfield =
+            env_bool("DIV_DISABLE_PREDICATED_BITFIELD")?.unwrap_or(false);
         let disable_mad24 = env_bool("DIV_DISABLE_MAD24")?.unwrap_or(false);
         let disable_mul24 = env_bool("DIV_DISABLE_MUL24")?.unwrap_or(false);
         let disable_mul_wide = env_bool("DIV_DISABLE_MUL_WIDE")?.unwrap_or(false);
@@ -515,6 +534,7 @@ impl Config {
             emit_signed_divrem: !disable_signed_divrem,
             emit_funnel: !disable_funnel,
             emit_reg_funnel: !disable_reg_funnel && !disable_funnel,
+            emit_predicated_funnel: !disable_predicated_funnel && !disable_funnel,
             emit_neg: !disable_neg,
             emit_shl: !disable_shl,
             emit_shr: !disable_shr,
@@ -524,6 +544,7 @@ impl Config {
             emit_bfind: !disable_bfind,
             emit_bfi: !disable_bfi,
             emit_bmsk: !disable_bmsk,
+            emit_predicated_bitfield: !disable_predicated_bitfield,
             emit_mad24: !disable_mad24,
             emit_mul24: !disable_mul24,
             emit_mul_wide: !disable_mul_wide,
@@ -722,7 +743,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_predicated_alu={} emit_predicated_unary={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_predicated_alu={} emit_predicated_unary={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -760,6 +781,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_signed_divrem,
         cfg.gen_config.emit_funnel,
         cfg.gen_config.emit_reg_funnel,
+        cfg.gen_config.emit_predicated_funnel,
         cfg.gen_config.emit_neg,
         cfg.gen_config.emit_shl,
         cfg.gen_config.emit_shr,
@@ -769,6 +791,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_bfind,
         cfg.gen_config.emit_bfi,
         cfg.gen_config.emit_bmsk,
+        cfg.gen_config.emit_predicated_bitfield,
         cfg.gen_config.emit_mad24,
         cfg.gen_config.emit_mul24,
         cfg.gen_config.emit_mul_wide,

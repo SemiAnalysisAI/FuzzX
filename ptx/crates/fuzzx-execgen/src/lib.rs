@@ -73,6 +73,7 @@ pub struct GenConfig {
     pub emit_signed_divrem: bool,
     pub emit_funnel: bool,
     pub emit_reg_funnel: bool,
+    pub emit_predicated_funnel: bool,
     pub emit_neg: bool,
     pub emit_shl: bool,
     pub emit_shr: bool,
@@ -82,6 +83,7 @@ pub struct GenConfig {
     pub emit_bfind: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
+    pub emit_predicated_bitfield: bool,
     pub emit_mad24: bool,
     pub emit_mul24: bool,
     pub emit_mul_wide: bool,
@@ -141,6 +143,7 @@ impl Default for GenConfig {
             emit_signed_divrem: true,
             emit_funnel: true,
             emit_reg_funnel: true,
+            emit_predicated_funnel: true,
             emit_neg: true,
             emit_shl: true,
             emit_shr: true,
@@ -150,6 +153,7 @@ impl Default for GenConfig {
             emit_bfind: true,
             emit_bfi: true,
             emit_bmsk: true,
+            emit_predicated_bitfield: true,
             emit_mad24: true,
             emit_mul24: true,
             emit_mul_wide: true,
@@ -891,6 +895,18 @@ enum Inst {
         b: Operand,
         amount: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred shf.{l,r}.wrap.b32 dst, a, b, amount;`.
+    PredicatedFunnel {
+        dir: FunnelDir,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        amount: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `bfe.u32 dst, src, pos, len;` — extract `len` bits from `src` at
     /// position `pos`. PTX masks pos/len mod 32 → safe.
     Bfe {
@@ -899,6 +915,18 @@ enum Inst {
         src: Operand,
         pos: u32,
         len: u32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred bfe.{u32,s32} dst, src, pos, len;`.
+    PredicatedBfe {
+        op: BfeOp,
+        dst: u32,
+        src: Operand,
+        pos: u32,
+        len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `bfi.b32 dst, src, base, pos, len;` — insert low `len` bits of `src`
     /// into `base` starting at `pos`. PTX masks pos/len mod 32 → safe.
@@ -909,8 +937,30 @@ enum Inst {
         pos: u32,
         len: u32,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred bfi.b32 dst, src, base, pos, len;`.
+    PredicatedBfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        pos: u32,
+        len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `bmsk.clamp.b32 dst, pos, len;` — create a clamped bit mask.
     Bmsk { dst: u32, pos: u32, len: u32 },
+    /// `setp.<cmp> pred, ca, cb; @pred bmsk.clamp.b32 dst, pos, len;`.
+    PredicatedBmsk {
+        dst: u32,
+        pos: u32,
+        len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
 }
 
 enum Term {
@@ -1266,7 +1316,23 @@ impl<'a> Generator<'a> {
                 } else {
                     FunnelDir::Right
                 };
-                if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
+                if self.cfg.emit_predicated_funnel && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedFunnel {
+                        dir,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        amount: if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
+                            Operand::Reg(self.pick_dst(u)?)
+                        } else {
+                            Operand::Imm(u.int_in_range(0..=31)?)
+                        },
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
                     Ok(Inst::RegFunnel {
                         dir,
                         dst: self.pick_dst(u)?,
@@ -1287,7 +1353,31 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 235 {
-            if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
+            if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
+                if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedBmsk {
+                        dst: self.pick_dst(u)?,
+                        pos: u.int_in_range(0..=31)?,
+                        len: u.int_in_range(0..=31)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else {
+                    Ok(Inst::PredicatedBfe {
+                        op: pick_bfe(u)?,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        pos: u.int_in_range(0..=31)?,
+                        len: u.int_in_range(0..=31)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                }
+            } else if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
                 Ok(Inst::Bmsk {
                     dst: self.pick_dst(u)?,
                     pos: u.int_in_range(0..=31)?,
@@ -1304,13 +1394,27 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 245 {
             if self.cfg.emit_bfi {
-                Ok(Inst::Bfi {
-                    dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
-                    base: self.pick_operand(u)?,
-                    pos: u.int_in_range(0..=31)?,
-                    len: u.int_in_range(0..=31)?,
-                })
+                if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedBfi {
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        base: self.pick_operand(u)?,
+                        pos: u.int_in_range(0..=31)?,
+                        len: u.int_in_range(0..=31)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else {
+                    Ok(Inst::Bfi {
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        base: self.pick_operand(u)?,
+                        pos: u.int_in_range(0..=31)?,
+                        len: u.int_in_range(0..=31)?,
+                    })
+                }
             } else {
                 self.pick_mad_or_add(u)
             }
@@ -1976,6 +2080,30 @@ impl<'a> Generator<'a> {
                 amount.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedFunnel {
+                dir,
+                dst,
+                a,
+                b,
+                amount,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} {:<8} %r{dst}, ", dir.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                amount.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Bfe {
                 op,
                 dst,
@@ -1984,6 +2112,26 @@ impl<'a> Generator<'a> {
                 len,
             } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", {pos}, {len};").unwrap();
+            }
+            Inst::PredicatedBfe {
+                op,
+                dst,
+                src,
+                pos,
+                len,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} {:<8} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ", {pos}, {len};").unwrap();
             }
@@ -2000,8 +2148,46 @@ impl<'a> Generator<'a> {
                 base.emit(s);
                 writeln!(s, ", {pos}, {len};").unwrap();
             }
+            Inst::PredicatedBfi {
+                dst,
+                src,
+                base,
+                pos,
+                len,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{pred} bfi.b32  %r{dst}, ").unwrap();
+                src.emit(s);
+                write!(s, ", ").unwrap();
+                base.emit(s);
+                writeln!(s, ", {pos}, {len};").unwrap();
+            }
             Inst::Bmsk { dst, pos, len } => {
                 writeln!(s, "    bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
+            }
+            Inst::PredicatedBmsk {
+                dst,
+                pos,
+                len,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{pred}, ", cmp.mnemonic()).unwrap();
+                ca.emit(s);
+                write!(s, ", ").unwrap();
+                cb.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    @%p{pred} bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
             }
         }
     }
@@ -2480,6 +2666,7 @@ mod tests {
     ];
     const BFIND_MNEMONICS: &[&str] = &["bfind.u32", "bfind.shiftamt.u32"];
     const BFE_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32"];
+    const BITFIELD_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32", "bfi.b32", "bmsk.clamp.b32"];
     const DIVREM_MNEMONICS: &[&str] = &["div.u32", "rem.u32", "div.s32", "rem.s32"];
     const MAD24_MNEMONICS: &[&str] = &[
         "mad24.lo.u32",
@@ -2654,6 +2841,13 @@ mod tests {
             .any(|token| token == mnemonic)
     }
 
+    fn predicated_mnemonic(line: &str) -> Option<&str> {
+        let mut tokens = line.trim_start().split_whitespace();
+        let pred = tokens.next()?;
+        let op = tokens.next()?;
+        pred.starts_with("@%p").then_some(op)
+    }
+
     fn has_register_shift(ptx: &str) -> bool {
         let lines: Vec<_> = ptx.lines().map(str::trim_start).collect();
         lines.windows(2).any(|pair| {
@@ -2677,42 +2871,33 @@ mod tests {
     }
 
     fn has_predicated_alu(ptx: &str) -> bool {
-        ptx.lines().any(|line| {
-            let mut tokens = line.trim_start().split_whitespace();
-            let Some(pred) = tokens.next() else {
-                return false;
-            };
-            let Some(op) = tokens.next() else {
-                return false;
-            };
-            pred.starts_with("@%p") && BIN_MNEMONICS.contains(&op)
-        })
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| BIN_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_shift(ptx: &str) -> bool {
-        ptx.lines().any(|line| {
-            let mut tokens = line.trim_start().split_whitespace();
-            let Some(pred) = tokens.next() else {
-                return false;
-            };
-            let Some(op) = tokens.next() else {
-                return false;
-            };
-            pred.starts_with("@%p") && SHIFT_MNEMONICS.contains(&op)
-        })
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| SHIFT_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_unary(ptx: &str) -> bool {
-        ptx.lines().any(|line| {
-            let mut tokens = line.trim_start().split_whitespace();
-            let Some(pred) = tokens.next() else {
-                return false;
-            };
-            let Some(op) = tokens.next() else {
-                return false;
-            };
-            pred.starts_with("@%p") && UNARY_MNEMONICS.contains(&op)
-        })
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| UNARY_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_funnel(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| FUNNEL_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_bitfield(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| BITFIELD_MNEMONICS.contains(&op))
     }
 
     fn has_register_funnel(ptx: &str) -> bool {
@@ -3625,6 +3810,52 @@ mod tests {
     }
 
     #[test]
+    fn predicated_bitfield_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; BITFIELD_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in BITFIELD_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = BITFIELD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_bitfield: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_bitfield(&ptx),
+                "seed {seed:x} emitted predicated bitfield instruction"
+            );
+        }
+    }
+
+    #[test]
     fn mad24_generation_is_reachable_when_bfind_is_disabled() {
         let cfg = GenConfig {
             emit_bfind: false,
@@ -4448,6 +4679,43 @@ mod tests {
             for mnemonic in ["shf.l.wrap.b32", "shf.r.wrap.b32"] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
+        }
+    }
+
+    #[test]
+    fn predicated_funnel_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_funnel = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_funnel |= has_predicated_funnel(&ptx);
+            if saw_predicated_funnel {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_funnel,
+            "no seed in sample emitted predicated funnel shift"
+        );
+    }
+
+    #[test]
+    fn predicated_funnel_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_funnel: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_funnel(&ptx),
+                "seed {seed:x} emitted predicated funnel shift"
+            );
         }
     }
 

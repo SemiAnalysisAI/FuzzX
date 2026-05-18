@@ -234,6 +234,7 @@ that feature.
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
 | `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
+| `DIV_DISABLE_PREDICATED_FUNNEL` | Predicated `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_NEG` | `neg.s32`. |
 | `DIV_DISABLE_SHL` | `shl.b32`. |
 | `DIV_DISABLE_SHR` | `shr.u32`. |
@@ -243,6 +244,7 @@ that feature.
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
+| `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
 | `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
 | `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
