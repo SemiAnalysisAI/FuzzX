@@ -101,6 +101,8 @@ pub struct GenConfig {
     pub emit_mul_wide: bool,
     pub emit_predicated_mul_wide: bool,
     pub emit_wide_int: bool,
+    pub emit_wide_minmax: bool,
+    pub emit_wide_mulhi: bool,
     pub emit_predicated_wide_int: bool,
     pub emit_wide_shifts: bool,
     pub emit_predicated_wide_shifts: bool,
@@ -202,6 +204,8 @@ impl Default for GenConfig {
             emit_mul_wide: true,
             emit_predicated_mul_wide: true,
             emit_wide_int: true,
+            emit_wide_minmax: true,
+            emit_wide_mulhi: true,
             emit_predicated_wide_int: true,
             emit_wide_shifts: true,
             emit_predicated_wide_shifts: true,
@@ -522,9 +526,15 @@ enum WideIntOp {
     AddU64,
     SubU64,
     MulLoU64,
+    MulHiU64,
+    MinU64,
+    MaxU64,
     AddS64,
     SubS64,
     MulLoS64,
+    MulHiS64,
+    MinS64,
+    MaxS64,
     AndB64,
     OrB64,
     XorB64,
@@ -536,9 +546,15 @@ impl WideIntOp {
             WideIntOp::AddU64 => "add.u64",
             WideIntOp::SubU64 => "sub.u64",
             WideIntOp::MulLoU64 => "mul.lo.u64",
+            WideIntOp::MulHiU64 => "mul.hi.u64",
+            WideIntOp::MinU64 => "min.u64",
+            WideIntOp::MaxU64 => "max.u64",
             WideIntOp::AddS64 => "add.s64",
             WideIntOp::SubS64 => "sub.s64",
             WideIntOp::MulLoS64 => "mul.lo.s64",
+            WideIntOp::MulHiS64 => "mul.hi.s64",
+            WideIntOp::MinS64 => "min.s64",
+            WideIntOp::MaxS64 => "max.s64",
             WideIntOp::AndB64 => "and.b64",
             WideIntOp::OrB64 => "or.b64",
             WideIntOp::XorB64 => "xor.b64",
@@ -547,10 +563,18 @@ impl WideIntOp {
 
     fn cvt_mnemonic(self) -> &'static str {
         match self {
-            WideIntOp::AddS64 | WideIntOp::SubS64 | WideIntOp::MulLoS64 => "cvt.s64.s32",
+            WideIntOp::AddS64
+            | WideIntOp::SubS64
+            | WideIntOp::MulLoS64
+            | WideIntOp::MulHiS64
+            | WideIntOp::MinS64
+            | WideIntOp::MaxS64 => "cvt.s64.s32",
             WideIntOp::AddU64
             | WideIntOp::SubU64
             | WideIntOp::MulLoU64
+            | WideIntOp::MulHiU64
+            | WideIntOp::MinU64
+            | WideIntOp::MaxU64
             | WideIntOp::AndB64
             | WideIntOp::OrB64
             | WideIntOp::XorB64 => "cvt.u64.u32",
@@ -2358,7 +2382,7 @@ impl<'a> Generator<'a> {
         } else if pick < 253 {
             let wide_pick: u8 = u.int_in_range(0..=3)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
-                let op = pick_wide_int(u)?;
+                let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedWideInt {
                         op,
@@ -4228,8 +4252,12 @@ fn pick_mul_wide(u: &mut Unstructured) -> Result<MulWideOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_wide_int(u: &mut Unstructured) -> Result<WideIntOp> {
-    let ops = [
+fn pick_wide_int(
+    u: &mut Unstructured,
+    emit_wide_minmax: bool,
+    emit_wide_mulhi: bool,
+) -> Result<WideIntOp> {
+    let mut ops = vec![
         WideIntOp::AddU64,
         WideIntOp::SubU64,
         WideIntOp::MulLoU64,
@@ -4240,6 +4268,17 @@ fn pick_wide_int(u: &mut Unstructured) -> Result<WideIntOp> {
         WideIntOp::OrB64,
         WideIntOp::XorB64,
     ];
+    if emit_wide_minmax {
+        ops.extend([
+            WideIntOp::MinU64,
+            WideIntOp::MaxU64,
+            WideIntOp::MinS64,
+            WideIntOp::MaxS64,
+        ]);
+    }
+    if emit_wide_mulhi {
+        ops.extend([WideIntOp::MulHiU64, WideIntOp::MulHiS64]);
+    }
     Ok(*u.choose(&ops)?)
 }
 
@@ -4543,13 +4582,21 @@ mod tests {
         "add.u64",
         "sub.u64",
         "mul.lo.u64",
+        "mul.hi.u64",
+        "min.u64",
+        "max.u64",
         "add.s64",
         "sub.s64",
         "mul.lo.s64",
+        "mul.hi.s64",
+        "min.s64",
+        "max.s64",
         "and.b64",
         "or.b64",
         "xor.b64",
     ];
+    const WIDE_MINMAX_MNEMONICS: &[&str] = &["min.u64", "max.u64", "min.s64", "max.s64"];
+    const WIDE_MULHI_MNEMONICS: &[&str] = &["mul.hi.u64", "mul.hi.s64"];
     const WIDE_SHIFT_MNEMONICS: &[&str] = &["shl.b64", "shr.u64", "shr.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
@@ -6637,23 +6684,12 @@ mod tests {
 
     #[test]
     fn wide_int_generation_is_reachable() {
-        let mnemonics = [
-            "add.u64",
-            "sub.u64",
-            "mul.lo.u64",
-            "add.s64",
-            "sub.s64",
-            "mul.lo.s64",
-            "and.b64",
-            "or.b64",
-            "xor.b64",
-        ];
-        let mut found = [false; 9];
+        let mut found = vec![false; WIDE_INT_MNEMONICS.len()];
 
         for seed in 0..32768 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes(&bytes).unwrap();
-            for (i, mnemonic) in mnemonics.iter().enumerate() {
+            for (i, mnemonic) in WIDE_INT_MNEMONICS.iter().enumerate() {
                 let count = ptx
                     .lines()
                     .filter(|line| line.trim_start().starts_with(mnemonic))
@@ -6669,7 +6705,7 @@ mod tests {
             }
         }
 
-        let missing: Vec<_> = mnemonics
+        let missing: Vec<_> = WIDE_INT_MNEMONICS
             .iter()
             .zip(found)
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
@@ -6691,8 +6727,14 @@ mod tests {
                 "add.u64",
                 "sub.u64",
                 "mul.lo.u64",
+                "mul.hi.u64",
+                "min.u64",
+                "max.u64",
                 "sub.s64",
                 "mul.lo.s64",
+                "mul.hi.s64",
+                "min.s64",
+                "max.s64",
                 "and.b64",
                 "or.b64",
                 "xor.b64",
@@ -6707,6 +6749,44 @@ mod tests {
                 .filter(|line| line.trim_start().starts_with("add.s64"))
                 .count();
             assert_eq!(add_s64_count, 2, "seed {seed:x} emitted body add.s64");
+        }
+    }
+
+    #[test]
+    fn wide_minmax_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_minmax: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_MINMAX_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_mulhi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_mulhi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_MULHI_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
         }
     }
 

@@ -264,6 +264,8 @@ that feature.
 | `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_MUL_WIDE` | Predicated `mul.wide.{u32,s32}` instructions. |
 | `DIV_DISABLE_WIDE_INT` | 64-bit scratch-register ALU generation. |
+| `DIV_DISABLE_WIDE_MINMAX` | 64-bit scratch-register `min/max.{u64,s64}` instructions. |
+| `DIV_DISABLE_WIDE_MULHI` | 64-bit scratch-register `mul.hi.{u64,s64}` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_INT` | Predicated 64-bit scratch-register ALU generation. |
 | `DIV_DISABLE_WIDE_SHIFTS` | 64-bit scratch-register shifts. |
 | `DIV_DISABLE_PREDICATED_WIDE_SHIFTS` | Predicated 64-bit scratch-register shifts. |
