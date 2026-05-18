@@ -121,14 +121,15 @@
 //!   DIV_DISABLE_VECTOR_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         vectorized memory loads and store/load roundtrips
 //!   DIV_DISABLE_F32_ARITH default: false; set 1/true/yes/on to suppress
-//!                         sanitized f32 add/sub/mul/div/fma/copysign/min/max generation
+//!                         sanitized f32 add/sub/mul/div/fma/copysign/min/max,
+//!                         f32 sat arithmetic, and ftz min/max generation
 //!   DIV_DISABLE_F32_ROUNDING default: false; set 1/true/yes/on to suppress
 //!                         non-default rounding-mode and ftz f32 add/sub/mul/div/fma generation
 //!   DIV_DISABLE_F32_UNARY default: false; set 1/true/yes/on to suppress
-//!                         f32 abs/neg generation
+//!                         f32 abs/neg generation, including ftz forms
 //!   DIV_DISABLE_F32_CVT default: false; set 1/true/yes/on to suppress
 //!                         explicit signed/unsigned f32/int, saturating f32-to-int,
-//!                         and f64-to-f32 conversion chains
+//!                         f64-to-f32, and ftz conversion chains
 //!   DIV_DISABLE_F32_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         f32 rounded and ftz sqrt/rcp plus approx rcp/rsqrt/ex2/lg2/sin/cos
 //!                         generation

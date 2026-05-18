@@ -954,9 +954,15 @@ enum F32ArithOp {
     Div,
     DivApprox,
     Fma,
+    AddSat,
+    SubSat,
+    MulSat,
+    FmaSat,
     Copysign,
     Min,
     Max,
+    MinFtz,
+    MaxFtz,
 }
 
 impl F32ArithOp {
@@ -968,14 +974,20 @@ impl F32ArithOp {
             F32ArithOp::Div => "div.rn.f32",
             F32ArithOp::DivApprox => "div.approx.ftz.f32",
             F32ArithOp::Fma => "fma.rn.f32",
+            F32ArithOp::AddSat => "add.rn.sat.f32",
+            F32ArithOp::SubSat => "sub.rn.sat.f32",
+            F32ArithOp::MulSat => "mul.rn.sat.f32",
+            F32ArithOp::FmaSat => "fma.rn.sat.f32",
             F32ArithOp::Copysign => "copysign.f32",
             F32ArithOp::Min => "min.f32",
             F32ArithOp::Max => "max.f32",
+            F32ArithOp::MinFtz => "min.ftz.f32",
+            F32ArithOp::MaxFtz => "max.ftz.f32",
         }
     }
 
     fn uses_c(self) -> bool {
-        matches!(self, F32ArithOp::Fma)
+        matches!(self, F32ArithOp::Fma | F32ArithOp::FmaSat)
     }
 
     fn needs_positive_b(self) -> bool {
@@ -1098,6 +1110,8 @@ impl F32RoundingArithOp {
 enum F32UnaryOp {
     Abs,
     Neg,
+    AbsFtz,
+    NegFtz,
 }
 
 impl F32UnaryOp {
@@ -1105,6 +1119,8 @@ impl F32UnaryOp {
         match self {
             F32UnaryOp::Abs => "abs.f32",
             F32UnaryOp::Neg => "neg.f32",
+            F32UnaryOp::AbsFtz => "abs.ftz.f32",
+            F32UnaryOp::NegFtz => "neg.ftz.f32",
         }
     }
 }
@@ -1115,10 +1131,18 @@ enum F32FromIntCvtOp {
     U32Rz,
     U32Rm,
     U32Rp,
+    U32RnFtz,
+    U32RzFtz,
+    U32RmFtz,
+    U32RpFtz,
     S32Rn,
     S32Rz,
     S32Rm,
     S32Rp,
+    S32RnFtz,
+    S32RzFtz,
+    S32RmFtz,
+    S32RpFtz,
 }
 
 impl F32FromIntCvtOp {
@@ -1128,10 +1152,18 @@ impl F32FromIntCvtOp {
             F32FromIntCvtOp::U32Rz => "cvt.rz.f32.u32",
             F32FromIntCvtOp::U32Rm => "cvt.rm.f32.u32",
             F32FromIntCvtOp::U32Rp => "cvt.rp.f32.u32",
+            F32FromIntCvtOp::U32RnFtz => "cvt.rn.ftz.f32.u32",
+            F32FromIntCvtOp::U32RzFtz => "cvt.rz.ftz.f32.u32",
+            F32FromIntCvtOp::U32RmFtz => "cvt.rm.ftz.f32.u32",
+            F32FromIntCvtOp::U32RpFtz => "cvt.rp.ftz.f32.u32",
             F32FromIntCvtOp::S32Rn => "cvt.rn.f32.s32",
             F32FromIntCvtOp::S32Rz => "cvt.rz.f32.s32",
             F32FromIntCvtOp::S32Rm => "cvt.rm.f32.s32",
             F32FromIntCvtOp::S32Rp => "cvt.rp.f32.s32",
+            F32FromIntCvtOp::S32RnFtz => "cvt.rn.ftz.f32.s32",
+            F32FromIntCvtOp::S32RzFtz => "cvt.rz.ftz.f32.s32",
+            F32FromIntCvtOp::S32RmFtz => "cvt.rm.ftz.f32.s32",
+            F32FromIntCvtOp::S32RpFtz => "cvt.rp.ftz.f32.s32",
         }
     }
 }
@@ -1142,18 +1174,34 @@ enum F32ToIntCvtOp {
     S32Rni,
     S32Rmi,
     S32Rpi,
+    S32RziFtz,
+    S32RniFtz,
+    S32RmiFtz,
+    S32RpiFtz,
     U32Rzi,
     U32Rni,
     U32Rmi,
     U32Rpi,
+    U32RziFtz,
+    U32RniFtz,
+    U32RmiFtz,
+    U32RpiFtz,
     S32RziSat,
     S32RniSat,
     S32RmiSat,
     S32RpiSat,
+    S32RziFtzSat,
+    S32RniFtzSat,
+    S32RmiFtzSat,
+    S32RpiFtzSat,
     U32RziSat,
     U32RniSat,
     U32RmiSat,
     U32RpiSat,
+    U32RziFtzSat,
+    U32RniFtzSat,
+    U32RmiFtzSat,
+    U32RpiFtzSat,
 }
 
 impl F32ToIntCvtOp {
@@ -1163,18 +1211,34 @@ impl F32ToIntCvtOp {
             F32ToIntCvtOp::S32Rni => "cvt.rni.s32.f32",
             F32ToIntCvtOp::S32Rmi => "cvt.rmi.s32.f32",
             F32ToIntCvtOp::S32Rpi => "cvt.rpi.s32.f32",
+            F32ToIntCvtOp::S32RziFtz => "cvt.rzi.ftz.s32.f32",
+            F32ToIntCvtOp::S32RniFtz => "cvt.rni.ftz.s32.f32",
+            F32ToIntCvtOp::S32RmiFtz => "cvt.rmi.ftz.s32.f32",
+            F32ToIntCvtOp::S32RpiFtz => "cvt.rpi.ftz.s32.f32",
             F32ToIntCvtOp::U32Rzi => "cvt.rzi.u32.f32",
             F32ToIntCvtOp::U32Rni => "cvt.rni.u32.f32",
             F32ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f32",
             F32ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f32",
+            F32ToIntCvtOp::U32RziFtz => "cvt.rzi.ftz.u32.f32",
+            F32ToIntCvtOp::U32RniFtz => "cvt.rni.ftz.u32.f32",
+            F32ToIntCvtOp::U32RmiFtz => "cvt.rmi.ftz.u32.f32",
+            F32ToIntCvtOp::U32RpiFtz => "cvt.rpi.ftz.u32.f32",
             F32ToIntCvtOp::S32RziSat => "cvt.rzi.sat.s32.f32",
             F32ToIntCvtOp::S32RniSat => "cvt.rni.sat.s32.f32",
             F32ToIntCvtOp::S32RmiSat => "cvt.rmi.sat.s32.f32",
             F32ToIntCvtOp::S32RpiSat => "cvt.rpi.sat.s32.f32",
+            F32ToIntCvtOp::S32RziFtzSat => "cvt.rzi.ftz.sat.s32.f32",
+            F32ToIntCvtOp::S32RniFtzSat => "cvt.rni.ftz.sat.s32.f32",
+            F32ToIntCvtOp::S32RmiFtzSat => "cvt.rmi.ftz.sat.s32.f32",
+            F32ToIntCvtOp::S32RpiFtzSat => "cvt.rpi.ftz.sat.s32.f32",
             F32ToIntCvtOp::U32RziSat => "cvt.rzi.sat.u32.f32",
             F32ToIntCvtOp::U32RniSat => "cvt.rni.sat.u32.f32",
             F32ToIntCvtOp::U32RmiSat => "cvt.rmi.sat.u32.f32",
             F32ToIntCvtOp::U32RpiSat => "cvt.rpi.sat.u32.f32",
+            F32ToIntCvtOp::U32RziFtzSat => "cvt.rzi.ftz.sat.u32.f32",
+            F32ToIntCvtOp::U32RniFtzSat => "cvt.rni.ftz.sat.u32.f32",
+            F32ToIntCvtOp::U32RmiFtzSat => "cvt.rmi.ftz.sat.u32.f32",
+            F32ToIntCvtOp::U32RpiFtzSat => "cvt.rpi.ftz.sat.u32.f32",
         }
     }
 }
@@ -1185,6 +1249,10 @@ enum F32FromF64CvtOp {
     Rz,
     Rm,
     Rp,
+    RnFtz,
+    RzFtz,
+    RmFtz,
+    RpFtz,
 }
 
 impl F32FromF64CvtOp {
@@ -1194,6 +1262,10 @@ impl F32FromF64CvtOp {
             F32FromF64CvtOp::Rz => "cvt.rz.f32.f64",
             F32FromF64CvtOp::Rm => "cvt.rm.f32.f64",
             F32FromF64CvtOp::Rp => "cvt.rp.f32.f64",
+            F32FromF64CvtOp::RnFtz => "cvt.rn.ftz.f32.f64",
+            F32FromF64CvtOp::RzFtz => "cvt.rz.ftz.f32.f64",
+            F32FromF64CvtOp::RmFtz => "cvt.rm.ftz.f32.f64",
+            F32FromF64CvtOp::RpFtz => "cvt.rp.ftz.f32.f64",
         }
     }
 }
@@ -5546,9 +5618,15 @@ impl<'a> Generator<'a> {
             F32ArithOp::Div,
             F32ArithOp::DivApprox,
             F32ArithOp::Fma,
+            F32ArithOp::AddSat,
+            F32ArithOp::SubSat,
+            F32ArithOp::MulSat,
+            F32ArithOp::FmaSat,
             F32ArithOp::Copysign,
             F32ArithOp::Min,
             F32ArithOp::Max,
+            F32ArithOp::MinFtz,
+            F32ArithOp::MaxFtz,
         ];
         let op = *u.choose(&ops)?;
         if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
@@ -5637,7 +5715,12 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f32_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [F32UnaryOp::Abs, F32UnaryOp::Neg];
+        let ops = [
+            F32UnaryOp::Abs,
+            F32UnaryOp::Neg,
+            F32UnaryOp::AbsFtz,
+            F32UnaryOp::NegFtz,
+        ];
         let op = *u.choose(&ops)?;
         if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
             Ok(Inst::PredicatedF32Unary {
@@ -5665,6 +5748,10 @@ impl<'a> Generator<'a> {
                 F32FromF64CvtOp::Rz,
                 F32FromF64CvtOp::Rm,
                 F32FromF64CvtOp::Rp,
+                F32FromF64CvtOp::RnFtz,
+                F32FromF64CvtOp::RzFtz,
+                F32FromF64CvtOp::RmFtz,
+                F32FromF64CvtOp::RpFtz,
             ];
             let op = *u.choose(&ops)?;
             if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
@@ -5690,28 +5777,52 @@ impl<'a> Generator<'a> {
             F32FromIntCvtOp::U32Rz,
             F32FromIntCvtOp::U32Rm,
             F32FromIntCvtOp::U32Rp,
+            F32FromIntCvtOp::U32RnFtz,
+            F32FromIntCvtOp::U32RzFtz,
+            F32FromIntCvtOp::U32RmFtz,
+            F32FromIntCvtOp::U32RpFtz,
             F32FromIntCvtOp::S32Rn,
             F32FromIntCvtOp::S32Rz,
             F32FromIntCvtOp::S32Rm,
             F32FromIntCvtOp::S32Rp,
+            F32FromIntCvtOp::S32RnFtz,
+            F32FromIntCvtOp::S32RzFtz,
+            F32FromIntCvtOp::S32RmFtz,
+            F32FromIntCvtOp::S32RpFtz,
         ];
         let to_ops = [
             F32ToIntCvtOp::S32Rzi,
             F32ToIntCvtOp::S32Rni,
             F32ToIntCvtOp::S32Rmi,
             F32ToIntCvtOp::S32Rpi,
+            F32ToIntCvtOp::S32RziFtz,
+            F32ToIntCvtOp::S32RniFtz,
+            F32ToIntCvtOp::S32RmiFtz,
+            F32ToIntCvtOp::S32RpiFtz,
             F32ToIntCvtOp::U32Rzi,
             F32ToIntCvtOp::U32Rni,
             F32ToIntCvtOp::U32Rmi,
             F32ToIntCvtOp::U32Rpi,
+            F32ToIntCvtOp::U32RziFtz,
+            F32ToIntCvtOp::U32RniFtz,
+            F32ToIntCvtOp::U32RmiFtz,
+            F32ToIntCvtOp::U32RpiFtz,
             F32ToIntCvtOp::S32RziSat,
             F32ToIntCvtOp::S32RniSat,
             F32ToIntCvtOp::S32RmiSat,
             F32ToIntCvtOp::S32RpiSat,
+            F32ToIntCvtOp::S32RziFtzSat,
+            F32ToIntCvtOp::S32RniFtzSat,
+            F32ToIntCvtOp::S32RmiFtzSat,
+            F32ToIntCvtOp::S32RpiFtzSat,
             F32ToIntCvtOp::U32RziSat,
             F32ToIntCvtOp::U32RniSat,
             F32ToIntCvtOp::U32RmiSat,
             F32ToIntCvtOp::U32RpiSat,
+            F32ToIntCvtOp::U32RziFtzSat,
+            F32ToIntCvtOp::U32RniFtzSat,
+            F32ToIntCvtOp::U32RmiFtzSat,
+            F32ToIntCvtOp::U32RpiFtzSat,
         ];
         let from_int = *u.choose(&from_ops)?;
         let to_int = *u.choose(&to_ops)?;
@@ -12810,9 +12921,15 @@ mod tests {
         "div.rn.f32",
         "div.approx.ftz.f32",
         "fma.rn.f32",
+        "add.rn.sat.f32",
+        "sub.rn.sat.f32",
+        "mul.rn.sat.f32",
+        "fma.rn.sat.f32",
         "copysign.f32",
         "min.f32",
         "max.f32",
+        "min.ftz.f32",
+        "max.ftz.f32",
     ];
     const F32_ROUNDING_MNEMONICS: &[&str] = &[
         "add.rz.f32",
@@ -12851,64 +12968,120 @@ mod tests {
         "fma.rm.ftz.f32",
         "fma.rp.ftz.f32",
     ];
-    const F32_UNARY_MNEMONICS: &[&str] = &["abs.f32", "neg.f32"];
+    const F32_UNARY_MNEMONICS: &[&str] = &["abs.f32", "neg.f32", "abs.ftz.f32", "neg.ftz.f32"];
     const F32_CVT_MNEMONICS: &[&str] = &[
         "cvt.rn.f32.u32",
         "cvt.rz.f32.u32",
         "cvt.rm.f32.u32",
         "cvt.rp.f32.u32",
+        "cvt.rn.ftz.f32.u32",
+        "cvt.rz.ftz.f32.u32",
+        "cvt.rm.ftz.f32.u32",
+        "cvt.rp.ftz.f32.u32",
         "cvt.rn.f32.s32",
         "cvt.rz.f32.s32",
         "cvt.rm.f32.s32",
         "cvt.rp.f32.s32",
+        "cvt.rn.ftz.f32.s32",
+        "cvt.rz.ftz.f32.s32",
+        "cvt.rm.ftz.f32.s32",
+        "cvt.rp.ftz.f32.s32",
         "cvt.rzi.s32.f32",
         "cvt.rni.s32.f32",
         "cvt.rmi.s32.f32",
         "cvt.rpi.s32.f32",
+        "cvt.rzi.ftz.s32.f32",
+        "cvt.rni.ftz.s32.f32",
+        "cvt.rmi.ftz.s32.f32",
+        "cvt.rpi.ftz.s32.f32",
         "cvt.rzi.u32.f32",
         "cvt.rni.u32.f32",
         "cvt.rmi.u32.f32",
         "cvt.rpi.u32.f32",
+        "cvt.rzi.ftz.u32.f32",
+        "cvt.rni.ftz.u32.f32",
+        "cvt.rmi.ftz.u32.f32",
+        "cvt.rpi.ftz.u32.f32",
         "cvt.rzi.sat.s32.f32",
         "cvt.rni.sat.s32.f32",
         "cvt.rmi.sat.s32.f32",
         "cvt.rpi.sat.s32.f32",
+        "cvt.rzi.ftz.sat.s32.f32",
+        "cvt.rni.ftz.sat.s32.f32",
+        "cvt.rmi.ftz.sat.s32.f32",
+        "cvt.rpi.ftz.sat.s32.f32",
         "cvt.rzi.sat.u32.f32",
         "cvt.rni.sat.u32.f32",
         "cvt.rmi.sat.u32.f32",
         "cvt.rpi.sat.u32.f32",
+        "cvt.rzi.ftz.sat.u32.f32",
+        "cvt.rni.ftz.sat.u32.f32",
+        "cvt.rmi.ftz.sat.u32.f32",
+        "cvt.rpi.ftz.sat.u32.f32",
         "cvt.rn.f32.f64",
         "cvt.rz.f32.f64",
         "cvt.rm.f32.f64",
         "cvt.rp.f32.f64",
+        "cvt.rn.ftz.f32.f64",
+        "cvt.rz.ftz.f32.f64",
+        "cvt.rm.ftz.f32.f64",
+        "cvt.rp.ftz.f32.f64",
     ];
     const F32_CVT_DISABLE_MNEMONICS: &[&str] = &[
         "cvt.rz.f32.u32",
         "cvt.rm.f32.u32",
         "cvt.rp.f32.u32",
+        "cvt.rn.ftz.f32.u32",
+        "cvt.rz.ftz.f32.u32",
+        "cvt.rm.ftz.f32.u32",
+        "cvt.rp.ftz.f32.u32",
         "cvt.rn.f32.s32",
         "cvt.rz.f32.s32",
         "cvt.rm.f32.s32",
         "cvt.rp.f32.s32",
+        "cvt.rn.ftz.f32.s32",
+        "cvt.rz.ftz.f32.s32",
+        "cvt.rm.ftz.f32.s32",
+        "cvt.rp.ftz.f32.s32",
         "cvt.rni.s32.f32",
         "cvt.rmi.s32.f32",
         "cvt.rpi.s32.f32",
+        "cvt.rzi.ftz.s32.f32",
+        "cvt.rni.ftz.s32.f32",
+        "cvt.rmi.ftz.s32.f32",
+        "cvt.rpi.ftz.s32.f32",
         "cvt.rzi.u32.f32",
         "cvt.rni.u32.f32",
         "cvt.rmi.u32.f32",
         "cvt.rpi.u32.f32",
+        "cvt.rzi.ftz.u32.f32",
+        "cvt.rni.ftz.u32.f32",
+        "cvt.rmi.ftz.u32.f32",
+        "cvt.rpi.ftz.u32.f32",
         "cvt.rzi.sat.s32.f32",
         "cvt.rni.sat.s32.f32",
         "cvt.rmi.sat.s32.f32",
         "cvt.rpi.sat.s32.f32",
+        "cvt.rzi.ftz.sat.s32.f32",
+        "cvt.rni.ftz.sat.s32.f32",
+        "cvt.rmi.ftz.sat.s32.f32",
+        "cvt.rpi.ftz.sat.s32.f32",
         "cvt.rzi.sat.u32.f32",
         "cvt.rni.sat.u32.f32",
         "cvt.rmi.sat.u32.f32",
         "cvt.rpi.sat.u32.f32",
+        "cvt.rzi.ftz.sat.u32.f32",
+        "cvt.rni.ftz.sat.u32.f32",
+        "cvt.rmi.ftz.sat.u32.f32",
+        "cvt.rpi.ftz.sat.u32.f32",
         "cvt.rn.f32.f64",
         "cvt.rz.f32.f64",
         "cvt.rm.f32.f64",
         "cvt.rp.f32.f64",
+        "cvt.rn.ftz.f32.f64",
+        "cvt.rz.ftz.f32.f64",
+        "cvt.rm.ftz.f32.f64",
+        "cvt.rp.ftz.f32.f64",
     ];
     const F32_SPECIAL_MATH_MNEMONICS: &[&str] = &[
         "sqrt.rn.f32",
@@ -16677,7 +16850,7 @@ mod tests {
 
     #[test]
     fn f32_arith_generation_is_reachable() {
-        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F32_ARITH_MNEMONICS);
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F32_ARITH_MNEMONICS);
     }
 
     #[test]
@@ -16686,7 +16859,7 @@ mod tests {
             emit_f64_arith: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F32_ARITH_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 16384, 8192, F32_ARITH_MNEMONICS);
     }
 
     #[test]
@@ -16752,7 +16925,7 @@ mod tests {
 
     #[test]
     fn f32_unary_generation_is_reachable() {
-        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F32_UNARY_MNEMONICS);
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F32_UNARY_MNEMONICS);
     }
 
     #[test]
@@ -16761,7 +16934,7 @@ mod tests {
             emit_f64_unary: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 4096, 2048, F32_UNARY_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 4096, F32_UNARY_MNEMONICS);
     }
 
     #[test]
@@ -16801,7 +16974,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 8192, 4096, F32_CVT_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 32768, 16384, F32_CVT_MNEMONICS);
     }
 
     #[test]
@@ -16822,7 +16995,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 32768, 8192, F32_CVT_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 65536, 32768, F32_CVT_MNEMONICS);
     }
 
     #[test]
