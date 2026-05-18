@@ -1604,6 +1604,52 @@ bool triggersM037Dot4SquareLowbit(const Instruction &I) {
           isI32AndOfValueAndConstant(BO->getOperand(0), BO->getOperand(1)));
 }
 
+bool isM038MaskedI32ToDouble(const Value *V, const Value **Base) {
+  const auto *Ext = dyn_cast<FPExtInst>(V);
+  if (!Ext || !Ext->getType()->isDoubleTy())
+    return false;
+  const auto *UIToFP = dyn_cast<UIToFPInst>(Ext->getOperand(0));
+  if (!UIToFP || !UIToFP->getType()->isFloatTy())
+    return false;
+  uint64_t Mask = 0;
+  return isI32AndWithConstant(UIToFP->getOperand(0), Base, &Mask) &&
+         Mask == 1023;
+}
+
+bool isM038MaskedDoubleAddRoundTrip(const Value *V, const Value **BaseA,
+                                    const Value **BaseB) {
+  const auto *FPToUI = dyn_cast<FPToUIInst>(V);
+  if (!FPToUI || !FPToUI->getType()->isIntegerTy(32))
+    return false;
+  const auto *Trunc = dyn_cast<FPTruncInst>(FPToUI->getOperand(0));
+  if (!Trunc || !Trunc->getType()->isFloatTy())
+    return false;
+  const auto *FAdd = dyn_cast<BinaryOperator>(Trunc->getOperand(0));
+  if (!FAdd || FAdd->getOpcode() != Instruction::FAdd ||
+      !FAdd->getType()->isDoubleTy())
+    return false;
+  return isM038MaskedI32ToDouble(FAdd->getOperand(0), BaseA) &&
+         isM038MaskedI32ToDouble(FAdd->getOperand(1), BaseB);
+}
+
+bool triggersM038LoopFPMaskXor(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Add ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  for (unsigned Idx = 0; Idx != 2; ++Idx) {
+    const Value *BaseA = nullptr;
+    const Value *BaseB = nullptr;
+    if (!isM038MaskedDoubleAddRoundTrip(BO->getOperand(Idx), &BaseA, &BaseB))
+      continue;
+    const Value *Other = BO->getOperand(1 - Idx);
+    if (Other == BaseA || Other == BaseB)
+      return true;
+  }
+  return false;
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1722,6 +1768,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
   bool AllowM037 = envFlag("FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT", false);
+  bool AllowM038 = envFlag("FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1762,6 +1809,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM035 && triggersM035WaveReduceXor(I)) ||
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
               (!AllowM037 && triggersM037Dot4SquareLowbit(I)) ||
+              (!AllowM038 && triggersM038LoopFPMaskXor(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -5041,9 +5089,25 @@ bool intrinsicUnsupportedByInterpreterOracle(Intrinsic::ID ID) {
   switch (ID) {
   case Intrinsic::amdgcn_workgroup_id_x:
   case Intrinsic::amdgcn_workitem_id_x:
+  case Intrinsic::ctlz:
+  case Intrinsic::cttz:
+  case Intrinsic::ctpop:
+  case Intrinsic::bswap:
     return false;
   default:
     return true;
+  }
+}
+
+bool intrinsicScalarizedForInterpreterOracle(Intrinsic::ID ID) {
+  switch (ID) {
+  case Intrinsic::ctlz:
+  case Intrinsic::cttz:
+  case Intrinsic::ctpop:
+  case Intrinsic::bswap:
+    return true;
+  default:
+    return false;
   }
 }
 
@@ -5076,6 +5140,56 @@ bool moduleSupportedByInterpreterOracle(const Module &M) {
       }
     }
   }
+  return true;
+}
+
+bool scalarizeOracleVectorIntrinsics(Module &M) {
+  SmallVector<CallInst *, 16> ToScalarize;
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *Call = dyn_cast<CallInst>(&I);
+        if (!Call)
+          continue;
+        Function *Callee = Call->getCalledFunction();
+        if (!Callee || !Callee->isIntrinsic() ||
+            !intrinsicScalarizedForInterpreterOracle(Callee->getIntrinsicID()))
+          continue;
+        auto *VecTy = dyn_cast<FixedVectorType>(Call->getType());
+        if (VecTy)
+          ToScalarize.push_back(Call);
+      }
+    }
+  }
+
+  for (CallInst *Call : ToScalarize) {
+    Function *Callee = Call->getCalledFunction();
+    Intrinsic::ID ID = Callee->getIntrinsicID();
+    auto *VecTy = cast<FixedVectorType>(Call->getType());
+    Type *EltTy = VecTy->getElementType();
+    Function *ScalarDecl = Intrinsic::getOrInsertDeclaration(&M, ID, {EltTy});
+    IRBuilder<NoFolder> B(Call);
+    Value *Result = PoisonValue::get(VecTy);
+
+    for (unsigned I = 0, E = VecTy->getNumElements(); I != E; ++I) {
+      Value *Lane = ci32(M.getContext(), I);
+      SmallVector<Value *, 2> Args;
+      Args.push_back(B.CreateExtractElement(Call->getArgOperand(0), Lane,
+                                            "fuzzx.oracle.scalar.arg"));
+      if (Call->arg_size() > 1)
+        Args.push_back(Call->getArgOperand(1));
+      Value *Scalar =
+          B.CreateCall(ScalarDecl, Args, "fuzzx.oracle.scalar.intr");
+      Result = B.CreateInsertElement(Result, Scalar, Lane,
+                                     "fuzzx.oracle.scalarized");
+    }
+
+    Call->replaceAllUsesWith(Result);
+    Call->eraseFromParent();
+  }
+
   return true;
 }
 
@@ -5131,6 +5245,7 @@ computeInterpreterOracleOutputs(const Module &Input,
   auto *OracleWI = new GlobalVariable(*OracleM, I32, false,
                                       GlobalValue::InternalLinkage, ci32(Ctx, 0),
                                       "fuzzx.oracle.wi");
+  scalarizeOracleVectorIntrinsics(*OracleM);
   lowerOracleThreadIntrinsics(*OracleM, OracleWI);
   Kernel->setCallingConv(CallingConv::C);
   Kernel->setVisibility(GlobalValue::DefaultVisibility);
