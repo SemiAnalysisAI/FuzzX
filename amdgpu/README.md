@@ -70,7 +70,8 @@ pure-IR unsigned min/max and saturating add/sub select idioms, and
 pure-IR masked funnel-shift/rotate idioms, pure-IR signed add/sub overflow
 select idioms, pure-IR predicate-mask blend/sign idioms, and pure-IR bitfield
 extract/insert idioms, pure-IR byte/word pack-unpack idioms, pure-IR widening
-multiply-high/low idioms, pure-IR bit-count/bit-twiddle idioms, pure-IR
+multiply-high/low idioms, pure-IR byte dot-product chain idioms, pure-IR
+bit-count/bit-twiddle idioms, pure-IR
 average/absolute-difference idioms, and pure-IR lane clamp/saturating-pack
 idioms, and pure-IR vector shuffle/horizontal-reduction idioms, alongside LLVM
 bit, min/max, saturation, absolute-value, funnel-shift, and integer
@@ -212,6 +213,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M036_WAVE_REDUCE_ADD=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.add` generation for [m036](known-miscompiles/m036-wave-reduce-add-constant/NOTES.md). |
 | `FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE=1` | unset | Re-enable `sext i8 to i32` values feeding high-byte extraction for [m039](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
+| `FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK=1` | unset | Re-enable high-byte extraction from `ashr i32` values feeding byte-pack shapes for [m041](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -292,6 +294,7 @@ Tested toolchains as of 2026-05-18:
 | [m038-loop-fp-mask-xor](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md) | ❌ | ✅ | ✅ | `-O2` unrolls nested xor loops and folds a masked integer-to-FP round-trip into a byte-dot sequence that adds `1023` for input zero; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
 | [m039-sext-i8-highbyte-pack](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` packs bytes after an `i8` sign-extension but clears the byte lanes contributed by the sign bits. |
 | [m040-sdivrem24-boundary](known-miscompiles/m040-sdivrem24-boundary/NOTES.md) | ❌ | ❌ | ❌ | `-O2` applies the signed 24-bit reciprocal division lowering when the positive numerator has bit 23 set, returning a quotient one too large. |
+| [m041-ashr-highbyte-pack](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a byte pack after `ashr i32` to `v_perm_b32` with the wrong high-byte lane. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

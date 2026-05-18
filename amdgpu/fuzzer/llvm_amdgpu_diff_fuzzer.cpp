@@ -1534,6 +1534,53 @@ bool triggersM039SExtI8HighBytePack(const Instruction &I) {
   return false;
 }
 
+bool isI32AShrByConstant(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::AShr ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isConstantIntOrVectorBelow(BO->getOperand(1), 32);
+}
+
+bool isI32LShrOfAShrBy(const Value *V, uint64_t Shift) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::LShr ||
+      !BO->getType()->isIntegerTy(32) ||
+      !hasI32ConstantValue(BO->getOperand(1), Shift))
+    return false;
+  return isI32AShrByConstant(BO->getOperand(0));
+}
+
+const Value *getI32AndOperandWithConstant(const BinaryOperator &BO,
+                                          uint32_t Mask) {
+  if (BO.getOpcode() != Instruction::And || !BO.getType()->isIntegerTy(32))
+    return nullptr;
+  if (hasI32ConstantValue(BO.getOperand(0), Mask))
+    return BO.getOperand(1);
+  if (hasI32ConstantValue(BO.getOperand(1), Mask))
+    return BO.getOperand(0);
+  return nullptr;
+}
+
+bool triggersM041AShrHighBytePack(const Instruction &I) {
+  if (const auto *ZExt = dyn_cast<ZExtInst>(&I)) {
+    if (!ZExt->getType()->isIntegerTy(32) ||
+        !ZExt->getOperand(0)->getType()->isIntegerTy(8))
+      return false;
+    const auto *Trunc = dyn_cast<TruncInst>(ZExt->getOperand(0));
+    return Trunc && isI32LShrOfAShrBy(Trunc->getOperand(0), 24);
+  }
+
+  const auto *And = dyn_cast<BinaryOperator>(&I);
+  if (!And)
+    return false;
+  if (const Value *Masked = getI32AndOperandWithConstant(*And, 0x00ff0000))
+    return isI32LShrOfAShrBy(Masked, 8);
+  if (const Value *Masked = getI32AndOperandWithConstant(*And, 0x000000ff))
+    return isI32LShrOfAShrBy(Masked, 24);
+  return false;
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1650,6 +1697,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
   bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
+  bool AllowM041 = envFlag("FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1688,6 +1736,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
               (!AllowM040 && triggersM040SignedDivRem24(I)) ||
+              (!AllowM041 && triggersM041AShrHighBytePack(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -1955,9 +2004,12 @@ Value *emitRandomVectorIntrinsic(IRBuilder<NoFolder> &B, Module &M, Type *VecTy,
                                  std::minstd_rand &Gen,
                                  StringRef NamePrefix) {
   LLVMContext &Ctx = M.getContext();
-  auto *ElemTy = cast<IntegerType>(cast<FixedVectorType>(VecTy)->getElementType());
+  auto *VT = cast<FixedVectorType>(VecTy);
+  auto *ElemTy = cast<IntegerType>(VT->getElementType());
+  unsigned Lanes = VT->getNumElements();
+  unsigned Width = ElemTy->getBitWidth();
   bool AllowByteSwap = ElemTy->getBitWidth() >= 16;
-  unsigned Choice = Gen() % (AllowByteSwap ? 14 : 13);
+  unsigned Choice = Gen() % (AllowByteSwap ? 16 : 15);
   if (!AllowByteSwap && Choice >= 2)
     ++Choice;
 
@@ -2011,9 +2063,21 @@ Value *emitRandomVectorIntrinsic(IRBuilder<NoFolder> &B, Module &M, Type *VecTy,
   case 12:
     ID = Intrinsic::sadd_sat;
     break;
-  default:
+  case 13:
     ID = Intrinsic::ssub_sat;
     break;
+  case 14:
+    ID = Intrinsic::fshl;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA, VB, randomShiftVector(Ctx, ElemTy, Lanes, Width,
+                                                   Gen)},
+                        Twine(NamePrefix) + ".fshl");
+  default:
+    ID = Intrinsic::fshr;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA, VB, randomShiftVector(Ctx, ElemTy, Lanes, Width,
+                                                   Gen)},
+                        Twine(NamePrefix) + ".fshr");
   }
 
   return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
@@ -2598,6 +2662,18 @@ Value *extractByteAsI32(IRBuilder<NoFolder> &B, Value *V, unsigned Byte,
     Shifted = B.CreateLShr(V, ci32(Ctx, Byte * 8), Name + ".shr");
   return B.CreateZExt(B.CreateTrunc(Shifted, I8, Name + ".trunc"), I32,
                       Name + ".zext");
+}
+
+Value *extractSignedByteAsI32(IRBuilder<NoFolder> &B, Value *V, unsigned Byte,
+                              const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Shifted = V;
+  if (Byte != 0)
+    Shifted = B.CreateLShr(V, ci32(Ctx, Byte * 8), Name + ".shr");
+  return B.CreateSExt(B.CreateTrunc(Shifted, I8, Name + ".trunc"), I32,
+                      Name + ".sext");
 }
 
 Value *extractHalfAsI32(IRBuilder<NoFolder> &B, Value *V, unsigned Half,
@@ -4204,6 +4280,84 @@ Value *emitRandomAverageDiffIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *emitRandomByteDotChainIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                   std::minstd_rand &Gen,
+                                   StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  SmallVector<Value *, 4> ProductBytes;
+  Value *Acc = ci32(Ctx, Gen() & 0xffu);
+
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *LhsSrc = ((Gen() + I) & 1u) ? A : Bv;
+    Value *RhsSrc = ((Gen() + I) & 1u) ? Bv : A;
+    unsigned LhsByte = (I + Gen()) & 3u;
+    unsigned RhsByte = ((3u - I) + Gen()) & 3u;
+    bool SignedLhs = (Gen() & 3u) == 0;
+    bool SignedRhs = (Gen() & 3u) == 0;
+    Value *Lhs = SignedLhs
+                     ? extractSignedByteAsI32(
+                           B, LhsSrc, LhsByte,
+                           Twine(NamePrefix) + ".lhs.sbyte")
+                     : extractByteAsI32(B, LhsSrc, LhsByte,
+                                        Twine(NamePrefix) + ".lhs.ubyte");
+    Value *Rhs = SignedRhs
+                     ? extractSignedByteAsI32(
+                           B, RhsSrc, RhsByte,
+                           Twine(NamePrefix) + ".rhs.sbyte")
+                     : extractByteAsI32(B, RhsSrc, RhsByte,
+                                        Twine(NamePrefix) + ".rhs.ubyte");
+    Value *Product = B.CreateMul(Lhs, Rhs, Twine(NamePrefix) + ".mul");
+    ProductBytes.push_back(Product);
+
+    switch ((Gen() + I) % 5) {
+    case 0:
+      Acc = B.CreateAdd(Acc, Product, Twine(NamePrefix) + ".acc.add");
+      break;
+    case 1:
+      Acc = B.CreateSub(Acc, Product, Twine(NamePrefix) + ".acc.sub");
+      break;
+    case 2:
+      Acc = B.CreateXor(Acc, Product, Twine(NamePrefix) + ".acc.xor");
+      break;
+    case 3: {
+      Value *Low = B.CreateAnd(Product, ci32(Ctx, 0xffff),
+                               Twine(NamePrefix) + ".mul.low");
+      Acc = B.CreateAdd(Acc, Low, Twine(NamePrefix) + ".acc.add.low");
+      break;
+    }
+    default: {
+      Value *Shifted =
+          B.CreateShl(B.CreateAnd(Product, ci32(Ctx, 0xff),
+                                  Twine(NamePrefix) + ".mul.byte"),
+                      ci32(Ctx, (I & 3u) * 4u),
+                      Twine(NamePrefix) + ".mul.byte.shift");
+      Acc = B.CreateXor(Acc, Shifted, Twine(NamePrefix) + ".acc.xor.shift");
+      break;
+    }
+    }
+  }
+
+  Value *Packed = packFourBytesAsI32(B, ProductBytes, (Gen() & 1u) != 0,
+                                     Twine(NamePrefix) + ".pack.products");
+  switch (Gen() % 5) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateAdd(Acc, Packed, Twine(NamePrefix) + ".result.add");
+  case 2:
+    return B.CreateXor(Acc, Packed, Twine(NamePrefix) + ".result.xor");
+  case 3: {
+    Value *Byte0 = extractByteAsI32(B, Packed, Gen() & 3u,
+                                    Twine(NamePrefix) + ".packed.byte");
+    return B.CreateSub(Acc, Byte0, Twine(NamePrefix) + ".result.sub.byte");
+  }
+  default: {
+    Value *Cmp = B.CreateICmpUGT(Acc, Packed, Twine(NamePrefix) + ".cmp");
+    return B.CreateSelect(Cmp, Acc, Packed, Twine(NamePrefix) + ".select");
+  }
+  }
+}
+
 Value *unsignedClampI32(IRBuilder<NoFolder> &B, Value *V, uint32_t Lo,
                         uint32_t Hi, const Twine &Name) {
   LLVMContext &Ctx = V->getContext();
@@ -4520,7 +4674,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 178) {
+  switch (Gen() % 186) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4794,6 +4948,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 161:
     return emitRandomVectorReductionIdiom(B, A, Bv, Gen,
                                           "fuzz.vecreduce.idiom");
+  case 162:
+  case 163:
+  case 164:
+  case 165:
+  case 166:
+  case 167:
+  case 168:
+  case 169:
+    return emitRandomByteDotChainIdiom(B, A, Bv, Gen,
+                                       "fuzz.bytedot.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4828,7 +4992,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 162) {
+  switch (Gen() % 170) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -5095,6 +5259,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 153:
     return emitRandomVectorReductionIdiom(B, A, Bv, Gen,
                                           "fuzz.cfg.vecreduce.idiom");
+  case 154:
+  case 155:
+  case 156:
+  case 157:
+  case 158:
+  case 159:
+  case 160:
+  case 161:
+    return emitRandomByteDotChainIdiom(B, A, Bv, Gen,
+                                       "fuzz.cfg.bytedot.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
