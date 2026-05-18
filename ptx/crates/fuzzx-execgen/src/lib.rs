@@ -935,24 +935,30 @@ impl SharedMemOp {
 enum VectorMemOp {
     V2,
     V4,
+    V2U64,
 }
 
 impl VectorMemOp {
     fn lanes(self) -> usize {
         match self {
-            VectorMemOp::V2 => 2,
+            VectorMemOp::V2 | VectorMemOp::V2U64 => 2,
             VectorMemOp::V4 => 4,
         }
     }
 
     fn bytes(self) -> u32 {
-        (self.lanes() as u32) * 4
+        (self.lanes() as u32) * if self.is_wide() { 8 } else { 4 }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(self, VectorMemOp::V2U64)
     }
 
     fn global_load_mnemonic(self) -> &'static str {
         match self {
             VectorMemOp::V2 => "ld.global.v2.u32",
             VectorMemOp::V4 => "ld.global.v4.u32",
+            VectorMemOp::V2U64 => "ld.global.v2.u64",
         }
     }
 
@@ -960,6 +966,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "st.global.v2.u32",
             VectorMemOp::V4 => "st.global.v4.u32",
+            VectorMemOp::V2U64 => "st.global.v2.u64",
         }
     }
 
@@ -967,6 +974,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "ld.const.v2.u32",
             VectorMemOp::V4 => "ld.const.v4.u32",
+            VectorMemOp::V2U64 => "ld.const.v2.u64",
         }
     }
 
@@ -974,6 +982,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "ld.local.v2.u32",
             VectorMemOp::V4 => "ld.local.v4.u32",
+            VectorMemOp::V2U64 => "ld.local.v2.u64",
         }
     }
 
@@ -981,6 +990,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "st.local.v2.u32",
             VectorMemOp::V4 => "st.local.v4.u32",
+            VectorMemOp::V2U64 => "st.local.v2.u64",
         }
     }
 
@@ -988,6 +998,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "ld.shared.v2.u32",
             VectorMemOp::V4 => "ld.shared.v4.u32",
+            VectorMemOp::V2U64 => "ld.shared.v2.u64",
         }
     }
 
@@ -995,6 +1006,7 @@ impl VectorMemOp {
         match self {
             VectorMemOp::V2 => "st.shared.v2.u32",
             VectorMemOp::V4 => "st.shared.v4.u32",
+            VectorMemOp::V2U64 => "st.shared.v2.u64",
         }
     }
 }
@@ -5983,8 +5995,14 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_vector_op(&mut self, u: &mut Unstructured) -> Result<VectorMemOp> {
-        let ops = [VectorMemOp::V2, VectorMemOp::V4];
-        Ok(*u.choose(&ops)?)
+        let base_ops = [VectorMemOp::V2, VectorMemOp::V4];
+        let wide_ops = [VectorMemOp::V2, VectorMemOp::V4, VectorMemOp::V2U64];
+        let ops = if self.cfg.emit_wide_memory {
+            &wide_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        Ok(*u.choose(ops)?)
     }
 
     fn pick_vector_offset(&mut self, u: &mut Unstructured, bytes: u32, limit: u32) -> Result<u32> {
@@ -8724,33 +8742,79 @@ impl<'a> Generator<'a> {
         write!(s, "}}").unwrap();
     }
 
+    fn emit_vector_wide_regs(s: &mut String, lanes: usize) {
+        write!(s, "{{").unwrap();
+        for i in 0..lanes {
+            if i > 0 {
+                write!(s, ", ").unwrap();
+            }
+            write!(s, "%rd{}", 4 + i).unwrap();
+        }
+        write!(s, "}}").unwrap();
+    }
+
     fn emit_vector_memory_load(
+        &self,
         s: &mut String,
         mnemonic: &str,
+        op: VectorMemOp,
         dsts: [u32; 4],
-        lanes: usize,
         addr: &str,
         offset: u32,
         pred: Option<u32>,
     ) {
+        let lanes = op.lanes();
         if let Some(pred) = pred {
             write!(s, "    {} {:<12} ", pred_guard(pred), mnemonic).unwrap();
         } else {
             write!(s, "    {mnemonic:<17} ").unwrap();
         }
-        Self::emit_vector_regs(s, dsts, lanes);
+        if op.is_wide() {
+            Self::emit_vector_wide_regs(s, lanes);
+        } else {
+            Self::emit_vector_regs(s, dsts, lanes);
+        }
         writeln!(s, ", [{addr} + {offset}];").unwrap();
+
+        if op.is_wide() {
+            let scratch = self.wide_scratch_hi_reg();
+            for (i, dst) in dsts.iter().take(lanes).enumerate() {
+                if let Some(pred) = pred {
+                    writeln!(
+                        s,
+                        "    {} mov.b64 {{%r{dst}, %r{scratch}}}, %rd{};",
+                        pred_guard(pred),
+                        4 + i
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd{};",
+                        4 + i
+                    )
+                    .unwrap();
+                }
+            }
+        }
     }
 
     fn emit_vector_memory_store(
+        &self,
         s: &mut String,
         mnemonic: &str,
+        op: VectorMemOp,
         srcs: [u32; 4],
-        lanes: usize,
         addr: &str,
         offset: u32,
         pred: Option<u32>,
     ) {
+        let lanes = op.lanes();
+        if op.is_wide() {
+            for (i, src) in srcs.iter().take(lanes).enumerate() {
+                writeln!(s, "    mov.b64       %rd{}, {{%r{src}, %r{src}}};", 4 + i).unwrap();
+            }
+        }
         if let Some(pred) = pred {
             write!(
                 s,
@@ -8762,7 +8826,11 @@ impl<'a> Generator<'a> {
         } else {
             write!(s, "    {mnemonic:<17} [{addr} + {offset}], ").unwrap();
         }
-        Self::emit_vector_regs(s, srcs, lanes);
+        if op.is_wide() {
+            Self::emit_vector_wide_regs(s, lanes);
+        } else {
+            Self::emit_vector_regs(s, srcs, lanes);
+        }
         writeln!(s, ";").unwrap();
     }
 
@@ -9265,11 +9333,11 @@ impl<'a> Generator<'a> {
             }
             Inst::GlobalVectorLoad { op, dsts, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.global_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
@@ -9286,11 +9354,11 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.global_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
@@ -9306,20 +9374,20 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.global_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd8",
                     offset,
                     None,
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.global_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd8",
                     offset,
                     None,
@@ -9340,20 +9408,20 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.global_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd8",
                     offset,
                     Some(pred),
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.global_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd8",
                     offset,
                     Some(pred),
@@ -9361,11 +9429,11 @@ impl<'a> Generator<'a> {
             }
             Inst::ConstVectorLoad { op, dsts, offset } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.const_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
@@ -9382,11 +9450,11 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.const_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
@@ -9399,20 +9467,20 @@ impl<'a> Generator<'a> {
                 offset,
             } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.local_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.local_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
@@ -9430,20 +9498,20 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.local_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.local_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
@@ -9463,20 +9531,20 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.shared_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.shared_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     None,
@@ -9501,20 +9569,20 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                Self::emit_vector_memory_store(
+                self.emit_vector_memory_store(
                     s,
                     op.shared_store_mnemonic(),
+                    op,
                     srcs,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
                 );
-                Self::emit_vector_memory_load(
+                self.emit_vector_memory_load(
                     s,
                     op.shared_load_mnemonic(),
+                    op,
                     dsts,
-                    op.lanes(),
                     "%rd6",
                     offset,
                     Some(pred),
@@ -13927,22 +13995,36 @@ mod tests {
         "ld.shared.u64",
         "ld.shared.s64",
         "st.shared.u64",
+        "ld.global.v2.u64",
+        "st.global.v2.u64",
+        "ld.const.v2.u64",
+        "ld.local.v2.u64",
+        "st.local.v2.u64",
+        "ld.shared.v2.u64",
+        "st.shared.v2.u64",
     ];
     const VECTOR_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.v2.u32",
         "ld.global.v4.u32",
+        "ld.global.v2.u64",
         "st.global.v2.u32",
         "st.global.v4.u32",
+        "st.global.v2.u64",
         "ld.const.v2.u32",
         "ld.const.v4.u32",
+        "ld.const.v2.u64",
         "ld.local.v2.u32",
         "ld.local.v4.u32",
+        "ld.local.v2.u64",
         "st.local.v2.u32",
         "st.local.v4.u32",
+        "st.local.v2.u64",
         "ld.shared.v2.u32",
         "ld.shared.v4.u32",
+        "ld.shared.v2.u64",
         "st.shared.v2.u32",
         "st.shared.v4.u32",
+        "st.shared.v2.u64",
     ];
     const F32_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f32",
@@ -18104,23 +18186,33 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, address, offset) in ptx.lines().filter_map(body_vector_memory_access) {
-                let width = if mnemonic.contains(".v2.") { 8 } else { 16 };
+                let width = if mnemonic.contains(".u64") {
+                    16
+                } else if mnemonic.contains(".v2.") {
+                    8
+                } else {
+                    16
+                };
                 let limit = match (mnemonic, address) {
-                    ("ld.global.v2.u32" | "ld.global.v4.u32", "%rd6") => input_len() as u32,
+                    ("ld.global.v2.u32" | "ld.global.v4.u32" | "ld.global.v2.u64", "%rd6") => {
+                        input_len() as u32
+                    }
                     (
-                        "ld.global.v2.u32" | "ld.global.v4.u32" | "st.global.v2.u32"
-                        | "st.global.v4.u32",
+                        "ld.global.v2.u32" | "ld.global.v4.u32" | "ld.global.v2.u64"
+                        | "st.global.v2.u32" | "st.global.v4.u32" | "st.global.v2.u64",
                         "%rd8",
                     ) => N_OUTPUTS * 4,
-                    ("ld.const.v2.u32" | "ld.const.v4.u32", "%rd6") => CONST_MEM_BYTES,
+                    ("ld.const.v2.u32" | "ld.const.v4.u32" | "ld.const.v2.u64", "%rd6") => {
+                        CONST_MEM_BYTES
+                    }
                     (
-                        "ld.local.v2.u32" | "ld.local.v4.u32" | "st.local.v2.u32"
-                        | "st.local.v4.u32",
+                        "ld.local.v2.u32" | "ld.local.v4.u32" | "ld.local.v2.u64"
+                        | "st.local.v2.u32" | "st.local.v4.u32" | "st.local.v2.u64",
                         "%rd6",
                     ) => LOCAL_MEM_BYTES,
                     (
-                        "ld.shared.v2.u32" | "ld.shared.v4.u32" | "st.shared.v2.u32"
-                        | "st.shared.v4.u32",
+                        "ld.shared.v2.u32" | "ld.shared.v4.u32" | "ld.shared.v2.u64"
+                        | "st.shared.v2.u32" | "st.shared.v4.u32" | "st.shared.v2.u64",
                         "%rd6",
                     ) => SHARED_SLOT_BYTES,
                     _ => unreachable!(),

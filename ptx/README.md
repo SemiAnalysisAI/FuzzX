@@ -271,8 +271,8 @@ that feature.
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips, including 64-bit forms. |
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips, including 64-bit forms. |
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded scalar/vector memory loads and store/load roundtrips. |
-| `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
-| `DIV_DISABLE_WIDE_MEMORY` | Scalar 64-bit memory loads and store/load roundtrips. |
+| `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 and `v2.u64` memory loads and store/load roundtrips. |
+| `DIV_DISABLE_WIDE_MEMORY` | Scalar 64-bit and `v2.u64` memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |

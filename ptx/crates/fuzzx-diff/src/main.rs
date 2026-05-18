@@ -119,9 +119,9 @@
 //!   DIV_DISABLE_PREDICATED_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         predicated scalar/vector memory loads and store/load roundtrips
 //!   DIV_DISABLE_VECTOR_MEMORY default: false; set 1/true/yes/on to suppress
-//!                         vectorized memory loads and store/load roundtrips
+//!                         vectorized u32/u64 memory loads and store/load roundtrips
 //!   DIV_DISABLE_WIDE_MEMORY default: false; set 1/true/yes/on to suppress
-//!                         64-bit memory loads and store/load roundtrips
+//!                         scalar 64-bit and v2.u64 memory loads and store/load roundtrips
 //!   DIV_DISABLE_F32_ARITH default: false; set 1/true/yes/on to suppress
 //!                         sanitized f32 add/sub/mul/div/fma/copysign/min/max,
 //!                         f32 sat arithmetic, and ftz min/max generation
