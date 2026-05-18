@@ -111,6 +111,7 @@ pub struct GenConfig {
     pub emit_predicated_memory: bool,
     pub emit_vector_memory: bool,
     pub emit_wide_memory: bool,
+    pub emit_memory_cache_ops: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -322,6 +323,7 @@ impl Default for GenConfig {
             emit_predicated_memory: true,
             emit_vector_memory: true,
             emit_wide_memory: true,
+            emit_memory_cache_ops: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -712,6 +714,31 @@ impl Scalar16Op {
 }
 
 #[derive(Clone, Copy)]
+enum GlobalLoadCacheOp {
+    Default,
+    Ca,
+    Cg,
+    Cs,
+    Lu,
+    Cv,
+    Nc,
+}
+
+impl GlobalLoadCacheOp {
+    fn prefix(self) -> &'static str {
+        match self {
+            GlobalLoadCacheOp::Default => "ld.global",
+            GlobalLoadCacheOp::Ca => "ld.global.ca",
+            GlobalLoadCacheOp::Cg => "ld.global.cg",
+            GlobalLoadCacheOp::Cs => "ld.global.cs",
+            GlobalLoadCacheOp::Lu => "ld.global.lu",
+            GlobalLoadCacheOp::Cv => "ld.global.cv",
+            GlobalLoadCacheOp::Nc => "ld.global.nc",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum GlobalLoadOp {
     U8,
     S8,
@@ -735,6 +762,26 @@ impl GlobalLoadOp {
         }
     }
 
+    fn type_suffix(self) -> &'static str {
+        match self {
+            GlobalLoadOp::U8 => "u8",
+            GlobalLoadOp::S8 => "s8",
+            GlobalLoadOp::U16 => "u16",
+            GlobalLoadOp::S16 => "s16",
+            GlobalLoadOp::U32 => "u32",
+            GlobalLoadOp::U64 => "u64",
+            GlobalLoadOp::S64 => "s64",
+        }
+    }
+
+    fn mnemonic_with_cache(self, cache: GlobalLoadCacheOp) -> String {
+        if matches!(cache, GlobalLoadCacheOp::Default) {
+            self.mnemonic().to_string()
+        } else {
+            format!("{}.{}", cache.prefix(), self.type_suffix())
+        }
+    }
+
     fn width(self) -> u32 {
         match self {
             GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
@@ -746,6 +793,27 @@ impl GlobalLoadOp {
 
     fn is_wide(self) -> bool {
         matches!(self, GlobalLoadOp::U64 | GlobalLoadOp::S64)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GlobalStoreCacheOp {
+    Default,
+    Wb,
+    Cg,
+    Cs,
+    Wt,
+}
+
+impl GlobalStoreCacheOp {
+    fn prefix(self) -> &'static str {
+        match self {
+            GlobalStoreCacheOp::Default => "st.global",
+            GlobalStoreCacheOp::Wb => "st.global.wb",
+            GlobalStoreCacheOp::Cg => "st.global.cg",
+            GlobalStoreCacheOp::Cs => "st.global.cs",
+            GlobalStoreCacheOp::Wt => "st.global.wt",
+        }
     }
 }
 
@@ -779,6 +847,23 @@ impl GlobalStoreRoundtripOp {
             GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "st.global.u16",
             GlobalStoreRoundtripOp::U32 => "st.global.u32",
             GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => "st.global.u64",
+        }
+    }
+
+    fn store_type_suffix(self) -> &'static str {
+        match self {
+            GlobalStoreRoundtripOp::U8 | GlobalStoreRoundtripOp::S8 => "u8",
+            GlobalStoreRoundtripOp::U16 | GlobalStoreRoundtripOp::S16 => "u16",
+            GlobalStoreRoundtripOp::U32 => "u32",
+            GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 => "u64",
+        }
+    }
+
+    fn store_mnemonic_with_cache(self, cache: GlobalStoreCacheOp) -> String {
+        if matches!(cache, GlobalStoreCacheOp::Default) {
+            self.store_mnemonic().to_string()
+        } else {
+            format!("{}.{}", cache.prefix(), self.store_type_suffix())
         }
     }
 
@@ -3191,12 +3276,14 @@ enum Inst {
     /// Bounded read-only load from the existing input buffer.
     GlobalLoad {
         op: GlobalLoadOp,
+        cache: GlobalLoadCacheOp,
         dst: u32,
         offset: u32,
     },
     /// Predicated bounded read-only global load from the input buffer.
     PredicatedGlobalLoad {
         op: GlobalLoadOp,
+        cache: GlobalLoadCacheOp,
         dst: u32,
         offset: u32,
         cmp: CmpOp,
@@ -3207,6 +3294,7 @@ enum Inst {
     /// Store to and reload from this thread's output slice in global memory.
     GlobalStoreRoundtrip {
         op: GlobalStoreRoundtripOp,
+        store_cache: GlobalStoreCacheOp,
         dst: u32,
         src: u32,
         offset: u32,
@@ -3214,6 +3302,7 @@ enum Inst {
     /// Predicated store/reload through this thread's output slice.
     PredicatedGlobalStoreRoundtrip {
         op: GlobalStoreRoundtripOp,
+        store_cache: GlobalStoreCacheOp,
         dst: u32,
         src: u32,
         offset: u32,
@@ -5749,6 +5838,42 @@ impl<'a> Generator<'a> {
         ))
     }
 
+    fn pick_global_load_cache(&mut self, u: &mut Unstructured) -> Result<GlobalLoadCacheOp> {
+        let base_ops = [GlobalLoadCacheOp::Default];
+        let cache_ops = [
+            GlobalLoadCacheOp::Default,
+            GlobalLoadCacheOp::Ca,
+            GlobalLoadCacheOp::Cg,
+            GlobalLoadCacheOp::Cs,
+            GlobalLoadCacheOp::Lu,
+            GlobalLoadCacheOp::Cv,
+            GlobalLoadCacheOp::Nc,
+        ];
+        let ops = if self.cfg.emit_memory_cache_ops {
+            &cache_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        Ok(*u.choose(ops)?)
+    }
+
+    fn pick_global_store_cache(&mut self, u: &mut Unstructured) -> Result<GlobalStoreCacheOp> {
+        let base_ops = [GlobalStoreCacheOp::Default];
+        let cache_ops = [
+            GlobalStoreCacheOp::Default,
+            GlobalStoreCacheOp::Wb,
+            GlobalStoreCacheOp::Cg,
+            GlobalStoreCacheOp::Cs,
+            GlobalStoreCacheOp::Wt,
+        ];
+        let ops = if self.cfg.emit_memory_cache_ops {
+            &cache_ops[..]
+        } else {
+            &base_ops[..]
+        };
+        Ok(*u.choose(ops)?)
+    }
+
     fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let base_ops = [
             GlobalLoadOp::U8,
@@ -5772,6 +5897,7 @@ impl<'a> Generator<'a> {
             &base_ops[..]
         };
         let op = *u.choose(ops)?;
+        let cache = self.pick_global_load_cache(u)?;
         let width = op.width();
         let max_offset = input_len() as u32 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5780,6 +5906,7 @@ impl<'a> Generator<'a> {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedGlobalLoad {
                 op,
+                cache,
                 dst,
                 offset,
                 cmp,
@@ -5788,7 +5915,12 @@ impl<'a> Generator<'a> {
                 pred,
             });
         }
-        Ok(Inst::GlobalLoad { op, dst, offset })
+        Ok(Inst::GlobalLoad {
+            op,
+            cache,
+            dst,
+            offset,
+        })
     }
 
     fn pick_global_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -5814,6 +5946,7 @@ impl<'a> Generator<'a> {
             &base_ops[..]
         };
         let op = *u.choose(ops)?;
+        let store_cache = self.pick_global_store_cache(u)?;
         let width = op.width();
         let max_offset = N_OUTPUTS * 4 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5823,6 +5956,7 @@ impl<'a> Generator<'a> {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedGlobalStoreRoundtrip {
                 op,
+                store_cache,
                 dst,
                 src,
                 offset,
@@ -5834,6 +5968,7 @@ impl<'a> Generator<'a> {
         }
         Ok(Inst::GlobalStoreRoundtrip {
             op,
+            store_cache,
             dst,
             src,
             offset,
@@ -9090,12 +9225,19 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
-            Inst::GlobalLoad { op, dst, offset } => {
+            Inst::GlobalLoad {
+                op,
+                cache,
+                dst,
+                offset,
+            } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                self.emit_memory_load(s, op.mnemonic(), dst, "%rd6", offset, op.is_wide(), None);
+                let mnemonic = op.mnemonic_with_cache(cache);
+                self.emit_memory_load(s, &mnemonic, dst, "%rd6", offset, op.is_wide(), None);
             }
             Inst::PredicatedGlobalLoad {
                 op,
+                cache,
                 dst,
                 offset,
                 cmp,
@@ -9105,18 +9247,12 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                self.emit_memory_load(
-                    s,
-                    op.mnemonic(),
-                    dst,
-                    "%rd6",
-                    offset,
-                    op.is_wide(),
-                    Some(pred),
-                );
+                let mnemonic = op.mnemonic_with_cache(cache);
+                self.emit_memory_load(s, &mnemonic, dst, "%rd6", offset, op.is_wide(), Some(pred));
             }
             Inst::GlobalStoreRoundtrip {
                 op,
+                store_cache,
                 dst,
                 src,
                 offset,
@@ -9125,15 +9261,8 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                self.emit_memory_store(
-                    s,
-                    op.store_mnemonic(),
-                    src,
-                    "%rd8",
-                    offset,
-                    op.is_wide(),
-                    None,
-                );
+                let store_mnemonic = op.store_mnemonic_with_cache(store_cache);
+                self.emit_memory_store(s, &store_mnemonic, src, "%rd8", offset, op.is_wide(), None);
                 self.emit_memory_load(
                     s,
                     op.load_mnemonic(),
@@ -9146,6 +9275,7 @@ impl<'a> Generator<'a> {
             }
             Inst::PredicatedGlobalStoreRoundtrip {
                 op,
+                store_cache,
                 dst,
                 src,
                 offset,
@@ -9159,9 +9289,10 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                let store_mnemonic = op.store_mnemonic_with_cache(store_cache);
                 self.emit_memory_store(
                     s,
-                    op.store_mnemonic(),
+                    &store_mnemonic,
                     src,
                     "%rd8",
                     offset,
@@ -13938,11 +14069,25 @@ mod tests {
         "ld.global.u64",
         "ld.global.s64",
     ];
+    const GLOBAL_LOAD_CACHE_PREFIXES: &[&str] = &[
+        "ld.global.ca.",
+        "ld.global.cg.",
+        "ld.global.cs.",
+        "ld.global.lu.",
+        "ld.global.cv.",
+        "ld.global.nc.",
+    ];
     const GLOBAL_STORE_MNEMONICS: &[&str] = &[
         "st.global.u8",
         "st.global.u16",
         "st.global.u32",
         "st.global.u64",
+    ];
+    const GLOBAL_STORE_CACHE_PREFIXES: &[&str] = &[
+        "st.global.wb.",
+        "st.global.cg.",
+        "st.global.cs.",
+        "st.global.wt.",
     ];
     const CONST_LOAD_MNEMONICS: &[&str] = &[
         "ld.const.u8",
@@ -15154,13 +15299,84 @@ mod tests {
             .collect()
     }
 
+    fn body_mnemonic(line: &str) -> Option<&str> {
+        let mut tokens = line.trim_start().split_whitespace();
+        let first = tokens.next()?;
+        if first.starts_with('@') {
+            tokens.next()
+        } else {
+            Some(first)
+        }
+    }
+
+    fn scalar_global_load_width(type_suffix: &str) -> Option<u32> {
+        match type_suffix {
+            "u8" | "s8" => Some(1),
+            "u16" | "s16" => Some(2),
+            "u32" => Some(4),
+            "u64" | "s64" => Some(8),
+            _ => None,
+        }
+    }
+
+    fn scalar_global_store_width(type_suffix: &str) -> Option<u32> {
+        match type_suffix {
+            "u8" => Some(1),
+            "u16" => Some(2),
+            "u32" => Some(4),
+            "u64" => Some(8),
+            _ => None,
+        }
+    }
+
+    fn global_load_width(mnemonic: &str) -> Option<u32> {
+        if let Some(type_suffix) = mnemonic.strip_prefix("ld.global.") {
+            if let Some(width) = scalar_global_load_width(type_suffix) {
+                return Some(width);
+            }
+        }
+        GLOBAL_LOAD_CACHE_PREFIXES.iter().find_map(|prefix| {
+            mnemonic
+                .strip_prefix(prefix)
+                .and_then(scalar_global_load_width)
+        })
+    }
+
+    fn global_store_width(mnemonic: &str) -> Option<u32> {
+        if let Some(type_suffix) = mnemonic.strip_prefix("st.global.") {
+            if let Some(width) = scalar_global_store_width(type_suffix) {
+                return Some(width);
+            }
+        }
+        GLOBAL_STORE_CACHE_PREFIXES.iter().find_map(|prefix| {
+            mnemonic
+                .strip_prefix(prefix)
+                .and_then(scalar_global_store_width)
+        })
+    }
+
+    fn is_global_load_mnemonic(mnemonic: &str) -> bool {
+        global_load_width(mnemonic).is_some()
+    }
+
+    fn is_global_store_mnemonic(mnemonic: &str) -> bool {
+        global_store_width(mnemonic).is_some()
+    }
+
+    fn is_global_memory_cache_mnemonic(mnemonic: &str) -> bool {
+        GLOBAL_LOAD_CACHE_PREFIXES
+            .iter()
+            .chain(GLOBAL_STORE_CACHE_PREFIXES.iter())
+            .any(|prefix| mnemonic.starts_with(prefix))
+    }
+
     fn body_global_load(line: &str) -> Option<(&str, u32)> {
         let line = line.trim_start();
         if !line.contains("[%rd6 + ") {
             return None;
         }
-        let mnemonic = line.split_whitespace().next()?;
-        if !GLOBAL_LOAD_MNEMONICS.contains(&mnemonic) {
+        let mnemonic = body_mnemonic(line)?;
+        if !is_global_load_mnemonic(mnemonic) {
             return None;
         }
         let offset = line
@@ -15183,9 +15399,8 @@ mod tests {
         if !line.contains("[%rd8 + ") {
             return None;
         }
-        let mnemonic = line.split_whitespace().next()?;
-        if !GLOBAL_LOAD_MNEMONICS.contains(&mnemonic) && !GLOBAL_STORE_MNEMONICS.contains(&mnemonic)
-        {
+        let mnemonic = body_mnemonic(line)?;
+        if !is_global_load_mnemonic(mnemonic) && !is_global_store_mnemonic(mnemonic) {
             return None;
         }
         let offset = line
@@ -17719,13 +17934,7 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, offset) in ptx.lines().filter_map(body_global_load) {
-                let width = match mnemonic {
-                    "ld.global.u8" | "ld.global.s8" => 1,
-                    "ld.global.u16" | "ld.global.s16" => 2,
-                    "ld.global.u32" => 4,
-                    "ld.global.u64" | "ld.global.s64" => 8,
-                    _ => unreachable!(),
-                };
+                let width = global_load_width(mnemonic).unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -17805,13 +18014,9 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, offset) in ptx.lines().filter_map(body_global_store_roundtrip_access) {
-                let width = match mnemonic {
-                    "ld.global.u8" | "ld.global.s8" | "st.global.u8" => 1,
-                    "ld.global.u16" | "ld.global.s16" | "st.global.u16" => 2,
-                    "ld.global.u32" | "st.global.u32" => 4,
-                    "ld.global.u64" | "ld.global.s64" | "st.global.u64" => 8,
-                    _ => unreachable!(),
-                };
+                let width = global_load_width(mnemonic)
+                    .or_else(|| global_store_width(mnemonic))
+                    .unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -17820,6 +18025,69 @@ mod tests {
                 assert!(
                     offset + width <= N_OUTPUTS * 4,
                     "seed {seed:x} emitted out-of-output-slice {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_memory_cache_ops_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut loads = vec![false; GLOBAL_LOAD_CACHE_PREFIXES.len()];
+        let mut stores = vec![false; GLOBAL_STORE_CACHE_PREFIXES.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, _) in ptx.lines().filter_map(body_global_load) {
+                for (i, prefix) in GLOBAL_LOAD_CACHE_PREFIXES.iter().enumerate() {
+                    loads[i] |= mnemonic.starts_with(prefix);
+                }
+            }
+            for (mnemonic, _) in ptx.lines().filter_map(body_global_store_roundtrip_access) {
+                for (i, prefix) in GLOBAL_STORE_CACHE_PREFIXES.iter().enumerate() {
+                    stores[i] |= mnemonic.starts_with(prefix);
+                }
+            }
+            if loads.iter().all(|seen| *seen) && stores.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_loads: Vec<_> = GLOBAL_LOAD_CACHE_PREFIXES
+            .iter()
+            .zip(loads)
+            .filter_map(|(prefix, seen)| (!seen).then_some(*prefix))
+            .collect();
+        let missing_stores: Vec<_> = GLOBAL_STORE_CACHE_PREFIXES
+            .iter()
+            .zip(stores)
+            .filter_map(|(prefix, seen)| (!seen).then_some(*prefix))
+            .collect();
+        assert!(
+            missing_loads.is_empty() && missing_stores.is_empty(),
+            "sample missed global memory cache loads {missing_loads:?} stores {missing_stores:?}"
+        );
+    }
+
+    #[test]
+    fn global_memory_cache_ops_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_memory_cache_ops: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, _) in ptx
+                .lines()
+                .filter_map(body_global_load)
+                .chain(ptx.lines().filter_map(body_global_store_roundtrip_access))
+            {
+                assert!(
+                    !is_global_memory_cache_mnemonic(mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
                 );
             }
         }
