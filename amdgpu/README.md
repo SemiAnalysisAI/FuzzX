@@ -69,8 +69,8 @@ select idioms, pure-IR predicate-mask blend/sign idioms, and pure-IR bitfield
 extract/insert idioms, pure-IR byte/word pack-unpack idioms, pure-IR widening
 multiply-high/low idioms, pure-IR bit-count/bit-twiddle idioms, pure-IR
 average/absolute-difference idioms, and pure-IR lane clamp/saturating-pack
-idioms, alongside LLVM bit, min/max, saturation, absolute-value, funnel-shift,
-and integer
+idioms, and pure-IR vector shuffle/horizontal-reduction idioms, alongside LLVM
+bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
@@ -192,6 +192,7 @@ rediscovering the same issue.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable `zext i16 (ashr i16 X, C)` shapes for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
 | `FUZZX_ALLOW_M019_HIGHBIT_OR_XOR=1` | unset | Re-enable the outer high-bit `(x \| C) ^ x` shape for [m019](known-miscompiles/m019-highbit-or-xor/NOTES.md). |
 | `FUZZX_ALLOW_M020_OR_XOR_AND=1` | unset | Re-enable the `((a \| b) ^ b) & (a \| b)` shape for [m020](known-miscompiles/m020-or-xor-and/NOTES.md). |
 | `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a \| b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
