@@ -225,6 +225,8 @@ that feature.
 | `DIV_DISABLE_SAT_ARITH` | `add.sat.s32` and `sub.sat.s32`. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
+| `DIV_DISABLE_MAD_HI` | `mad.hi.u32` and `mad.hi.s32`. |
+| `DIV_DISABLE_SIGNED_MAD_HI` | `mad.hi.s32` only. |
 | `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
 | `DIV_DISABLE_OR` | `or.b32` while retaining `and.b32` and `xor.b32`. |
 | `DIV_DISABLE_XOR` | `xor.b32` while retaining `and.b32` and `or.b32`. |
@@ -275,6 +277,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
+| `DIV_DISABLE_PREDICATED_MAD_HI` | Predicated `mad.hi.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SET` | Predicated `set.{cmp}` instructions. |
 | `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32` instructions. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |

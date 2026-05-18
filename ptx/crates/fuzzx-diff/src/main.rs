@@ -40,6 +40,10 @@
 //!                         PTX mul.hi.u32/mul.hi.s32 generation
 //!   DIV_DISABLE_SIGNED_MULHI default: false; set 1/true/yes/on to suppress
 //!                         PTX mul.hi.s32 generation while retaining mul.hi.u32
+//!   DIV_DISABLE_MAD_HI    default: false; set 1/true/yes/on to suppress
+//!                         PTX mad.hi.{u32,s32} generation
+//!   DIV_DISABLE_SIGNED_MAD_HI default: false; set 1/true/yes/on to suppress
+//!                         PTX mad.hi.s32 generation while retaining mad.hi.u32
 //!   DIV_DISABLE_BITWISE_BINOPS default: false; set 1/true/yes/on to suppress
 //!                         PTX and.b32/or.b32/xor.b32 generation
 //!   DIV_DISABLE_OR        default: false; set 1/true/yes/on to suppress
@@ -140,6 +144,8 @@
 //!                         predicated subword cvt generation
 //!   DIV_DISABLE_PREDICATED_MAD default: false; set 1/true/yes/on to suppress
 //!                         predicated mad.lo.{u32,s32} generation
+//!   DIV_DISABLE_PREDICATED_MAD_HI default: false; set 1/true/yes/on to suppress
+//!                         predicated mad.hi.{u32,s32} generation
 //!   DIV_DISABLE_PREDICATED_SET default: false; set 1/true/yes/on to suppress
 //!                         predicated set.{cmp} generation
 //!   DIV_DISABLE_PREDICATED_SELP default: false; set 1/true/yes/on to suppress
@@ -273,6 +279,10 @@ struct Args {
     #[arg(long)]
     disable_signed_mulhi: bool,
     #[arg(long)]
+    disable_mad_hi: bool,
+    #[arg(long)]
+    disable_signed_mad_hi: bool,
+    #[arg(long)]
     disable_bitwise_binops: bool,
     #[arg(long)]
     disable_or: bool,
@@ -373,6 +383,8 @@ struct Args {
     #[arg(long)]
     disable_predicated_mad: bool,
     #[arg(long)]
+    disable_predicated_mad_hi: bool,
+    #[arg(long)]
     disable_predicated_set: bool,
     #[arg(long)]
     disable_predicated_selp: bool,
@@ -445,6 +457,8 @@ impl Args {
         set_bool!(self.disable_sat_arith, "DIV_DISABLE_SAT_ARITH");
         set_bool!(self.disable_mulhi, "DIV_DISABLE_MULHI");
         set_bool!(self.disable_signed_mulhi, "DIV_DISABLE_SIGNED_MULHI");
+        set_bool!(self.disable_mad_hi, "DIV_DISABLE_MAD_HI");
+        set_bool!(self.disable_signed_mad_hi, "DIV_DISABLE_SIGNED_MAD_HI");
         set_bool!(self.disable_bitwise_binops, "DIV_DISABLE_BITWISE_BINOPS");
         set_bool!(self.disable_or, "DIV_DISABLE_OR");
         set_bool!(self.disable_xor, "DIV_DISABLE_XOR");
@@ -540,6 +554,10 @@ impl Args {
         );
         set_bool!(self.disable_predicated_cvt, "DIV_DISABLE_PREDICATED_CVT");
         set_bool!(self.disable_predicated_mad, "DIV_DISABLE_PREDICATED_MAD");
+        set_bool!(
+            self.disable_predicated_mad_hi,
+            "DIV_DISABLE_PREDICATED_MAD_HI"
+        );
         set_bool!(self.disable_predicated_set, "DIV_DISABLE_PREDICATED_SET");
         set_bool!(self.disable_predicated_selp, "DIV_DISABLE_PREDICATED_SELP");
         set_bool!(self.disable_predicated_sad, "DIV_DISABLE_PREDICATED_SAD");
@@ -628,6 +646,8 @@ impl Config {
         let disable_sat_arith = env_bool("DIV_DISABLE_SAT_ARITH")?.unwrap_or(false);
         let disable_mulhi = env_bool("DIV_DISABLE_MULHI")?.unwrap_or(false);
         let disable_signed_mulhi = env_bool("DIV_DISABLE_SIGNED_MULHI")?.unwrap_or(false);
+        let disable_mad_hi = env_bool("DIV_DISABLE_MAD_HI")?.unwrap_or(false);
+        let disable_signed_mad_hi = env_bool("DIV_DISABLE_SIGNED_MAD_HI")?.unwrap_or(false);
         let disable_bitwise_binops = env_bool("DIV_DISABLE_BITWISE_BINOPS")?.unwrap_or(false);
         let disable_or = env_bool("DIV_DISABLE_OR")?.unwrap_or(false);
         let disable_xor = env_bool("DIV_DISABLE_XOR")?.unwrap_or(false);
@@ -685,6 +705,7 @@ impl Config {
         let disable_predicated_unary = env_bool("DIV_DISABLE_PREDICATED_UNARY")?.unwrap_or(false);
         let disable_predicated_cvt = env_bool("DIV_DISABLE_PREDICATED_CVT")?.unwrap_or(false);
         let disable_predicated_mad = env_bool("DIV_DISABLE_PREDICATED_MAD")?.unwrap_or(false);
+        let disable_predicated_mad_hi = env_bool("DIV_DISABLE_PREDICATED_MAD_HI")?.unwrap_or(false);
         let disable_predicated_set = env_bool("DIV_DISABLE_PREDICATED_SET")?.unwrap_or(false);
         let disable_predicated_selp = env_bool("DIV_DISABLE_PREDICATED_SELP")?.unwrap_or(false);
         let disable_predicated_sad = env_bool("DIV_DISABLE_PREDICATED_SAD")?.unwrap_or(false);
@@ -713,6 +734,8 @@ impl Config {
             emit_sat_arith: !disable_sat_arith && !disable_signed_lo_alu,
             emit_mulhi: !disable_mulhi,
             emit_signed_mulhi: !disable_signed_mulhi,
+            emit_mad_hi: !disable_mad_hi,
+            emit_signed_mad_hi: !disable_signed_mad_hi,
             emit_bitwise_binops: !disable_bitwise_binops,
             emit_or: !disable_or,
             emit_xor: !disable_xor,
@@ -768,6 +791,7 @@ impl Config {
             emit_predicated_unary: !disable_predicated_unary,
             emit_predicated_cvt: !disable_predicated_cvt,
             emit_predicated_mad: !disable_predicated_mad && !disable_mul_lo,
+            emit_predicated_mad_hi: !disable_predicated_mad_hi && !disable_mad_hi,
             emit_predicated_set: !disable_predicated_set && !disable_set,
             emit_predicated_selp: !disable_predicated_selp && !disable_selp,
             emit_predicated_sad: !disable_predicated_sad,
@@ -962,7 +986,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_wide_shifts={} emit_predicated_wide_shifts={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -991,6 +1015,8 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_sat_arith,
         cfg.gen_config.emit_mulhi,
         cfg.gen_config.emit_signed_mulhi,
+        cfg.gen_config.emit_mad_hi,
+        cfg.gen_config.emit_signed_mad_hi,
         cfg.gen_config.emit_bitwise_binops,
         cfg.gen_config.emit_or,
         cfg.gen_config.emit_xor,
@@ -1041,6 +1067,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_predicated_unary,
         cfg.gen_config.emit_predicated_cvt,
         cfg.gen_config.emit_predicated_mad,
+        cfg.gen_config.emit_predicated_mad_hi,
         cfg.gen_config.emit_predicated_set,
         cfg.gen_config.emit_predicated_sad,
         cfg.gen_config.emit_predicated_slct,

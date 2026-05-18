@@ -63,6 +63,8 @@ pub struct GenConfig {
     pub emit_sat_arith: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
+    pub emit_mad_hi: bool,
+    pub emit_signed_mad_hi: bool,
     pub emit_bitwise_binops: bool,
     pub emit_or: bool,
     pub emit_xor: bool,
@@ -112,6 +114,7 @@ pub struct GenConfig {
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
     pub emit_predicated_mad: bool,
+    pub emit_predicated_mad_hi: bool,
     pub emit_predicated_set: bool,
     pub emit_predicated_selp: bool,
     pub emit_predicated_divrem: bool,
@@ -158,6 +161,8 @@ impl Default for GenConfig {
             emit_sat_arith: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
+            emit_mad_hi: true,
+            emit_signed_mad_hi: true,
             emit_bitwise_binops: true,
             emit_or: true,
             emit_xor: true,
@@ -207,6 +212,7 @@ impl Default for GenConfig {
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
             emit_predicated_mad: true,
+            emit_predicated_mad_hi: true,
             emit_predicated_set: true,
             emit_predicated_selp: true,
             emit_predicated_divrem: true,
@@ -434,6 +440,21 @@ impl DivRemOp {
 
     fn is_signed(self) -> bool {
         matches!(self, DivRemOp::DivS | DivRemOp::RemS)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MadHiOp {
+    U32,
+    S32,
+}
+
+impl MadHiOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            MadHiOp::U32 => "mad.hi.u32",
+            MadHiOp::S32 => "mad.hi.s32",
+        }
     }
 }
 
@@ -1194,6 +1215,26 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `mad.hi.{u32,s32} dst, a, b, c;` — high product word plus addend.
+    MadHi {
+        op: MadHiOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred mad.hi.{u32,s32} dst, a, b, c;`.
+    PredicatedMadHi {
+        op: MadHiOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `lop3.b32 dst, a, b, c, imm;` — 3-input logical op via 8-bit truth
     /// table. The optimizer canonicalizes many boolean lattices through lop3.
     Lop3 {
@@ -1553,7 +1594,35 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_mad_or_add(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        if self.cfg.emit_mul_lo {
+        if self.cfg.emit_mul_lo || self.cfg.emit_mad_hi {
+            let use_mad_hi = if self.cfg.emit_mul_lo && self.cfg.emit_mad_hi {
+                u.arbitrary::<bool>()?
+            } else {
+                self.cfg.emit_mad_hi
+            };
+            if use_mad_hi {
+                let op = pick_mad_hi(u, self.cfg.emit_signed_mad_hi)?;
+                if self.cfg.emit_predicated_mad_hi && u.arbitrary::<bool>()? {
+                    return Ok(Inst::PredicatedMadHi {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    });
+                }
+                return Ok(Inst::MadHi {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                });
+            }
             let signed = self.cfg.emit_signed_lo_alu && u.arbitrary::<bool>()?;
             if self.cfg.emit_predicated_mad && u.arbitrary::<bool>()? {
                 Ok(Inst::PredicatedMad {
@@ -2370,6 +2439,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedVideo { dst, .. }
             | Inst::Mad { dst, .. }
             | Inst::PredicatedMad { dst, .. }
+            | Inst::MadHi { dst, .. }
+            | Inst::PredicatedMadHi { dst, .. }
             | Inst::Lop3 { dst, .. }
             | Inst::PredicatedLop3 { dst, .. }
             | Inst::Funnel { dst, .. }
@@ -3328,6 +3399,35 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::MadHi { op, dst, a, b, c } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedMadHi {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Lop3 { dst, a, b, c, imm } => {
                 write!(s, "    lop3.b32      %r{dst}, ").unwrap();
                 a.emit(s);
@@ -3894,6 +3994,17 @@ fn pick_unsigned_divrem(u: &mut Unstructured) -> Result<DivRemOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_mad_hi(u: &mut Unstructured, emit_signed_mad_hi: bool) -> Result<MadHiOp> {
+    let ops_all = [MadHiOp::U32, MadHiOp::S32];
+    let ops_unsigned = [MadHiOp::U32];
+    let ops = if emit_signed_mad_hi {
+        &ops_all[..]
+    } else {
+        &ops_unsigned[..]
+    };
+    Ok(*u.choose(ops)?)
+}
+
 /// Pick a u32 immediate with a weighted distribution that favors small values
 /// (for arithmetic legibility) while still hitting the corner cases the
 /// constant-folder cares about: 0, INT_MIN, INT_MAX, 0xFFFFFFFF, powers of
@@ -4018,6 +4129,7 @@ mod tests {
     ];
     const SAT_ARITH_MNEMONICS: &[&str] = &["add.sat.s32", "sub.sat.s32"];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
+    const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
     const SHIFT_MNEMONICS: &[&str] = &["shl.b32", "shr.u32", "shr.s32"];
     const UNARY_MNEMONICS: &[&str] = &[
@@ -4190,6 +4302,7 @@ mod tests {
             CVT_MNEMONICS,
             BFE_MNEMONICS,
             DIVREM_MNEMONICS,
+            MAD_HI_MNEMONICS,
             MAD24_MNEMONICS,
             MUL24_MNEMONICS,
             MUL_WIDE_MNEMONICS,
@@ -5008,6 +5121,110 @@ mod tests {
                 !has_predicated_mad(&ptx),
                 "seed {seed:x} emitted predicated mad"
             );
+        }
+    }
+
+    #[test]
+    fn mad_hi_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_mul_lo: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 1024, MAD_HI_MNEMONICS);
+    }
+
+    #[test]
+    fn mad_hi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_mul_lo: false,
+            emit_mad_hi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in MAD_HI_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_mad_hi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_mul_lo: false,
+            emit_signed_mad_hi: false,
+            ..GenConfig::default()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !ptx.contains("mad.hi.s32"),
+                "seed {seed:x} emitted mad.hi.s32"
+            );
+            saw_unsigned |= ptx.contains("mad.hi.u32");
+        }
+        assert!(saw_unsigned, "sample did not retain mad.hi.u32 coverage");
+    }
+
+    #[test]
+    fn predicated_mad_hi_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_mul_lo: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; MAD_HI_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in MAD_HI_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = MAD_HI_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_mad_hi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_lop3: false,
+            emit_mul_lo: false,
+            emit_predicated_mad_hi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !MAD_HI_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
         }
     }
 
