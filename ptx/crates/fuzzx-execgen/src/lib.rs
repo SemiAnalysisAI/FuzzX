@@ -96,6 +96,8 @@ pub struct GenConfig {
     pub emit_predicated_mul_wide: bool,
     pub emit_wide_int: bool,
     pub emit_predicated_wide_int: bool,
+    pub emit_wide_shifts: bool,
+    pub emit_predicated_wide_shifts: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
@@ -185,6 +187,8 @@ impl Default for GenConfig {
             emit_predicated_mul_wide: true,
             emit_wide_int: true,
             emit_predicated_wide_int: true,
+            emit_wide_shifts: true,
+            emit_predicated_wide_shifts: true,
             emit_addc: true,
             emit_subc: true,
             emit_predicated_carry: true,
@@ -511,6 +515,30 @@ impl WideIntOp {
             | WideIntOp::AndB64
             | WideIntOp::OrB64
             | WideIntOp::XorB64 => "cvt.u64.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WideShiftOp {
+    ShlB64,
+    ShrU64,
+    ShrS64,
+}
+
+impl WideShiftOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideShiftOp::ShlB64 => "shl.b64",
+            WideShiftOp::ShrU64 => "shr.u64",
+            WideShiftOp::ShrS64 => "shr.s64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideShiftOp::ShrS64 => "cvt.s64.s32",
+            WideShiftOp::ShlB64 | WideShiftOp::ShrU64 => "cvt.u64.u32",
         }
     }
 }
@@ -968,6 +996,24 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// 64-bit shift through scratch b64 registers, low 32 bits kept.
+    WideShift {
+        op: WideShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: u32,
+    },
+    /// Predicated 64-bit shift through scratch b64 registers.
+    PredicatedWideShift {
+        op: WideShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: u32,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -1971,7 +2017,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=2)?;
+            let wide_pick: u8 = u.int_in_range(0..=3)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -2012,6 +2058,27 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
+                    })
+                }
+            } else if self.cfg.emit_wide_shifts && wide_pick == 2 {
+                let op = pick_wide_shift(u)?;
+                if self.cfg.emit_predicated_wide_shifts && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedWideShift {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        amount: u.int_in_range(0..=63)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::WideShift {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        amount: u.int_in_range(0..=63)?,
                     })
                 }
             } else {
@@ -2213,6 +2280,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedMulWide { dst, .. }
             | Inst::WideInt { dst, .. }
             | Inst::PredicatedWideInt { dst, .. }
+            | Inst::WideShift { dst, .. }
+            | Inst::PredicatedWideShift { dst, .. }
             | Inst::Sad { dst, .. }
             | Inst::PredicatedSad { dst, .. }
             | Inst::Slct { dst, .. }
@@ -2850,6 +2919,48 @@ impl<'a> Generator<'a> {
                 writeln!(
                     s,
                     "    {} {:<8} %rd6, %rd6, %rd7;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
+            Inst::WideShift {
+                op,
+                dst,
+                src,
+                amount,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd6, {amount};", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideShift {
+                op,
+                dst,
+                src,
+                amount,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd6, {amount};",
                     pred_guard(pred),
                     op.mnemonic()
                 )
@@ -3540,6 +3651,15 @@ fn pick_wide_int(u: &mut Unstructured) -> Result<WideIntOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_wide_shift(u: &mut Unstructured) -> Result<WideShiftOp> {
+    let ops = [
+        WideShiftOp::ShlB64,
+        WideShiftOp::ShrU64,
+        WideShiftOp::ShrS64,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_add_carry(u: &mut Unstructured, emit_addc: bool, emit_subc: bool) -> Result<AddCarryOp> {
     let ops: &[AddCarryOp] = match (emit_addc, emit_subc) {
         (true, true) => &[AddCarryOp::Add, AddCarryOp::Sub],
@@ -3811,6 +3931,7 @@ mod tests {
         "or.b64",
         "xor.b64",
     ];
+    const WIDE_SHIFT_MNEMONICS: &[&str] = &["shl.b64", "shr.u64", "shr.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.u32",
@@ -3906,6 +4027,7 @@ mod tests {
             DIVREM_MNEMONICS,
             MUL_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_SHIFT_MNEMONICS,
             CARRY_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SIGNED_SETP_MNEMONICS,
@@ -3941,6 +4063,7 @@ mod tests {
             MUL24_MNEMONICS,
             MUL_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_SHIFT_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SAD_MNEMONICS,
             POST_KNOWN_SLCT_MNEMONICS,
@@ -4088,6 +4211,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_INT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_shift(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_SHIFT_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_carry(ptx: &str) -> bool {
@@ -5771,6 +5900,100 @@ mod tests {
             assert!(
                 !has_predicated_wide_int(&ptx),
                 "seed {seed:x} emitted predicated wide int"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_shift_generation_is_reachable() {
+        let mut found = vec![false; WIDE_SHIFT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, mnemonic) in WIDE_SHIFT_MNEMONICS.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_SHIFT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn wide_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_SHIFT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_shift_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_SHIFT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in WIDE_SHIFT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_SHIFT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_wide_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_predicated_wide_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_shift(&ptx),
+                "seed {seed:x} emitted predicated wide shift"
             );
         }
     }
