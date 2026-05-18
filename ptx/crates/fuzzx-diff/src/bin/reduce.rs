@@ -171,6 +171,15 @@ fn line_mentions_body_wide_scratch(line: &str) -> bool {
         .any(|token| matches!(token, "%rd6" | "%rd7"))
 }
 
+fn line_mentions_b16_scratch(line: &str) -> bool {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
+        .any(|token| {
+            token.strip_prefix("%h").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            })
+        })
+}
+
 fn line_mentions_token(line: &str, needle: &str) -> bool {
     line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
         .any(|token| token == needle)
@@ -520,6 +529,12 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         if line_mentions_body_wide_scratch(t) {
             continue;
         }
+        // Likewise, 16-bit scalar/subword-wide instructions flow through
+        // `%h*` scratch registers. Keep those chains intact instead of
+        // accepting reductions that read undefined half registers.
+        if line_mentions_b16_scratch(t) {
+            continue;
+        }
         // The highest declared `%r` is the generator's scratch register for
         // register-count shifts and the high half of `mov.b64` extraction.
         // Removing either its defining mask or its use independently can leave
@@ -545,7 +560,8 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 mod tests {
     use super::{
         declared_b32_scratch_reg, is_branch_line, is_loop_counter_decrement,
-        line_mentions_body_wide_scratch, line_mentions_pred, removable_indices,
+        line_mentions_b16_scratch, line_mentions_body_wide_scratch, line_mentions_pred,
+        removable_indices,
     };
 
     #[test]
@@ -564,6 +580,20 @@ mod tests {
         ));
         assert!(!line_mentions_body_wide_scratch(
             "    mov.b64       {%r16, %r33}, %rd60;"
+        ));
+    }
+
+    #[test]
+    fn b16_scratch_matching_does_not_confuse_prefixes() {
+        assert!(line_mentions_b16_scratch("    cvt.u16.u32   %h0, %r10;"));
+        assert!(line_mentions_b16_scratch(
+            "    @!%p18 mul.wide.u16 %r0, %h0, %h1;"
+        ));
+        assert!(!line_mentions_b16_scratch(
+            "    add.u32       %r0, %r10, 16;"
+        ));
+        assert!(!line_mentions_b16_scratch(
+            "    add.u32       %r0, %hfoo, 16;"
         ));
     }
 

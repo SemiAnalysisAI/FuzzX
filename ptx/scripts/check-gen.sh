@@ -16,6 +16,7 @@ ROOT="$(pwd)"
 N="${1:-200}"
 PTXAS="${PTXAS:-$(command -v ptxas)}"
 if [[ -z "$PTXAS" ]]; then echo "ptxas not on PATH; set \$PTXAS" >&2; exit 1; fi
+PTXAS_ARCH="${PTXAS_ARCH:-sm_103}"
 
 GEN="$ROOT/target/release/fuzzx-diff-dump-gen"
 if [[ ! -x "$GEN" ]]; then
@@ -31,7 +32,7 @@ trap 'rm -f "$tmp_ptx"' EXIT
 for ((i = 0; i < N; i++)); do
     seed=$((START_SEED + i))
     "$GEN" "$seed" > "$tmp_ptx"
-    err=$("$PTXAS" "$tmp_ptx" 2>&1 >/dev/null \
+    err=$("$PTXAS" "-arch=$PTXAS_ARCH" "$tmp_ptx" 2>&1 >/dev/null \
         | head -1 \
         | sed 's#/tmp/[^ ,:]*##g; s/, line [0-9]*//' \
         | cut -c1-80)

@@ -113,6 +113,8 @@ Version | Description |
 | 13.0.88 | [m056-packed-add-cvt-s16-fold](known-miscompiles/m056-packed-add-cvt-s16-fold/NOTES.md): Likely same root cause as m054; `add.u16x2` feeding `cvt.s16` drops the packed-add contribution. |
 | 13.0.88 | [m057-s16-unary-intmin-fold](known-miscompiles/m057-s16-unary-intmin-fold/NOTES.md): `abs.s16` / `neg.s16` of `INT16_MIN` feeding `cvt.s32.s16` is treated as a positive value. |
 | 13.0.88 | [m058-scalar16-min-cvt-fold](known-miscompiles/m058-scalar16-min-cvt-fold/NOTES.md): Scalar `min.{u16,s16}` through `.b16` scratch registers folds a following equality predicate incorrectly. |
+| 13.0.88 | [m060-scalar16-sub-intmin-fold](known-miscompiles/m060-scalar16-sub-intmin-fold/NOTES.md): Scalar `sub.s16 0, INT16_MIN` feeding `cvt.s32.s16` is zero-extended by optimized ptxas. |
+| 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
 | 13.2.78 | [m028-shf-r-wrap-sub-fold](known-miscompiles/m028-shf-r-wrap-sub-fold/NOTES.md): `shf.r.wrap.b32` output is folded to zero before a final subtract. |
@@ -267,6 +269,7 @@ that feature.
 | `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
 | `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
 | `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32,u64,s64}` loads from the input buffer. |
+| `DIV_DISABLE_UNIFORM_GLOBAL_LOADS` | Uniform-address `ldu.global.{u8,s8,u16,s16,u32,u64,s64}` loads from the input buffer. |
 | `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32,u64}` plus `ld.global.{u8,s8,u16,s16,u32,u64,s64}` roundtrips through the output buffer. |
 | `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32,u64,s64}` loads from a module-scope constant buffer. |
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips, including 64-bit forms. |
@@ -353,7 +356,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_WIDE_SET` | Predicated 64-bit scratch-register `set` materialization. |
 | `DIV_DISABLE_WIDE_SETP` | 64-bit scratch-register `setp`-fed guarded ALU instructions. |
 | `DIV_DISABLE_WIDE_SETP_BOOL` | 64-bit scratch-register `setp.<cmp>.<and|or|xor>`-fed guarded ALU instructions. |
-| `DIV_DISABLE_WIDE_SELP` | 64-bit scratch-register `selp.b64` instructions. |
+| `DIV_DISABLE_WIDE_SELP` | 64-bit scratch-register select `selp.{b64,u64,s64}` instructions. |
 | `DIV_DISABLE_WIDE_UNARY` | 64-bit scratch-register `not`, `cnot`, `popc`, `clz`, `brev`, `neg`, and `abs` instructions. |
 | `DIV_DISABLE_SIGNED_WIDE_UNARY` | `neg.s64` and `abs.s64`. |
 | `DIV_DISABLE_PREDICATED_WIDE_UNARY` | Predicated 64-bit scratch-register unary instructions. |
@@ -402,7 +405,7 @@ that feature.
 | `DIV_DISABLE_SIGNED_MAD_CARRY` | Signed `mad.cc` / `madc.cc` / `madc` carry chains. |
 | `DIV_DISABLE_PREDICATED_MAD_CARRY` | Predicated `mad.cc` / `madc.cc` / `madc` carry chains. |
 | `DIV_DISABLE_PREDICATED_SET` | Predicated integer and floating-point `set`, `setp`, and `testp` instructions. |
-| `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32`, `selp.f32`, and `selp.f64` instructions. |
+| `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.{b32,u32,s32}`, `selp.f32`, and `selp.f64` instructions. |
 | `DIV_DISABLE_SAD` | `sad.{u32,s32}`. |
 | `DIV_DISABLE_SLCT` | `slct.{u32,s32,b32}.s32`. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |

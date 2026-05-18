@@ -105,6 +105,7 @@ pub struct GenConfig {
     pub emit_special_regs: bool,
     pub emit_predicated_special_regs: bool,
     pub emit_global_loads: bool,
+    pub emit_uniform_global_loads: bool,
     pub emit_global_store_roundtrips: bool,
     pub emit_const_memory: bool,
     pub emit_local_memory: bool,
@@ -326,6 +327,7 @@ impl Default for GenConfig {
             emit_special_regs: true,
             emit_predicated_special_regs: true,
             emit_global_loads: true,
+            emit_uniform_global_loads: true,
             emit_global_store_roundtrips: true,
             emit_const_memory: true,
             emit_local_memory: true,
@@ -812,6 +814,10 @@ impl GlobalLoadOp {
         }
     }
 
+    fn uniform_mnemonic(self) -> String {
+        format!("ldu.global.{}", self.type_suffix())
+    }
+
     fn volatile_mnemonic(self) -> String {
         format!("ld.volatile.global.{}", self.type_suffix())
     }
@@ -829,6 +835,19 @@ impl GlobalLoadOp {
         matches!(
             self,
             GlobalLoadOp::U64 | GlobalLoadOp::S64 | GlobalLoadOp::B64
+        )
+    }
+
+    fn supports_uniform(self) -> bool {
+        matches!(
+            self,
+            GlobalLoadOp::U8
+                | GlobalLoadOp::S8
+                | GlobalLoadOp::U16
+                | GlobalLoadOp::S16
+                | GlobalLoadOp::U32
+                | GlobalLoadOp::U64
+                | GlobalLoadOp::S64
         )
     }
 }
@@ -2286,6 +2305,23 @@ impl SelpOp {
 }
 
 #[derive(Clone, Copy)]
+enum Selp64Op {
+    B64,
+    U64,
+    S64,
+}
+
+impl Selp64Op {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Selp64Op::B64 => "selp.b64",
+            Selp64Op::U64 => "selp.u64",
+            Selp64Op::S64 => "selp.s64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum SpecialRegOp {
     TidX,
     TidY,
@@ -3639,6 +3675,7 @@ enum Inst {
         op: GlobalLoadOp,
         cache: GlobalLoadCacheOp,
         volatile: bool,
+        uniform: bool,
         dst: u32,
         offset: u32,
     },
@@ -3647,6 +3684,7 @@ enum Inst {
         op: GlobalLoadOp,
         cache: GlobalLoadCacheOp,
         volatile: bool,
+        uniform: bool,
         dst: u32,
         offset: u32,
         cmp: CmpOp,
@@ -4738,8 +4776,9 @@ enum Inst {
         guard_cb: Operand,
         guard_pred: u32,
     },
-    /// 64-bit compare plus `selp.b64`, keeping the selected low 32 bits.
+    /// 64-bit compare plus 64-bit `selp`, keeping the selected low 32 bits.
     WideSelp {
+        op: Selp64Op,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -6126,6 +6165,7 @@ impl<'a> Generator<'a> {
 
     fn pick_wide_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::WideSelp {
+            op: pick_selp64(u)?,
             cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
             ca: self.pick_guard_operand(u)?,
             cb: self.pick_guard_operand(u)?,
@@ -6333,7 +6373,13 @@ impl<'a> Generator<'a> {
         };
         let op = *u.choose(ops)?;
         let volatile = self.pick_volatile_memory(u)?;
+        let uniform = !volatile
+            && op.supports_uniform()
+            && self.cfg.emit_uniform_global_loads
+            && u.int_in_range(0..=3)? == 0;
         let cache = if volatile {
+            GlobalLoadCacheOp::Default
+        } else if uniform {
             GlobalLoadCacheOp::Default
         } else {
             self.pick_global_load_cache(u)?
@@ -6348,6 +6394,7 @@ impl<'a> Generator<'a> {
                 op,
                 cache,
                 volatile,
+                uniform,
                 dst,
                 offset,
                 cmp,
@@ -6360,6 +6407,7 @@ impl<'a> Generator<'a> {
             op,
             cache,
             volatile,
+            uniform,
             dst,
             offset,
         })
@@ -9964,12 +10012,15 @@ impl<'a> Generator<'a> {
                 op,
                 cache,
                 volatile,
+                uniform,
                 dst,
                 offset,
             } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 let mnemonic = if volatile {
                     op.volatile_mnemonic()
+                } else if uniform {
+                    op.uniform_mnemonic()
                 } else {
                     op.mnemonic_with_cache(cache)
                 };
@@ -9979,6 +10030,7 @@ impl<'a> Generator<'a> {
                 op,
                 cache,
                 volatile,
+                uniform,
                 dst,
                 offset,
                 cmp,
@@ -9990,6 +10042,8 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 let mnemonic = if volatile {
                     op.volatile_mnemonic()
+                } else if uniform {
+                    op.uniform_mnemonic()
                 } else {
                     op.mnemonic_with_cache(cache)
                 };
@@ -12516,6 +12570,7 @@ impl<'a> Generator<'a> {
                 .unwrap();
             }
             Inst::WideSelp {
+                op,
                 cmp,
                 ca,
                 cb,
@@ -12543,7 +12598,7 @@ impl<'a> Generator<'a> {
                 write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
                 false_value.emit(s);
                 writeln!(s, ";").unwrap();
-                writeln!(s, "    selp.b64     %rd6, %rd6, %rd7, %p{pred};").unwrap();
+                writeln!(s, "    {:<12} %rd6, %rd6, %rd7, %p{pred};", op.mnemonic()).unwrap();
                 writeln!(s, "    mov.b64      {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
             Inst::WideUnary { op, dst, src } => {
@@ -14316,6 +14371,11 @@ fn pick_selp(u: &mut Unstructured, emit_typed_selp: bool) -> Result<SelpOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_selp64(u: &mut Unstructured) -> Result<Selp64Op> {
+    let ops = [Selp64Op::B64, Selp64Op::U64, Selp64Op::S64];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
     let ops = [
         SpecialRegOp::TidX,
@@ -15069,6 +15129,15 @@ mod tests {
         "ld.global.u32",
         "ld.global.u64",
         "ld.global.s64",
+    ];
+    const UNIFORM_GLOBAL_LOAD_MNEMONICS: &[&str] = &[
+        "ldu.global.u8",
+        "ldu.global.s8",
+        "ldu.global.u16",
+        "ldu.global.s16",
+        "ldu.global.u32",
+        "ldu.global.u64",
+        "ldu.global.s64",
     ];
     const GLOBAL_LOAD_CACHE_PREFIXES: &[&str] = &[
         "ld.global.ca.",
@@ -16124,7 +16193,7 @@ mod tests {
         "setp.ge.or.s64",
         "setp.ge.xor.s64",
     ];
-    const WIDE_SELP_MNEMONICS: &[&str] = &["selp.b64"];
+    const WIDE_SELP_MNEMONICS: &[&str] = &["selp.b64", "selp.u64", "selp.s64"];
     const WIDE_UNARY_MNEMONICS: &[&str] = &[
         "not.b64", "cnot.b64", "popc.b64", "clz.b64", "brev.b64", "neg.s64", "abs.s64",
     ];
@@ -16364,6 +16433,7 @@ mod tests {
             PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_POST_KNOWN_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
+            UNIFORM_GLOBAL_LOAD_MNEMONICS,
             GLOBAL_STORE_MNEMONICS,
             CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
@@ -16550,6 +16620,9 @@ mod tests {
             if let Some(width) = scalar_global_load_width(type_suffix) {
                 return Some(width);
             }
+        }
+        if let Some(type_suffix) = mnemonic.strip_prefix("ldu.global.") {
+            return scalar_global_load_width(type_suffix);
         }
         if let Some(type_suffix) = mnemonic.strip_prefix("ld.volatile.global.") {
             return scalar_global_load_width(type_suffix);
@@ -17853,7 +17926,7 @@ mod tests {
         let cfg = coverage_heavy_config();
         let mnemonics = default_profile_mnemonics();
 
-        assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
+        assert_mnemonic_coverage(&cfg, 32768, 4096, &mnemonics);
     }
 
     #[test]
@@ -17888,7 +17961,7 @@ mod tests {
         let cfg = post_known_bug_suppression_config();
         let mnemonics = post_known_bug_suppression_mnemonics();
 
-        assert_mnemonic_coverage(&cfg, 32768, 2048, &mnemonics);
+        assert_mnemonic_coverage(&cfg, 32768, 4096, &mnemonics);
     }
 
     #[test]
@@ -19317,6 +19390,31 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in GLOBAL_LOAD_MNEMONICS {
+                assert!(
+                    !has_body_global_load(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+            for mnemonic in UNIFORM_GLOBAL_LOAD_MNEMONICS {
+                assert!(
+                    !has_body_global_load(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn uniform_global_load_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_uniform_global_loads: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in UNIFORM_GLOBAL_LOAD_MNEMONICS {
                 assert!(
                     !has_body_global_load(&ptx, mnemonic),
                     "seed {seed:x} emitted body {mnemonic}"
@@ -22335,10 +22433,12 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
-            assert!(
-                !has_mnemonic(&ptx, "selp.b64"),
-                "seed {seed:x} emitted selp.b64"
-            );
+            for mnemonic in WIDE_SELP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
         }
     }
 
@@ -22366,10 +22466,12 @@ mod tests {
         for seed in 0..2048 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            assert!(
-                !has_mnemonic(&ptx, "selp.b64"),
-                "seed {seed:x} emitted selp.b64"
-            );
+            for mnemonic in WIDE_SELP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
         }
     }
 
