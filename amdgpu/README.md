@@ -44,12 +44,13 @@ They currently build a conservative, defined subset of integer IR: no `undef`,
 no explicit poison values, no `nuw` / `nsw` / `exact`, no `inbounds`, no
 integer division except nonzero-denominator `udiv` / `urem`, only masked or
 constant shift amounts, and only the fixed skeleton input load/output store.
-Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
-rare signed division/remainder by proven-positive divisors,
-`i64` subexpressions truncated to `i32`, `<2 x i32>` / `<4 x i32>` vector
-subexpressions and narrow `<4/8 x i8>` / `<4/8 x i16>` vector subexpressions
-reduced back to `i32`, vector forms of LLVM bit/min/max/saturation/absolute
-intrinsics, explicit `i1` boolean subexpressions reduced back to `i32`, and
+Coverage includes scalar `i32` integer arithmetic, bitwise ops,
+compares/selects, rare signed division/remainder by proven-positive divisors,
+standalone `i8` / `i16` scalar subexpressions, `i64` subexpressions truncated
+to `i32`, `<2 x i32>` / `<4 x i32>` vector subexpressions and narrow
+`<4/8 x i8>` / `<4/8 x i16>` vector subexpressions reduced back to `i32`,
+vector forms of LLVM bit/min/max/saturation/absolute intrinsics, explicit `i1`
+boolean subexpressions reduced back to `i32`, and
 LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
@@ -243,7 +244,7 @@ Tested toolchains as of 2026-05-18:
 | [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately. |
 | [m029-fshl-select-phi](known-miscompiles/m029-fshl-select-phi/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a signed compare/select over `y & x`, where `x` is a complemented masked `fshl`, so the true zero arm is chosen when the signed compare is false. |
 | [m030-ctlz-shl-or-bitop3](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a low-bit `or` through `v_bitop3_b32` using the unmasked `%n` value instead of `%n & 1`. |
-| [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `(x \| 255) - x` instead of `(x \| 255) - -1`. |
+| [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `or(x, 255) - x` instead of `or(x, 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
 | [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |

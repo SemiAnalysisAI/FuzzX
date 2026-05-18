@@ -3217,6 +3217,137 @@ Value *emitSafeInputLoadInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomNarrowScalarInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *NarrowTy =
+      (Gen() % 2) == 0 ? Type::getInt8Ty(Ctx) : Type::getInt16Ty(Ctx);
+  unsigned Width = cast<IntegerType>(NarrowTy)->getBitWidth();
+  Value *NA = B.CreateTrunc(A, NarrowTy, Twine(NamePrefix) + ".trunc.a");
+  Value *NBSeed = nullptr;
+  if ((Gen() % 3) == 0)
+    NBSeed = ConstantInt::get(NarrowTy, randomInteresting64(Gen));
+  else
+    NBSeed = B.CreateTrunc(Bv, NarrowTy, Twine(NamePrefix) + ".trunc.b");
+
+  Value *Result = nullptr;
+  switch (Gen() % 22) {
+  case 0:
+    Result = B.CreateAdd(NA, NBSeed, Twine(NamePrefix) + ".add");
+    break;
+  case 1:
+    Result = B.CreateSub(NA, NBSeed, Twine(NamePrefix) + ".sub");
+    break;
+  case 2:
+    Result = B.CreateMul(NA, NBSeed, Twine(NamePrefix) + ".mul");
+    break;
+  case 3:
+    Result = B.CreateXor(NA, NBSeed, Twine(NamePrefix) + ".xor");
+    break;
+  case 4:
+    Result = B.CreateAnd(NA, NBSeed, Twine(NamePrefix) + ".and");
+    break;
+  case 5:
+    Result = B.CreateOr(NA, NBSeed, Twine(NamePrefix) + ".or");
+    break;
+  case 6:
+    Result = B.CreateShl(NA, ConstantInt::get(NarrowTy, Gen() % Width),
+                         Twine(NamePrefix) + ".shl");
+    break;
+  case 7:
+    Result = B.CreateLShr(NA, ConstantInt::get(NarrowTy, Gen() % Width),
+                          Twine(NamePrefix) + ".lshr");
+    break;
+  case 8:
+    Result = B.CreateAShr(NA, ConstantInt::get(NarrowTy, Gen() % Width),
+                          Twine(NamePrefix) + ".ashr");
+    break;
+  case 9:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctpop, {NarrowTy}),
+        {NA}, Twine(NamePrefix) + ".ctpop");
+    break;
+  case 10:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::bitreverse,
+                                          {NarrowTy}),
+        {NA}, Twine(NamePrefix) + ".bitreverse");
+    break;
+  case 11:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctlz, {NarrowTy}),
+        {NA, ConstantInt::getFalse(Ctx)}, Twine(NamePrefix) + ".ctlz");
+    break;
+  case 12:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::cttz, {NarrowTy}),
+        {NA, ConstantInt::getFalse(Ctx)}, Twine(NamePrefix) + ".cttz");
+    break;
+  case 13:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {NarrowTy}),
+        {NA, ConstantInt::getFalse(Ctx)}, Twine(NamePrefix) + ".abs");
+    break;
+  case 14:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".umin");
+    break;
+  case 15:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".umax");
+    break;
+  case 16:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".smin");
+    break;
+  case 17:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".smax");
+    break;
+  case 18:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::uadd_sat, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".uadd_sat");
+    break;
+  case 19:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::usub_sat, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".usub_sat");
+    break;
+  case 20:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".sadd_sat");
+    break;
+  default:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {NarrowTy}),
+        {NA, NBSeed}, Twine(NamePrefix) + ".ssub_sat");
+    break;
+  }
+
+  Value *Ext = (Gen() % 2) == 0
+                   ? B.CreateZExt(Result, I32, Twine(NamePrefix) + ".zext")
+                   : B.CreateSExt(Result, I32, Twine(NamePrefix) + ".sext");
+  switch (Gen() % 4) {
+  case 0:
+    return Ext;
+  case 1:
+    return B.CreateXor(Ext, A, Twine(NamePrefix) + ".xor.i32");
+  case 2:
+    return B.CreateAdd(Ext, Bv, Twine(NamePrefix) + ".add.i32");
+  default:
+    return B.CreateSub(A, Ext, Twine(NamePrefix) + ".sub.i32");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -3226,7 +3357,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 96) {
+  switch (Gen() % 102) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -3399,6 +3530,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 79:
     return emitRandomAMDGPUIntrinsicInstruction(B, M, A, Bv, Gen,
                                                 "fuzz.amdgcn");
+  case 80:
+  case 81:
+  case 82:
+  case 83:
+  case 84:
+  case 85:
+    return emitRandomNarrowScalarInstruction(B, M, A, Bv, Gen, "fuzz.narrow");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -3433,7 +3571,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 80) {
+  switch (Gen() % 86) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -3594,6 +3732,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 71:
     return emitRandomAMDGPUIntrinsicInstruction(B, M, A, Bv, Gen,
                                                 "fuzz.cfg.amdgcn");
+  case 72:
+  case 73:
+  case 74:
+  case 75:
+  case 76:
+  case 77:
+    return emitRandomNarrowScalarInstruction(B, M, A, Bv, Gen,
+                                             "fuzz.cfg.narrow");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4318,7 +4464,8 @@ void mutateIRModifyConstant(Module &M, std::minstd_rand &Gen) {
        I->getOpcode() == Instruction::LShr ||
        I->getOpcode() == Instruction::AShr) &&
       IOp == 1) {
-    I->setOperand(IOp, ConstantInt::get(Ty, Gen() & 31u));
+    if (unsigned Width = integerScalarWidth(I->getType()))
+      I->setOperand(IOp, ConstantInt::get(Ty, Gen() % Width));
   } else if (Ty->isIntegerTy(1))
     I->setOperand(IOp, ConstantInt::get(Ty, Gen() & 1));
   else
