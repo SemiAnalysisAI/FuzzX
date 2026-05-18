@@ -101,6 +101,8 @@ pub struct GenConfig {
     pub emit_predicated_mad: bool,
     pub emit_predicated_sad: bool,
     pub emit_predicated_slct: bool,
+    pub emit_predicated_dp: bool,
+    pub emit_predicated_video: bool,
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_video: bool,
@@ -178,6 +180,8 @@ impl Default for GenConfig {
             emit_predicated_mad: true,
             emit_predicated_sad: true,
             emit_predicated_slct: true,
+            emit_predicated_dp: true,
+            emit_predicated_video: true,
             emit_set: true,
             emit_s32_slct: true,
             emit_video: true,
@@ -915,6 +919,18 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred dp4a.* dst, a, b, c;`.
+    PredicatedDp4a {
+        op: Dp4aOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `dp2a.{lo,hi}.{u32,s32}.{u32,s32} dst, a, b, c;` — 2-lane dot product.
     Dp2a {
         op: Dp2aOp,
@@ -923,6 +939,18 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred dp2a.* dst, a, b, c;`.
+    PredicatedDp2a {
+        op: Dp2aOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Two-/four-lane unsigned video arithmetic with an accumulator.
     Video {
         op: VideoOp,
@@ -930,6 +958,18 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred v* dst, a, b, c;`.
+    PredicatedVideo {
+        op: VideoOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `mad.lo.u32 dst, a, b, c;` — (a*b + c) low 32 bits. Heavy optimizer
     /// fold target (mul+add → mad).
@@ -1646,13 +1686,28 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 254 {
             if self.cfg.emit_video && u.arbitrary::<bool>()? {
-                Ok(Inst::Video {
-                    op: pick_video(u, self.cfg.emit_vsub4)?,
-                    dst: self.pick_dst(u)?,
-                    a: Operand::Reg(self.pick_dst(u)?),
-                    b: Operand::Reg(self.pick_dst(u)?),
-                    c: Operand::Reg(self.pick_dst(u)?),
-                })
+                let op = pick_video(u, self.cfg.emit_vsub4)?;
+                if self.cfg.emit_predicated_video && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedVideo {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: Operand::Reg(self.pick_dst(u)?),
+                        b: Operand::Reg(self.pick_dst(u)?),
+                        c: Operand::Reg(self.pick_dst(u)?),
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Video {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: Operand::Reg(self.pick_dst(u)?),
+                        b: Operand::Reg(self.pick_dst(u)?),
+                        c: Operand::Reg(self.pick_dst(u)?),
+                    })
+                }
             } else {
                 let op = pick_sad(u)?;
                 if self.cfg.emit_predicated_sad && u.arbitrary::<bool>()? {
@@ -1701,21 +1756,51 @@ impl<'a> Generator<'a> {
                 })
             }
         } else if self.cfg.emit_dp2a && u.arbitrary::<bool>()? {
-            Ok(Inst::Dp2a {
-                op: pick_dp2a(u)?,
-                dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
-                c: self.pick_operand(u)?,
-            })
+            let op = pick_dp2a(u)?;
+            if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedDp2a {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_inst_pred(u)?,
+                })
+            } else {
+                Ok(Inst::Dp2a {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
         } else {
-            Ok(Inst::Dp4a {
-                op: pick_dp4a(u)?,
-                dst: self.pick_dst(u)?,
-                a: self.pick_operand(u)?,
-                b: self.pick_operand(u)?,
-                c: self.pick_operand(u)?,
-            })
+            let op = pick_dp4a(u)?;
+            if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedDp4a {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    ca: self.pick_operand(u)?,
+                    cb: self.pick_operand(u)?,
+                    pred: self.alloc_inst_pred(u)?,
+                })
+            } else {
+                Ok(Inst::Dp4a {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_operand(u)?,
+                    b: self.pick_operand(u)?,
+                    c: self.pick_operand(u)?,
+                })
+            }
         }
     }
 
@@ -2255,6 +2340,26 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedDp4a {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Dp2a { op, dst, a, b, c } => {
                 write!(s, "    {:<17} %r{dst}, ", op.mnemonic()).unwrap();
                 a.emit(s);
@@ -2264,8 +2369,60 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedDp2a {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<12} %r{dst}, ",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Video { op, dst, a, b, c } => {
                 write!(s, "    {:<24} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedVideo {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<19} %r{dst}, ",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -3205,6 +3362,18 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| SLCT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_dp(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| DP4A_MNEMONICS.contains(&op) || DP2A_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_video(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| VIDEO_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_funnel(ptx: &str) -> bool {
@@ -5069,6 +5238,45 @@ mod tests {
     }
 
     #[test]
+    fn predicated_dp_generation_is_reachable() {
+        let cfg = dot_video_focused_config();
+        let mut saw_dp4a = false;
+        let mut saw_dp2a = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                saw_dp4a |= DP4A_MNEMONICS.contains(&op);
+                saw_dp2a |= DP2A_MNEMONICS.contains(&op);
+            }
+            if saw_dp4a && saw_dp2a {
+                break;
+            }
+        }
+
+        assert!(saw_dp4a, "sample did not emit predicated dp4a");
+        assert!(saw_dp2a, "sample did not emit predicated dp2a");
+    }
+
+    #[test]
+    fn predicated_dp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_dp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_dp(&ptx),
+                "seed {seed:x} emitted predicated dot product"
+            );
+        }
+    }
+
+    #[test]
     fn video_generation_is_reachable() {
         let mnemonics = [
             "vadd2.u32.u32.u32",
@@ -5143,6 +5351,43 @@ mod tests {
             ] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
+        }
+    }
+
+    #[test]
+    fn predicated_video_generation_is_reachable() {
+        let cfg = dot_video_focused_config();
+        let mut saw_predicated_video = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_video |= has_predicated_video(&ptx);
+            if saw_predicated_video {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_video,
+            "no seed in sample emitted predicated video"
+        );
+    }
+
+    #[test]
+    fn predicated_video_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_video: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_video(&ptx),
+                "seed {seed:x} emitted predicated video"
+            );
         }
     }
 

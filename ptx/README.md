@@ -262,6 +262,8 @@ that feature.
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SLCT` | Predicated `slct` instructions. |
+| `DIV_DISABLE_PREDICATED_DP` | Predicated `dp4a` and `dp2a` instructions. |
+| `DIV_DISABLE_PREDICATED_VIDEO` | Predicated video instructions. |
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |
