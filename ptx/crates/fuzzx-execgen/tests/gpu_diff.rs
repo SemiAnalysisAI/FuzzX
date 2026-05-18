@@ -23,6 +23,7 @@ fn every_generated_kernel_matches_at_o0_and_o3() {
         emit_minmax: false,
         emit_sat_arith: false,
         emit_mulhi: false,
+        emit_mad_hi: false,
         emit_prmt: false,
         emit_not: false,
         emit_abs: false,

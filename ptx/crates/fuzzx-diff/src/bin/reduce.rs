@@ -176,6 +176,26 @@ fn line_mentions_token(line: &str, needle: &str) -> bool {
         .any(|token| token == needle)
 }
 
+fn is_branch_line(line: &str) -> bool {
+    let mut tokens = line.split_whitespace();
+    let first = tokens.next();
+    let op = if first.is_some_and(|token| token.starts_with('@')) {
+        tokens.next()
+    } else {
+        first
+    };
+    op == Some("bra")
+}
+
+fn is_loop_counter_decrement(line: &str) -> bool {
+    let line = line.trim_end_matches(';');
+    let Some(rest) = line.strip_prefix("sub.u32") else {
+        return false;
+    };
+    let operands: Vec<_> = rest.split(',').map(str::trim).collect();
+    operands.len() == 3 && operands[0] == operands[1] && operands[2] == "1"
+}
+
 fn declared_b32_scratch_reg(lines: &[&str]) -> Option<String> {
     lines.iter().find_map(|line| {
         let trimmed = line.trim();
@@ -476,6 +496,12 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         if t.is_empty() || t.ends_with(':') {
             continue;
         }
+        // Structured-control branches and loop-counter decrements are control
+        // skeleton, not reducer payload. Removing them can produce non-
+        // terminating kernels that wedge the reducer's validation launch.
+        if is_branch_line(t) || is_loop_counter_decrement(t) {
+            continue;
+        }
         // Removing a still-used predicate definition can leave an undefined
         // branch or selp predicate while still producing deterministic-looking
         // output. Unused predicate definitions are normal reducer clutter.
@@ -518,8 +544,8 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        declared_b32_scratch_reg, line_mentions_body_wide_scratch, line_mentions_pred,
-        removable_indices,
+        declared_b32_scratch_reg, is_branch_line, is_loop_counter_decrement,
+        line_mentions_body_wide_scratch, line_mentions_pred, removable_indices,
     };
 
     #[test]
@@ -549,6 +575,16 @@ mod tests {
             ".reg .b64 %rd<8>;",
         ];
         assert_eq!(declared_b32_scratch_reg(&lines).as_deref(), Some("%r33"));
+    }
+
+    #[test]
+    fn control_skeleton_matching_catches_branches_and_loop_decrements() {
+        assert!(is_branch_line("bra             exit;"));
+        assert!(is_branch_line("@%p0 bra   structured_loop_done;"));
+        assert!(!is_branch_line("@%p0 add.u32 %r1, %r2, %r3;"));
+        assert!(is_loop_counter_decrement("sub.u32         %r9, %r9, 1;"));
+        assert!(!is_loop_counter_decrement("sub.u32         %r9, %r8, 1;"));
+        assert!(!is_loop_counter_decrement("sub.s32         %r9, %r9, 1;"));
     }
 
     #[test]
@@ -598,6 +634,9 @@ keep:
         assert!(!removable.iter().any(|&i| lines[i].trim().contains("%r7")));
         assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd6")));
         assert!(!removable.iter().any(|&i| lines[i].trim().contains("%rd7")));
+        assert!(!removable
+            .iter()
+            .any(|&i| lines[i].trim().starts_with("@%p0 bra")));
         assert!(!removable
             .iter()
             .any(|&i| lines[i].trim().starts_with("cvta.to.global.u64")));
