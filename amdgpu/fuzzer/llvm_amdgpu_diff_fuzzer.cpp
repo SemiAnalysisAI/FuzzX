@@ -2524,6 +2524,44 @@ Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                     Value *Bv, std::minstd_rand &Gen,
+                                     StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  switch (Gen() % 6) {
+  case 0: {
+    Value *Sum = B.CreateAdd(A, Bv, Twine(NamePrefix) + ".uadd");
+    Value *Overflow =
+        B.CreateICmpULT(Sum, A, Twine(NamePrefix) + ".uadd.ov");
+    return B.CreateSelect(Overflow, ci32(Ctx, 0xffffffffu), Sum,
+                          Twine(NamePrefix) + ".uadd.sat");
+  }
+  case 1: {
+    Value *Diff = B.CreateSub(A, Bv, Twine(NamePrefix) + ".usub");
+    Value *Underflow =
+        B.CreateICmpULT(A, Bv, Twine(NamePrefix) + ".usub.ov");
+    return B.CreateSelect(Underflow, ci32(Ctx, 0), Diff,
+                          Twine(NamePrefix) + ".usub.sat");
+  }
+  case 2: {
+    Value *Cmp = B.CreateICmpULT(A, Bv, Twine(NamePrefix) + ".umin.cmp");
+    return B.CreateSelect(Cmp, A, Bv, Twine(NamePrefix) + ".umin");
+  }
+  case 3: {
+    Value *Cmp = B.CreateICmpUGT(A, Bv, Twine(NamePrefix) + ".umax.cmp");
+    return B.CreateSelect(Cmp, A, Bv, Twine(NamePrefix) + ".umax");
+  }
+  case 4: {
+    Value *Cmp = B.CreateICmpSLT(A, Bv, Twine(NamePrefix) + ".smin.cmp");
+    return B.CreateSelect(Cmp, A, Bv, Twine(NamePrefix) + ".smin");
+  }
+  default: {
+    Value *Cmp = B.CreateICmpSGT(A, Bv, Twine(NamePrefix) + ".smax.cmp");
+    return B.CreateSelect(Cmp, A, Bv, Twine(NamePrefix) + ".smax");
+  }
+  }
+}
+
 FCmpInst::Predicate randomFCmpPredicate(std::minstd_rand &Gen) {
   static constexpr std::array<FCmpInst::Predicate, 6> Predicates = {
       FCmpInst::FCMP_OEQ, FCmpInst::FCMP_ONE, FCmpInst::FCMP_OGT,
@@ -3592,7 +3630,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 102) {
+  switch (Gen() % 108) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -3772,6 +3810,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 84:
   case 85:
     return emitRandomNarrowScalarInstruction(B, M, A, Bv, Gen, "fuzz.narrow");
+  case 86:
+  case 87:
+  case 88:
+  case 89:
+  case 90:
+  case 91:
+    return emitRandomUnsignedSelectIdiom(B, A, Bv, Gen, "fuzz.select.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -3806,7 +3851,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 86) {
+  switch (Gen() % 92) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -3975,6 +4020,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 77:
     return emitRandomNarrowScalarInstruction(B, M, A, Bv, Gen,
                                              "fuzz.cfg.narrow");
+  case 78:
+  case 79:
+  case 80:
+  case 81:
+  case 82:
+  case 83:
+    return emitRandomUnsignedSelectIdiom(B, A, Bv, Gen,
+                                         "fuzz.cfg.select.idiom");
   default:
     switch (Gen() % 5) {
     case 0:

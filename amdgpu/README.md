@@ -60,7 +60,8 @@ to `i32`, `<2 x i32>` / `<4 x i32>` vector subexpressions including fixed
 subexpressions reduced back to `i32`,
 scalar and vector forms of LLVM bit/min/max/saturation/absolute intrinsics,
 narrow scalar funnel shifts and unsigned division/remainder by proven-nonzero
-denominators, explicit `i1` boolean subexpressions reduced back to `i32`, and
+denominators, explicit `i1` boolean subexpressions reduced back to `i32`,
+pure-IR unsigned min/max and saturating add/sub select idioms, and
 LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
