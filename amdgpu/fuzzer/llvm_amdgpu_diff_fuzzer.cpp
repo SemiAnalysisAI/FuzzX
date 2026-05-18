@@ -2577,6 +2577,75 @@ Value *emitRandomPredicateMaskIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomBitfieldIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                               std::minstd_rand &Gen, StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *ShiftSeed = (Gen() % 2) == 0 ? A : Bv;
+  Value *WidthSeed = (Gen() % 2) == 0 ? Bv : interestingI32(Ctx, Gen);
+  Value *Shift =
+      B.CreateAnd(ShiftSeed, ci32(Ctx, 15), Twine(NamePrefix) + ".shift");
+  Value *WidthMinusOne =
+      B.CreateAnd(WidthSeed, ci32(Ctx, 15), Twine(NamePrefix) + ".width.m1");
+  Value *Width =
+      B.CreateAdd(WidthMinusOne, ci32(Ctx, 1), Twine(NamePrefix) + ".width");
+  Value *InvWidth =
+      B.CreateAnd(B.CreateSub(ci32(Ctx, 32), Width,
+                              Twine(NamePrefix) + ".invwidth.raw"),
+                  ci32(Ctx, 31), Twine(NamePrefix) + ".invwidth");
+  Value *Mask =
+      B.CreateLShr(ci32(Ctx, 0xffffffffu), InvWidth,
+                   Twine(NamePrefix) + ".mask");
+  Value *Shifted = B.CreateLShr(A, Shift, Twine(NamePrefix) + ".shifted");
+  Value *Extracted =
+      B.CreateAnd(Shifted, Mask, Twine(NamePrefix) + ".extracted");
+
+  switch (Gen() % 6) {
+  case 0:
+    return Extracted;
+  case 1: {
+    Value *Left =
+        B.CreateShl(Extracted, InvWidth, Twine(NamePrefix) + ".sext.left");
+    return B.CreateAShr(Left, InvWidth, Twine(NamePrefix) + ".sext");
+  }
+  case 2: {
+    Value *FieldMask =
+        B.CreateShl(Mask, Shift, Twine(NamePrefix) + ".fieldmask");
+    Value *NotFieldMask =
+        B.CreateXor(FieldMask, ci32(Ctx, 0xffffffffu),
+                    Twine(NamePrefix) + ".notfieldmask");
+    Value *Cleared = B.CreateAnd(A, NotFieldMask, Twine(NamePrefix) + ".clear");
+    Value *Payload =
+        B.CreateAnd(Bv, Mask, Twine(NamePrefix) + ".payload.masked");
+    Value *Inserted =
+        B.CreateShl(Payload, Shift, Twine(NamePrefix) + ".payload.shifted");
+    return B.CreateOr(Cleared, Inserted, Twine(NamePrefix) + ".insert");
+  }
+  case 3: {
+    Value *FieldMask =
+        B.CreateShl(Mask, Shift, Twine(NamePrefix) + ".fieldmask");
+    Value *NotFieldMask =
+        B.CreateXor(FieldMask, ci32(Ctx, 0xffffffffu),
+                    Twine(NamePrefix) + ".notfieldmask");
+    Value *Cleared = B.CreateAnd(A, NotFieldMask, Twine(NamePrefix) + ".clear");
+    Value *Payload =
+        B.CreateShl(B.CreateAnd(Bv, Mask, Twine(NamePrefix) + ".payload.masked"),
+                    Shift, Twine(NamePrefix) + ".payload.shifted");
+    Value *PayloadField =
+        B.CreateAnd(Payload, FieldMask, Twine(NamePrefix) + ".payload.field");
+    return B.CreateAdd(Cleared, PayloadField,
+                       Twine(NamePrefix) + ".insert.add");
+  }
+  case 4:
+    return B.CreateOr(Extracted, B.CreateShl(Mask, Shift,
+                                             Twine(NamePrefix) + ".mask.shift"),
+                      Twine(NamePrefix) + ".extract.or.mask");
+  default:
+    return B.CreateXor(Extracted, B.CreateAnd(Bv, Mask,
+                                              Twine(NamePrefix) + ".rhs.mask"),
+                       Twine(NamePrefix) + ".extract.xor");
+  }
+}
+
 Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
                                      Value *Bv, std::minstd_rand &Gen,
                                      StringRef NamePrefix) {
@@ -3822,7 +3891,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 126) {
+  switch (Gen() % 132) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4032,6 +4101,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 108:
   case 109:
     return emitRandomPredicateMaskIdiom(B, A, Bv, Gen, "fuzz.predmask.idiom");
+  case 110:
+  case 111:
+  case 112:
+  case 113:
+  case 114:
+  case 115:
+    return emitRandomBitfieldIdiom(B, A, Bv, Gen, "fuzz.bitfield.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4066,7 +4142,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 110) {
+  switch (Gen() % 116) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4267,6 +4343,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 101:
     return emitRandomPredicateMaskIdiom(B, A, Bv, Gen,
                                         "fuzz.cfg.predmask.idiom");
+  case 102:
+  case 103:
+  case 104:
+  case 105:
+  case 106:
+  case 107:
+    return emitRandomBitfieldIdiom(B, A, Bv, Gen,
+                                   "fuzz.cfg.bitfield.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
