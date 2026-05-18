@@ -2562,6 +2562,104 @@ Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+struct SignedOverflowInfo {
+  Value *Wrapped;
+  Value *Overflow;
+  Value *NegativeOverflow;
+};
+
+SignedOverflowInfo buildSignedAddOverflowInfo(IRBuilder<NoFolder> &B, Value *A,
+                                              Value *Bv,
+                                              const Twine &NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *Sum = B.CreateAdd(A, Bv, Twine(NamePrefix) + ".sadd");
+  Value *SameSignBits =
+      B.CreateXor(B.CreateXor(A, Bv, Twine(NamePrefix) + ".sadd.abxor"),
+                  ci32(Ctx, 0xffffffffu), Twine(NamePrefix) + ".sadd.same");
+  Value *SignFlip = B.CreateXor(A, Sum, Twine(NamePrefix) + ".sadd.flip");
+  Value *OverflowBits =
+      B.CreateAnd(SameSignBits, SignFlip, Twine(NamePrefix) + ".sadd.ovbits");
+  Value *Overflow =
+      B.CreateICmpSLT(OverflowBits, ci32(Ctx, 0), Twine(NamePrefix) + ".sadd.ov");
+  Value *NegativeOverflow =
+      B.CreateICmpSLT(A, ci32(Ctx, 0), Twine(NamePrefix) + ".sadd.neg");
+  return {Sum, Overflow, NegativeOverflow};
+}
+
+SignedOverflowInfo buildSignedSubOverflowInfo(IRBuilder<NoFolder> &B, Value *A,
+                                              Value *Bv,
+                                              const Twine &NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *Diff = B.CreateSub(A, Bv, Twine(NamePrefix) + ".ssub");
+  Value *DifferentSignBits =
+      B.CreateXor(A, Bv, Twine(NamePrefix) + ".ssub.abxor");
+  Value *SignFlip = B.CreateXor(A, Diff, Twine(NamePrefix) + ".ssub.flip");
+  Value *OverflowBits = B.CreateAnd(DifferentSignBits, SignFlip,
+                                    Twine(NamePrefix) + ".ssub.ovbits");
+  Value *Overflow =
+      B.CreateICmpSLT(OverflowBits, ci32(Ctx, 0), Twine(NamePrefix) + ".ssub.ov");
+  Value *NegativeOverflow =
+      B.CreateICmpSLT(A, ci32(Ctx, 0), Twine(NamePrefix) + ".ssub.neg");
+  return {Diff, Overflow, NegativeOverflow};
+}
+
+Value *signedSaturatingSelect(IRBuilder<NoFolder> &B,
+                              const SignedOverflowInfo &Info,
+                              const Twine &NamePrefix) {
+  LLVMContext &Ctx = Info.Wrapped->getContext();
+  Value *SatValue =
+      B.CreateSelect(Info.NegativeOverflow, ci32(Ctx, 0x80000000u),
+                     ci32(Ctx, 0x7fffffffu),
+                     Twine(NamePrefix) + ".sat.value");
+  return B.CreateSelect(Info.Overflow, SatValue, Info.Wrapped,
+                        Twine(NamePrefix) + ".sat");
+}
+
+Value *emitRandomSignedOverflowSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                           Value *Bv, std::minstd_rand &Gen,
+                                           StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  switch (Gen() % 6) {
+  case 0:
+    return signedSaturatingSelect(
+        B, buildSignedAddOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".add"),
+        Twine(NamePrefix) + ".sadd");
+  case 1:
+    return signedSaturatingSelect(
+        B, buildSignedSubOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".sub"),
+        Twine(NamePrefix) + ".ssub");
+  case 2: {
+    SignedOverflowInfo Info =
+        buildSignedAddOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".add.flag");
+    Value *OverflowI32 =
+        B.CreateZExt(Info.Overflow, I32, Twine(NamePrefix) + ".sadd.ov.i32");
+    return B.CreateXor(Info.Wrapped, OverflowI32,
+                       Twine(NamePrefix) + ".sadd.xor");
+  }
+  case 3: {
+    SignedOverflowInfo Info =
+        buildSignedSubOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".sub.flag");
+    Value *OverflowI32 =
+        B.CreateZExt(Info.Overflow, I32, Twine(NamePrefix) + ".ssub.ov.i32");
+    return B.CreateAdd(Info.Wrapped, OverflowI32,
+                       Twine(NamePrefix) + ".ssub.add");
+  }
+  case 4: {
+    SignedOverflowInfo Info =
+        buildSignedAddOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".add.sel");
+    return B.CreateSelect(Info.Overflow, Bv, Info.Wrapped,
+                          Twine(NamePrefix) + ".sadd.select");
+  }
+  default: {
+    SignedOverflowInfo Info =
+        buildSignedSubOverflowInfo(B, A, Bv, Twine(NamePrefix) + ".sub.sel");
+    return B.CreateSelect(Info.Overflow, A, Info.Wrapped,
+                          Twine(NamePrefix) + ".ssub.select");
+  }
+  }
+}
+
 Value *emitRandomManualFunnelShiftIdiom(IRBuilder<NoFolder> &B, Value *A,
                                         Value *Bv, std::minstd_rand &Gen,
                                         StringRef NamePrefix) {
@@ -3671,7 +3769,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 114) {
+  switch (Gen() % 120) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -3866,6 +3964,14 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 97:
     return emitRandomManualFunnelShiftIdiom(B, A, Bv, Gen,
                                             "fuzz.funnel.idiom");
+  case 98:
+  case 99:
+  case 100:
+  case 101:
+  case 102:
+  case 103:
+    return emitRandomSignedOverflowSelectIdiom(B, A, Bv, Gen,
+                                               "fuzz.soverflow.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -3900,7 +4006,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 98) {
+  switch (Gen() % 104) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4085,6 +4191,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 89:
     return emitRandomManualFunnelShiftIdiom(B, A, Bv, Gen,
                                             "fuzz.cfg.funnel.idiom");
+  case 90:
+  case 91:
+  case 92:
+  case 93:
+  case 94:
+  case 95:
+    return emitRandomSignedOverflowSelectIdiom(B, A, Bv, Gen,
+                                               "fuzz.cfg.soverflow.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
