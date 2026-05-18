@@ -108,6 +108,7 @@ pub struct GenConfig {
     pub emit_const_memory: bool,
     pub emit_local_memory: bool,
     pub emit_shared_memory: bool,
+    pub emit_predicated_memory: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
@@ -305,6 +306,7 @@ impl Default for GenConfig {
             emit_const_memory: true,
             emit_local_memory: true,
             emit_shared_memory: true,
+            emit_predicated_memory: true,
             emit_f32_arith: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
@@ -2067,6 +2069,16 @@ enum Inst {
         dst: u32,
         offset: u32,
     },
+    /// Predicated bounded read-only global load from the input buffer.
+    PredicatedGlobalLoad {
+        op: GlobalLoadOp,
+        dst: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Store to and reload from this thread's output slice in global memory.
     GlobalStoreRoundtrip {
         op: GlobalStoreRoundtripOp,
@@ -2074,11 +2086,32 @@ enum Inst {
         src: u32,
         offset: u32,
     },
+    /// Predicated store/reload through this thread's output slice.
+    PredicatedGlobalStoreRoundtrip {
+        op: GlobalStoreRoundtripOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Bounded read-only load from module-scope constant memory.
     ConstLoad {
         op: ConstLoadOp,
         dst: u32,
         offset: u32,
+    },
+    /// Predicated bounded read-only load from module-scope constant memory.
+    PredicatedConstLoad {
+        op: ConstLoadOp,
+        dst: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Store to and reload from private per-thread local memory.
     LocalMem {
@@ -2087,12 +2120,34 @@ enum Inst {
         src: u32,
         offset: u32,
     },
+    /// Predicated store/reload through private per-thread local memory.
+    PredicatedLocalMem {
+        op: LocalMemOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Store to and reload from this thread's private shared-memory slot.
     SharedMem {
         op: SharedMemOp,
         dst: u32,
         src: u32,
         offset: u32,
+    },
+    /// Predicated store/reload through this thread's private shared-memory slot.
+    PredicatedSharedMem {
+        op: SharedMemOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized single-precision floating-point arithmetic.
     F32Arith {
@@ -4108,6 +4163,18 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_predicate_guard(
+        &mut self,
+        u: &mut Unstructured,
+    ) -> Result<(CmpOp, Operand, Operand, u32)> {
+        Ok((
+            pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            self.pick_guard_operand(u)?,
+            self.pick_guard_operand(u)?,
+            self.alloc_inst_pred(u)?,
+        ))
+    }
+
     fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [
             GlobalLoadOp::U8,
@@ -4120,11 +4187,20 @@ impl<'a> Generator<'a> {
         let width = op.width();
         let max_offset = input_len() as u32 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
-        Ok(Inst::GlobalLoad {
-            op,
-            dst: self.pick_dst(u)?,
-            offset,
-        })
+        let dst = self.pick_dst(u)?;
+        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedGlobalLoad {
+                op,
+                dst,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::GlobalLoad { op, dst, offset })
     }
 
     fn pick_global_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -4139,10 +4215,25 @@ impl<'a> Generator<'a> {
         let width = op.width();
         let max_offset = N_OUTPUTS * 4 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
+        let dst = self.pick_dst(u)?;
+        let src = self.pick_safe_reg(u)?;
+        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedGlobalStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
         Ok(Inst::GlobalStoreRoundtrip {
             op,
-            dst: self.pick_dst(u)?,
-            src: self.pick_safe_reg(u)?,
+            dst,
+            src,
             offset,
         })
     }
@@ -4159,11 +4250,20 @@ impl<'a> Generator<'a> {
         let width = op.width();
         let max_offset = CONST_MEM_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
-        Ok(Inst::ConstLoad {
-            op,
-            dst: self.pick_dst(u)?,
-            offset,
-        })
+        let dst = self.pick_dst(u)?;
+        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedConstLoad {
+                op,
+                dst,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::ConstLoad { op, dst, offset })
     }
 
     fn pick_local_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -4178,10 +4278,25 @@ impl<'a> Generator<'a> {
         let width = op.width();
         let max_offset = LOCAL_MEM_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
+        let dst = self.pick_dst(u)?;
+        let src = self.pick_safe_reg(u)?;
+        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedLocalMem {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
         Ok(Inst::LocalMem {
             op,
-            dst: self.pick_dst(u)?,
-            src: self.pick_safe_reg(u)?,
+            dst,
+            src,
             offset,
         })
     }
@@ -4198,10 +4313,25 @@ impl<'a> Generator<'a> {
         let width = op.width();
         let max_offset = SHARED_SLOT_BYTES - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
+        let dst = self.pick_dst(u)?;
+        let src = self.pick_safe_reg(u)?;
+        if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedSharedMem {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
         Ok(Inst::SharedMem {
             op,
-            dst: self.pick_dst(u)?,
-            src: self.pick_safe_reg(u)?,
+            dst,
+            src,
             offset,
         })
     }
@@ -5537,10 +5667,15 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
+            | Inst::PredicatedGlobalLoad { dst, .. }
             | Inst::GlobalStoreRoundtrip { dst, .. }
+            | Inst::PredicatedGlobalStoreRoundtrip { dst, .. }
             | Inst::ConstLoad { dst, .. }
+            | Inst::PredicatedConstLoad { dst, .. }
             | Inst::LocalMem { dst, .. }
+            | Inst::PredicatedLocalMem { dst, .. }
             | Inst::SharedMem { dst, .. }
+            | Inst::PredicatedSharedMem { dst, .. }
             | Inst::F32Arith { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::Sel { dst, .. }
@@ -6048,6 +6183,25 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
             }
+            Inst::PredicatedGlobalLoad {
+                op,
+                dst,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+            }
             Inst::GlobalStoreRoundtrip {
                 op,
                 dst,
@@ -6071,9 +6225,58 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
+            Inst::PredicatedGlobalStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} [%rd8 + {offset}], %r{src};",
+                    pred_guard(pred),
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, [%rd8 + {offset}];",
+                    pred_guard(pred),
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
             Inst::ConstLoad { op, dst, offset } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
                 writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
+            }
+            Inst::PredicatedConstLoad {
+                op,
+                dst,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
             }
             Inst::LocalMem {
                 op,
@@ -6091,6 +6294,33 @@ impl<'a> Generator<'a> {
                 writeln!(
                     s,
                     "    {:<13} %r{dst}, [%rd6 + {offset}];",
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::PredicatedLocalMem {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} [%rd6 + {offset}], %r{src};",
+                    pred_guard(pred),
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
+                    pred_guard(pred),
                     op.load_mnemonic()
                 )
                 .unwrap();
@@ -6118,6 +6348,40 @@ impl<'a> Generator<'a> {
                 writeln!(
                     s,
                     "    {:<13} %r{dst}, [%rd6 + {offset}];",
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::PredicatedSharedMem {
+                op,
+                dst,
+                src,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} [%rd6 + {offset}], %r{src};",
+                    pred_guard(pred),
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, [%rd6 + {offset}];",
+                    pred_guard(pred),
                     op.load_mnemonic()
                 )
                 .unwrap();
@@ -10253,6 +10517,32 @@ mod tests {
         (pred.starts_with("@%p") || pred.starts_with("@!%p")).then_some(op)
     }
 
+    fn has_predicated_memory_access(ptx: &str, mnemonics: &[&str], address: &str) -> bool {
+        ptx.lines().any(|line| {
+            line.contains(address)
+                && predicated_mnemonic(line).is_some_and(|op| mnemonics.contains(&op))
+        })
+    }
+
+    fn has_predicated_global_roundtrip_access(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            line.contains("[%rd8 + ")
+                && predicated_mnemonic(line).is_some_and(|op| {
+                    GLOBAL_LOAD_MNEMONICS.contains(&op) || GLOBAL_STORE_MNEMONICS.contains(&op)
+                })
+        })
+    }
+
+    fn has_any_predicated_memory_access(ptx: &str) -> bool {
+        has_predicated_memory_access(ptx, GLOBAL_LOAD_MNEMONICS, "[%rd6 + ")
+            || has_predicated_global_roundtrip_access(ptx)
+            || has_predicated_memory_access(ptx, CONST_LOAD_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, LOCAL_MEM_LOAD_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, LOCAL_MEM_STORE_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, SHARED_MEM_LOAD_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, SHARED_MEM_STORE_MNEMONICS, "[%rd6 + ")
+    }
+
     fn has_negated_predicate(ptx: &str) -> bool {
         ptx.lines()
             .any(|line| line.trim_start().starts_with("@!%p"))
@@ -12867,6 +13157,56 @@ mod tests {
                     "seed {seed:x} emitted out-of-slot {mnemonic} offset {offset}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn predicated_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_global_load = false;
+        let mut saw_global_roundtrip = false;
+        let mut saw_const = false;
+        let mut saw_local = false;
+        let mut saw_shared = false;
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_global_load |=
+                has_predicated_memory_access(&ptx, GLOBAL_LOAD_MNEMONICS, "[%rd6 + ");
+            saw_global_roundtrip |= has_predicated_global_roundtrip_access(&ptx);
+            saw_const |= has_predicated_memory_access(&ptx, CONST_LOAD_MNEMONICS, "[%rd6 + ");
+            saw_local |= has_predicated_memory_access(&ptx, LOCAL_MEM_LOAD_MNEMONICS, "[%rd6 + ")
+                || has_predicated_memory_access(&ptx, LOCAL_MEM_STORE_MNEMONICS, "[%rd6 + ");
+            saw_shared |= has_predicated_memory_access(&ptx, SHARED_MEM_LOAD_MNEMONICS, "[%rd6 + ")
+                || has_predicated_memory_access(&ptx, SHARED_MEM_STORE_MNEMONICS, "[%rd6 + ");
+            if saw_global_load && saw_global_roundtrip && saw_const && saw_local && saw_shared {
+                return;
+            }
+        }
+
+        assert!(
+            saw_global_load && saw_global_roundtrip && saw_const && saw_local && saw_shared,
+            "sample missed predicated memory: global_load={saw_global_load} \
+             global_roundtrip={saw_global_roundtrip} const={saw_const} \
+             local={saw_local} shared={saw_shared}"
+        );
+    }
+
+    #[test]
+    fn predicated_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_any_predicated_memory_access(&ptx),
+                "seed {seed:x} emitted predicated memory"
+            );
         }
     }
 
