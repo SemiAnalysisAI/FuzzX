@@ -113,6 +113,9 @@ pub struct GenConfig {
     pub emit_wide_reg_shifts: bool,
     pub emit_predicated_wide_shifts: bool,
     pub emit_predicated_wide_reg_shifts: bool,
+    pub emit_wide_divrem: bool,
+    pub emit_signed_wide_divrem: bool,
+    pub emit_predicated_wide_divrem: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
@@ -223,6 +226,9 @@ impl Default for GenConfig {
             emit_wide_reg_shifts: true,
             emit_predicated_wide_shifts: true,
             emit_predicated_wide_reg_shifts: true,
+            emit_wide_divrem: true,
+            emit_signed_wide_divrem: true,
+            emit_predicated_wide_divrem: true,
             emit_addc: true,
             emit_subc: true,
             emit_predicated_carry: true,
@@ -645,6 +651,36 @@ impl WideUnaryOp {
             self,
             WideUnaryOp::NotB64 | WideUnaryOp::CnotB64 | WideUnaryOp::BrevB64
         )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WideDivRemOp {
+    DivU64,
+    RemU64,
+    DivS64,
+    RemS64,
+}
+
+impl WideDivRemOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideDivRemOp::DivU64 => "div.u64",
+            WideDivRemOp::RemU64 => "rem.u64",
+            WideDivRemOp::DivS64 => "div.s64",
+            WideDivRemOp::RemS64 => "rem.s64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideDivRemOp::DivS64 | WideDivRemOp::RemS64 => "cvt.s64.s32",
+            WideDivRemOp::DivU64 | WideDivRemOp::RemU64 => "cvt.u64.u32",
+        }
+    }
+
+    fn is_signed(self) -> bool {
+        matches!(self, WideDivRemOp::DivS64 | WideDivRemOp::RemS64)
     }
 }
 
@@ -1346,6 +1382,24 @@ enum Inst {
         dst: u32,
         src: Operand,
         amount: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// 64-bit div/rem through scratch b64 registers with a nonzero immediate divisor.
+    WideDivRem {
+        op: WideDivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: i64,
+    },
+    /// Predicated 64-bit div/rem with a nonzero immediate divisor.
+    PredicatedWideDivRem {
+        op: WideDivRemOp,
+        dst: u32,
+        src: Operand,
+        divisor: i64,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2132,6 +2186,40 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_wide_divrem(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_wide_divrem(u, self.cfg.emit_signed_wide_divrem)?;
+        let divisor = self.pick_wide_divisor(u, op)?;
+        if self.cfg.emit_predicated_wide_divrem && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedWideDivRem {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_operand(u)?,
+                divisor,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideDivRem {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_operand(u)?,
+                divisor,
+            })
+        }
+    }
+
+    fn pick_wide_divisor(&mut self, u: &mut Unstructured, op: WideDivRemOp) -> Result<i64> {
+        let max = self.cfg.max_immediate.max(1).min(i32::MAX as u32);
+        let magnitude = i64::from(u.int_in_range(1..=max)?);
+        if op.is_signed() && u.arbitrary::<bool>()? {
+            Ok(-magnitude)
+        } else {
+            Ok(magnitude)
+        }
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -2621,7 +2709,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=8)?;
+            let wide_pick: u8 = u.int_in_range(0..=9)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -2717,6 +2805,8 @@ impl<'a> Generator<'a> {
                 self.pick_wide_setp_bool_bin(u)
             } else if self.cfg.emit_wide_unary && wide_pick == 6 {
                 self.pick_wide_unary(u)
+            } else if self.cfg.emit_wide_divrem && wide_pick == 7 {
+                self.pick_wide_divrem(u)
             } else {
                 let can_emit_reg_divrem =
                     self.cfg.emit_reg_divrem && self.cfg.emit_bitwise_binops && self.cfg.emit_or;
@@ -2958,6 +3048,8 @@ impl<'a> Generator<'a> {
             | Inst::RegWideShift { dst, .. }
             | Inst::PredicatedWideShift { dst, .. }
             | Inst::PredicatedRegWideShift { dst, .. }
+            | Inst::WideDivRem { dst, .. }
+            | Inst::PredicatedWideDivRem { dst, .. }
             | Inst::Sad { dst, .. }
             | Inst::PredicatedSad { dst, .. }
             | Inst::Slct { dst, .. }
@@ -4022,6 +4114,48 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
+            Inst::WideDivRem {
+                op,
+                dst,
+                src,
+                divisor,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd6, {divisor};", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideDivRem {
+                op,
+                dst,
+                src,
+                divisor,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd6, {divisor};",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::AddCarry {
                 op,
                 dst_lo,
@@ -4792,6 +4926,22 @@ fn pick_wide_unary(u: &mut Unstructured) -> Result<WideUnaryOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_wide_divrem(u: &mut Unstructured, emit_signed_wide_divrem: bool) -> Result<WideDivRemOp> {
+    let unsigned_ops = [WideDivRemOp::DivU64, WideDivRemOp::RemU64];
+    let all_ops = [
+        WideDivRemOp::DivU64,
+        WideDivRemOp::RemU64,
+        WideDivRemOp::DivS64,
+        WideDivRemOp::RemS64,
+    ];
+    let ops: &[WideDivRemOp] = if emit_signed_wide_divrem {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
 fn pick_add_carry(u: &mut Unstructured, emit_addc: bool, emit_subc: bool) -> Result<AddCarryOp> {
     let ops: &[AddCarryOp] = match (emit_addc, emit_subc) {
         (true, true) => &[AddCarryOp::Add, AddCarryOp::Sub],
@@ -5146,6 +5296,8 @@ mod tests {
     const WIDE_UNARY_MNEMONICS: &[&str] =
         &["not.b64", "cnot.b64", "popc.b64", "clz.b64", "brev.b64"];
     const WIDE_SHIFT_MNEMONICS: &[&str] = &["shl.b64", "shr.u64", "shr.s64"];
+    const WIDE_DIVREM_MNEMONICS: &[&str] = &["div.u64", "rem.u64", "div.s64", "rem.s64"];
+    const SIGNED_WIDE_DIVREM_MNEMONICS: &[&str] = &["div.s64", "rem.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.u32",
@@ -5246,6 +5398,7 @@ mod tests {
             WIDE_SELP_MNEMONICS,
             WIDE_UNARY_MNEMONICS,
             WIDE_SHIFT_MNEMONICS,
+            WIDE_DIVREM_MNEMONICS,
             CARRY_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SIGNED_SETP_MNEMONICS,
@@ -5283,6 +5436,7 @@ mod tests {
             MUL_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
             WIDE_SHIFT_MNEMONICS,
+            WIDE_DIVREM_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SAD_MNEMONICS,
             POST_KNOWN_SLCT_MNEMONICS,
@@ -5533,6 +5687,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_UNARY_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_divrem(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_DIVREM_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_carry(ptx: &str) -> bool {
@@ -7824,6 +7984,119 @@ mod tests {
             assert!(
                 !has_predicated_wide_reg_shift(&ptx),
                 "seed {seed:x} emitted predicated register-count wide shift"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_predicated_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_DIVREM_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_DIVREM_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_wide_divrem(&ptx),
+                "seed {seed:x} emitted predicated wide div/rem"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_wide_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_WIDE_DIVREM_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_DIVREM_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in WIDE_DIVREM_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_DIVREM_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_wide_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_divrem(&ptx),
+                "seed {seed:x} emitted predicated wide div/rem"
             );
         }
     }

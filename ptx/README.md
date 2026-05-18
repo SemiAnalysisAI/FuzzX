@@ -276,6 +276,9 @@ that feature.
 | `DIV_DISABLE_WIDE_REG_SHIFTS` | Masked register-count 64-bit scratch-register shifts. |
 | `DIV_DISABLE_PREDICATED_WIDE_SHIFTS` | Predicated 64-bit scratch-register shifts. |
 | `DIV_DISABLE_PREDICATED_WIDE_REG_SHIFTS` | Predicated masked register-count 64-bit scratch-register shifts. |
+| `DIV_DISABLE_WIDE_DIVREM` | 64-bit scratch-register `div/rem.{u64,s64}` instructions. |
+| `DIV_DISABLE_SIGNED_WIDE_DIVREM` | 64-bit scratch-register `div/rem.s64` instructions. |
+| `DIV_DISABLE_PREDICATED_WIDE_DIVREM` | Predicated 64-bit scratch-register `div/rem` instructions. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_PREDICATED_CARRY` | Predicated `add.cc` / `addc` and `sub.cc` / `subc` pairs. |
