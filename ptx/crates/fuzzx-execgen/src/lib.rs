@@ -2474,18 +2474,6 @@ impl FloatCmpOp {
         }
     }
 
-    fn f32_set_mnemonic(self) -> String {
-        format!("set.{}.u32.f32", self.suffix())
-    }
-
-    fn f32_setp_mnemonic(self) -> String {
-        format!("setp.{}.f32", self.suffix())
-    }
-
-    fn f32_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
-        format!("setp.{}.{}.f32", self.suffix(), op.suffix())
-    }
-
     fn f64_set_mnemonic(self) -> String {
         format!("set.{}.u32.f64", self.suffix())
     }
@@ -2496,6 +2484,34 @@ impl FloatCmpOp {
 
     fn f64_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
         format!("setp.{}.{}.f64", self.suffix(), op.suffix())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct F32CmpOp {
+    cmp: FloatCmpOp,
+    ftz: bool,
+}
+
+impl F32CmpOp {
+    fn suffix(self) -> String {
+        if self.ftz {
+            format!("{}.ftz", self.cmp.suffix())
+        } else {
+            self.cmp.suffix().to_string()
+        }
+    }
+
+    fn set_mnemonic(self) -> String {
+        format!("set.{}.u32.f32", self.suffix())
+    }
+
+    fn setp_mnemonic(self) -> String {
+        format!("setp.{}.f32", self.suffix())
+    }
+
+    fn setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
+        format!("setp.{}.{}.f32", self.suffix(), op.suffix())
     }
 }
 
@@ -3070,14 +3086,14 @@ enum Inst {
     },
     /// Sanitized single-precision floating-point compare materialized as u32.
     F32Set {
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
     },
     /// Predicated single-precision floating-point compare materialized as u32.
     PredicatedF32Set {
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -3092,7 +3108,7 @@ enum Inst {
         base_cmp: CmpOp,
         base_a: Operand,
         base_b: Operand,
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -3105,7 +3121,7 @@ enum Inst {
         base_cmp: CmpOp,
         base_a: Operand,
         base_b: Operand,
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -3136,7 +3152,7 @@ enum Inst {
     },
     /// Sanitized single-precision compare feeding `selp.f32`.
     F32Selp {
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -3144,7 +3160,7 @@ enum Inst {
     },
     /// Instruction-predicated single-precision compare feeding `selp.f32`.
     PredicatedF32Selp {
-        cmp: FloatCmpOp,
+        cmp: F32CmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -5907,7 +5923,7 @@ impl<'a> Generator<'a> {
     fn pick_f32_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         if self.cfg.emit_predicated_set && u.arbitrary::<bool>()? {
             Ok(Inst::PredicatedF32Set {
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_non_output_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -5918,7 +5934,7 @@ impl<'a> Generator<'a> {
             })
         } else {
             Ok(Inst::F32Set {
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_non_output_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -5933,7 +5949,7 @@ impl<'a> Generator<'a> {
                 base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                 base_a: self.pick_guard_operand(u)?,
                 base_b: self.pick_guard_operand(u)?,
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_non_output_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -5950,7 +5966,7 @@ impl<'a> Generator<'a> {
                 base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                 base_a: self.pick_guard_operand(u)?,
                 base_b: self.pick_guard_operand(u)?,
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_non_output_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -5985,7 +6001,7 @@ impl<'a> Generator<'a> {
     fn pick_f32_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
         if self.cfg.emit_predicated_selp && u.arbitrary::<bool>()? {
             Ok(Inst::PredicatedF32Selp {
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -5997,7 +6013,7 @@ impl<'a> Generator<'a> {
             })
         } else {
             Ok(Inst::F32Selp {
-                cmp: pick_float_cmp(u)?,
+                cmp: pick_f32_cmp(u)?,
                 dst: self.pick_dst(u)?,
                 a: self.pick_cvt_operand(u)?,
                 b: self.pick_cvt_operand(u)?,
@@ -8846,7 +8862,7 @@ impl<'a> Generator<'a> {
             Inst::F32Set { cmp, dst, a, b } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
-                writeln!(s, "    {:<13} %r{dst}, %f0, %f1;", cmp.f32_set_mnemonic()).unwrap();
+                writeln!(s, "    {:<13} %r{dst}, %f0, %f1;", cmp.set_mnemonic()).unwrap();
             }
             Inst::PredicatedF32Set {
                 cmp,
@@ -8866,7 +8882,7 @@ impl<'a> Generator<'a> {
                     s,
                     "    {} {:<8} %r{dst}, %f0, %f1;",
                     pred_guard(guard_pred),
-                    cmp.f32_set_mnemonic()
+                    cmp.set_mnemonic()
                 )
                 .unwrap();
             }
@@ -8889,7 +8905,7 @@ impl<'a> Generator<'a> {
                 writeln!(s, ";").unwrap();
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
-                let mnemonic = cmp.f32_setp_bool_mnemonic(bool_op);
+                let mnemonic = cmp.setp_bool_mnemonic(bool_op);
                 writeln!(s, "    {mnemonic:<13} %p{pred}, %f0, %f1, %p{base_pred};").unwrap();
                 writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
             }
@@ -8918,7 +8934,7 @@ impl<'a> Generator<'a> {
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
                 writeln!(s, "    setp.ne.u32   %p{pred}, 0, 0;").unwrap();
-                let mnemonic = cmp.f32_setp_bool_mnemonic(bool_op);
+                let mnemonic = cmp.setp_bool_mnemonic(bool_op);
                 writeln!(
                     s,
                     "    {} {mnemonic:<8} %p{pred}, %f0, %f1, %p{base_pred};",
@@ -8970,7 +8986,7 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
-                writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.f32_setp_mnemonic()).unwrap();
+                writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.setp_mnemonic()).unwrap();
                 writeln!(s, "    selp.f32      %f2, %f0, %f1, %p{pred};").unwrap();
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f2;").unwrap();
             }
@@ -8988,7 +9004,7 @@ impl<'a> Generator<'a> {
                 self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
-                writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.f32_setp_mnemonic()).unwrap();
+                writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.setp_mnemonic()).unwrap();
                 writeln!(s, "    mov.f32       %f2, %f0;").unwrap();
                 writeln!(
                     s,
@@ -12078,6 +12094,13 @@ fn pick_float_cmp(u: &mut Unstructured) -> Result<FloatCmpOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_f32_cmp(u: &mut Unstructured) -> Result<F32CmpOp> {
+    Ok(F32CmpOp {
+        cmp: pick_float_cmp(u)?,
+        ftz: u.arbitrary()?,
+    })
+}
+
 fn pick_narrow_cvt(u: &mut Unstructured, emit_signed_narrow_cvt: bool) -> Result<NarrowCvtOp> {
     let unsigned_ops = [NarrowCvtOp::U32ToU8, NarrowCvtOp::U32ToU16];
     let all_ops = [
@@ -13122,6 +13145,20 @@ mod tests {
         "set.geu.u32.f32",
         "set.num.u32.f32",
         "set.nan.u32.f32",
+        "set.eq.ftz.u32.f32",
+        "set.ne.ftz.u32.f32",
+        "set.lt.ftz.u32.f32",
+        "set.le.ftz.u32.f32",
+        "set.gt.ftz.u32.f32",
+        "set.ge.ftz.u32.f32",
+        "set.equ.ftz.u32.f32",
+        "set.neu.ftz.u32.f32",
+        "set.ltu.ftz.u32.f32",
+        "set.leu.ftz.u32.f32",
+        "set.gtu.ftz.u32.f32",
+        "set.geu.ftz.u32.f32",
+        "set.num.ftz.u32.f32",
+        "set.nan.ftz.u32.f32",
     ];
     const F32_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.f32",
@@ -13138,6 +13175,20 @@ mod tests {
         "setp.geu.f32",
         "setp.num.f32",
         "setp.nan.f32",
+        "setp.eq.ftz.f32",
+        "setp.ne.ftz.f32",
+        "setp.lt.ftz.f32",
+        "setp.le.ftz.f32",
+        "setp.gt.ftz.f32",
+        "setp.ge.ftz.f32",
+        "setp.equ.ftz.f32",
+        "setp.neu.ftz.f32",
+        "setp.ltu.ftz.f32",
+        "setp.leu.ftz.f32",
+        "setp.gtu.ftz.f32",
+        "setp.geu.ftz.f32",
+        "setp.num.ftz.f32",
+        "setp.nan.ftz.f32",
     ];
     const F32_SETP_BOOL_MNEMONICS: &[&str] = &[
         "setp.eq.and.f32",
@@ -13182,6 +13233,48 @@ mod tests {
         "setp.nan.and.f32",
         "setp.nan.or.f32",
         "setp.nan.xor.f32",
+        "setp.eq.ftz.and.f32",
+        "setp.eq.ftz.or.f32",
+        "setp.eq.ftz.xor.f32",
+        "setp.ne.ftz.and.f32",
+        "setp.ne.ftz.or.f32",
+        "setp.ne.ftz.xor.f32",
+        "setp.lt.ftz.and.f32",
+        "setp.lt.ftz.or.f32",
+        "setp.lt.ftz.xor.f32",
+        "setp.le.ftz.and.f32",
+        "setp.le.ftz.or.f32",
+        "setp.le.ftz.xor.f32",
+        "setp.gt.ftz.and.f32",
+        "setp.gt.ftz.or.f32",
+        "setp.gt.ftz.xor.f32",
+        "setp.ge.ftz.and.f32",
+        "setp.ge.ftz.or.f32",
+        "setp.ge.ftz.xor.f32",
+        "setp.equ.ftz.and.f32",
+        "setp.equ.ftz.or.f32",
+        "setp.equ.ftz.xor.f32",
+        "setp.neu.ftz.and.f32",
+        "setp.neu.ftz.or.f32",
+        "setp.neu.ftz.xor.f32",
+        "setp.ltu.ftz.and.f32",
+        "setp.ltu.ftz.or.f32",
+        "setp.ltu.ftz.xor.f32",
+        "setp.leu.ftz.and.f32",
+        "setp.leu.ftz.or.f32",
+        "setp.leu.ftz.xor.f32",
+        "setp.gtu.ftz.and.f32",
+        "setp.gtu.ftz.or.f32",
+        "setp.gtu.ftz.xor.f32",
+        "setp.geu.ftz.and.f32",
+        "setp.geu.ftz.or.f32",
+        "setp.geu.ftz.xor.f32",
+        "setp.num.ftz.and.f32",
+        "setp.num.ftz.or.f32",
+        "setp.num.ftz.xor.f32",
+        "setp.nan.ftz.and.f32",
+        "setp.nan.ftz.or.f32",
+        "setp.nan.ftz.xor.f32",
     ];
     const F32_TESTP_MNEMONICS: &[&str] = &[
         "testp.finite.f32",
@@ -17061,7 +17154,7 @@ mod tests {
             emit_f32_selp: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_COMPARE_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 16384, 8192, F32_COMPARE_MNEMONICS);
         assert_mnemonic_coverage(&cfg, 4096, 2048, F32_TESTP_MNEMONICS);
     }
 
@@ -17073,7 +17166,7 @@ mod tests {
             emit_setp_bool: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 16384, 8192, F32_COMPARE_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F32_COMPARE_MNEMONICS);
     }
 
     #[test]
@@ -17119,7 +17212,7 @@ mod tests {
             emit_f32_selp: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 32768, 8192, F32_SETP_BOOL_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 65536, 32768, F32_SETP_BOOL_MNEMONICS);
     }
 
     #[test]
@@ -17130,7 +17223,7 @@ mod tests {
             emit_f32_selp: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F32_SETP_BOOL_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 65536, 32768, F32_SETP_BOOL_MNEMONICS);
     }
 
     #[test]
@@ -17139,7 +17232,7 @@ mod tests {
             emit_set: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_SETP_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 16384, 8192, F32_SETP_MNEMONICS);
         assert_mnemonic_coverage(&cfg, 4096, 2048, F32_SELP_MNEMONICS);
     }
 

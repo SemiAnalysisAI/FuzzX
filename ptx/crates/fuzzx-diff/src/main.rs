@@ -134,9 +134,10 @@
 //!                         f32 rounded and ftz sqrt/rcp plus approx rcp/rsqrt/ex2/lg2/sin/cos
 //!                         generation
 //!   DIV_DISABLE_F32_COMPARE default: false; set 1/true/yes/on to suppress
-//!                         sanitized ordered/unordered f32 compare and testp generation
+//!                         sanitized ordered/unordered f32 compare, including ftz forms,
+//!                         and testp generation
 //!   DIV_DISABLE_F32_SELP default: false; set 1/true/yes/on to suppress
-//!                         sanitized setp.f32 + selp.f32 generation
+//!                         sanitized setp.f32, including ftz forms, + selp.f32 generation
 //!   DIV_DISABLE_F64_ARITH default: false; set 1/true/yes/on to suppress
 //!                         sanitized f64 add/sub/mul/div/fma/copysign/min/max generation
 //!   DIV_DISABLE_F64_ROUNDING default: false; set 1/true/yes/on to suppress
