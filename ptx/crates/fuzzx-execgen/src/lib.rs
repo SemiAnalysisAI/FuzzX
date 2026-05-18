@@ -117,6 +117,9 @@ pub struct GenConfig {
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
     pub emit_f64_arith: bool,
+    pub emit_f64_rounding: bool,
+    pub emit_f64_unary: bool,
+    pub emit_f64_cvt: bool,
     pub emit_f64_compare: bool,
     pub emit_f64_selp: bool,
     pub emit_signed_cmp: bool,
@@ -322,6 +325,9 @@ impl Default for GenConfig {
             emit_f32_compare: true,
             emit_f32_selp: true,
             emit_f64_arith: true,
+            emit_f64_rounding: true,
+            emit_f64_unary: true,
+            emit_f64_cvt: true,
             emit_f64_compare: true,
             emit_f64_selp: true,
             emit_signed_cmp: true,
@@ -1086,6 +1092,105 @@ impl F64ArithOp {
 
     fn uses_c(self) -> bool {
         matches!(self, F64ArithOp::Fma)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64RoundingArithOp {
+    AddRz,
+    AddRm,
+    AddRp,
+    SubRz,
+    SubRm,
+    SubRp,
+    MulRz,
+    MulRm,
+    MulRp,
+    FmaRz,
+    FmaRm,
+    FmaRp,
+}
+
+impl F64RoundingArithOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64RoundingArithOp::AddRz => "add.rz.f64",
+            F64RoundingArithOp::AddRm => "add.rm.f64",
+            F64RoundingArithOp::AddRp => "add.rp.f64",
+            F64RoundingArithOp::SubRz => "sub.rz.f64",
+            F64RoundingArithOp::SubRm => "sub.rm.f64",
+            F64RoundingArithOp::SubRp => "sub.rp.f64",
+            F64RoundingArithOp::MulRz => "mul.rz.f64",
+            F64RoundingArithOp::MulRm => "mul.rm.f64",
+            F64RoundingArithOp::MulRp => "mul.rp.f64",
+            F64RoundingArithOp::FmaRz => "fma.rz.f64",
+            F64RoundingArithOp::FmaRm => "fma.rm.f64",
+            F64RoundingArithOp::FmaRp => "fma.rp.f64",
+        }
+    }
+
+    fn uses_c(self) -> bool {
+        matches!(
+            self,
+            F64RoundingArithOp::FmaRz | F64RoundingArithOp::FmaRm | F64RoundingArithOp::FmaRp
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64UnaryOp {
+    Abs,
+    Neg,
+}
+
+impl F64UnaryOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64UnaryOp::Abs => "abs.f64",
+            F64UnaryOp::Neg => "neg.f64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64FromIntCvtOp {
+    Rz,
+    Rm,
+    Rp,
+}
+
+impl F64FromIntCvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64FromIntCvtOp::Rz => "cvt.rz.f64.u32",
+            F64FromIntCvtOp::Rm => "cvt.rm.f64.u32",
+            F64FromIntCvtOp::Rp => "cvt.rp.f64.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64ToIntCvtOp {
+    S32Rni,
+    S32Rmi,
+    S32Rpi,
+    U32Rzi,
+    U32Rni,
+    U32Rmi,
+    U32Rpi,
+}
+
+impl F64ToIntCvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64ToIntCvtOp::S32Rni => "cvt.rni.s32.f64",
+            F64ToIntCvtOp::S32Rmi => "cvt.rmi.s32.f64",
+            F64ToIntCvtOp::S32Rpi => "cvt.rpi.s32.f64",
+            F64ToIntCvtOp::U32Rzi => "cvt.rzi.u32.f64",
+            F64ToIntCvtOp::U32Rni => "cvt.rni.u32.f64",
+            F64ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f64",
+            F64ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f64",
+        }
     }
 }
 
@@ -2465,6 +2570,27 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// Sanitized f64 arithmetic with explicit non-default rounding modes.
+    F64RoundingArith {
+        op: F64RoundingArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Sanitized double-precision unary arithmetic.
+    F64Unary {
+        op: F64UnaryOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Sanitized f64/int conversion chain.
+    F64Cvt {
+        from_int: F64FromIntCvtOp,
+        to_int: F64ToIntCvtOp,
+        dst: u32,
+        src: Operand,
     },
     /// Sanitized double-precision compare materialized as u32.
     F64Set {
@@ -4854,6 +4980,62 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_f64_rounding_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F64RoundingArithOp::AddRz,
+            F64RoundingArithOp::AddRm,
+            F64RoundingArithOp::AddRp,
+            F64RoundingArithOp::SubRz,
+            F64RoundingArithOp::SubRm,
+            F64RoundingArithOp::SubRp,
+            F64RoundingArithOp::MulRz,
+            F64RoundingArithOp::MulRm,
+            F64RoundingArithOp::MulRp,
+            F64RoundingArithOp::FmaRz,
+            F64RoundingArithOp::FmaRm,
+            F64RoundingArithOp::FmaRp,
+        ];
+        Ok(Inst::F64RoundingArith {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            c: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f64_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [F64UnaryOp::Abs, F64UnaryOp::Neg];
+        Ok(Inst::F64Unary {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f64_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let from_ops = [
+            F64FromIntCvtOp::Rz,
+            F64FromIntCvtOp::Rm,
+            F64FromIntCvtOp::Rp,
+        ];
+        let to_ops = [
+            F64ToIntCvtOp::S32Rni,
+            F64ToIntCvtOp::S32Rmi,
+            F64ToIntCvtOp::S32Rpi,
+            F64ToIntCvtOp::U32Rzi,
+            F64ToIntCvtOp::U32Rni,
+            F64ToIntCvtOp::U32Rmi,
+            F64ToIntCvtOp::U32Rpi,
+        ];
+        Ok(Inst::F64Cvt {
+            from_int: *u.choose(&from_ops)?,
+            to_int: *u.choose(&to_ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
     fn pick_f64_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::F64Set {
             cmp: pick_f32_cmp(u)?,
@@ -4949,6 +5131,23 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f64_arith(u);
+            }
+            if self.cfg.emit_f64_arith
+                && self.cfg.emit_f64_rounding
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f64_rounding_arith(u);
+            }
+            if self.cfg.emit_f64_unary
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f64_unary(u);
+            }
+            if self.cfg.emit_f64_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f64_cvt(u);
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -6231,6 +6430,9 @@ impl<'a> Generator<'a> {
             | Inst::F32Cvt { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::F64Arith { dst, .. }
+            | Inst::F64RoundingArith { dst, .. }
+            | Inst::F64Unary { dst, .. }
+            | Inst::F64Cvt { dst, .. }
             | Inst::F64Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
@@ -7115,6 +7317,35 @@ impl<'a> Generator<'a> {
                     writeln!(s, "    {:<13} %fd3, %fd0, %fd1;", op.mnemonic()).unwrap();
                 }
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+            }
+            Inst::F64RoundingArith { op, dst, a, b, c } => {
+                self.emit_sanitized_f64_operand(s, 0, a);
+                self.emit_sanitized_f64_operand(s, 1, b);
+                if op.uses_c() {
+                    self.emit_sanitized_f64_operand(s, 2, c);
+                    writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %fd2;", op.mnemonic()).unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %fd3, %fd0, %fd1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+            }
+            Inst::F64Unary { op, dst, src } => {
+                self.emit_sanitized_f64_operand(s, 0, src);
+                writeln!(s, "    {:<13} %fd1, %fd0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
+            }
+            Inst::F64Cvt {
+                from_int,
+                to_int,
+                dst,
+                src,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                src.emit(s);
+                writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
+                writeln!(s, "    {:<13} %fd0, %r{scratch};", from_int.mnemonic()).unwrap();
+                writeln!(s, "    {:<13} %r{dst}, %fd0;", to_int.mnemonic()).unwrap();
             }
             Inst::F64Set { cmp, dst, a, b } => {
                 self.emit_sanitized_f64_operand(s, 0, a);
@@ -10681,6 +10912,33 @@ mod tests {
         "min.f64",
         "max.f64",
     ];
+    const F64_ROUNDING_MNEMONICS: &[&str] = &[
+        "add.rz.f64",
+        "add.rm.f64",
+        "add.rp.f64",
+        "sub.rz.f64",
+        "sub.rm.f64",
+        "sub.rp.f64",
+        "mul.rz.f64",
+        "mul.rm.f64",
+        "mul.rp.f64",
+        "fma.rz.f64",
+        "fma.rm.f64",
+        "fma.rp.f64",
+    ];
+    const F64_UNARY_MNEMONICS: &[&str] = &["abs.f64", "neg.f64"];
+    const F64_CVT_MNEMONICS: &[&str] = &[
+        "cvt.rz.f64.u32",
+        "cvt.rm.f64.u32",
+        "cvt.rp.f64.u32",
+        "cvt.rni.s32.f64",
+        "cvt.rmi.s32.f64",
+        "cvt.rpi.s32.f64",
+        "cvt.rzi.u32.f64",
+        "cvt.rni.u32.f64",
+        "cvt.rmi.u32.f64",
+        "cvt.rpi.u32.f64",
+    ];
     const F64_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f64",
         "set.ne.u32.f64",
@@ -11029,6 +11287,9 @@ mod tests {
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
             F64_ARITH_MNEMONICS,
+            F64_ROUNDING_MNEMONICS,
+            F64_UNARY_MNEMONICS,
+            F64_CVT_MNEMONICS,
             F64_COMPARE_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SELP_MNEMONICS,
@@ -11095,6 +11356,9 @@ mod tests {
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
             F64_ARITH_MNEMONICS,
+            F64_ROUNDING_MNEMONICS,
+            F64_UNARY_MNEMONICS,
+            F64_CVT_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SELP_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
@@ -14293,7 +14557,82 @@ mod tests {
         for seed in 0..1024 {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in F64_ARITH_MNEMONICS {
+            for mnemonic in F64_ARITH_MNEMONICS
+                .iter()
+                .chain(F64_ROUNDING_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_rounding_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F64_ROUNDING_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_rounding_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_rounding: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_ROUNDING_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_unary_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F64_UNARY_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_unary_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_unary: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_UNARY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_cvt_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F64_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn f64_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_cvt: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_CVT_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
