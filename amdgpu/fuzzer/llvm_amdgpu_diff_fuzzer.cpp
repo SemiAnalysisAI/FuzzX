@@ -2562,6 +2562,47 @@ Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomManualFunnelShiftIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                        Value *Bv, std::minstd_rand &Gen,
+                                        StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *ShiftSeed = nullptr;
+  switch (Gen() % 4) {
+  case 0:
+    ShiftSeed = A;
+    break;
+  case 1:
+    ShiftSeed = Bv;
+    break;
+  case 2:
+    ShiftSeed = ci32(Ctx, Gen() & 31u);
+    break;
+  default:
+    ShiftSeed = interestingI32(Ctx, Gen);
+    break;
+  }
+  Value *Shift = B.CreateAnd(ShiftSeed, ci32(Ctx, 31),
+                             Twine(NamePrefix) + ".shift");
+  Value *InvShift =
+      B.CreateAnd(B.CreateSub(ci32(Ctx, 32), Shift,
+                              Twine(NamePrefix) + ".inv.raw"),
+                  ci32(Ctx, 31), Twine(NamePrefix) + ".inv");
+  Value *Zero =
+      B.CreateICmpEQ(Shift, ci32(Ctx, 0), Twine(NamePrefix) + ".zero");
+
+  if ((Gen() % 2) == 0) {
+    Value *Lo = B.CreateShl(A, Shift, Twine(NamePrefix) + ".left");
+    Value *Hi = B.CreateLShr(Bv, InvShift, Twine(NamePrefix) + ".right");
+    Value *Merged = B.CreateOr(Lo, Hi, Twine(NamePrefix) + ".fshl.raw");
+    return B.CreateSelect(Zero, A, Merged, Twine(NamePrefix) + ".fshl");
+  }
+
+  Value *Hi = B.CreateShl(A, InvShift, Twine(NamePrefix) + ".left");
+  Value *Lo = B.CreateLShr(Bv, Shift, Twine(NamePrefix) + ".right");
+  Value *Merged = B.CreateOr(Hi, Lo, Twine(NamePrefix) + ".fshr.raw");
+  return B.CreateSelect(Zero, Bv, Merged, Twine(NamePrefix) + ".fshr");
+}
+
 FCmpInst::Predicate randomFCmpPredicate(std::minstd_rand &Gen) {
   static constexpr std::array<FCmpInst::Predicate, 6> Predicates = {
       FCmpInst::FCMP_OEQ, FCmpInst::FCMP_ONE, FCmpInst::FCMP_OGT,
@@ -3630,7 +3671,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 108) {
+  switch (Gen() % 114) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -3817,6 +3858,14 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 90:
   case 91:
     return emitRandomUnsignedSelectIdiom(B, A, Bv, Gen, "fuzz.select.idiom");
+  case 92:
+  case 93:
+  case 94:
+  case 95:
+  case 96:
+  case 97:
+    return emitRandomManualFunnelShiftIdiom(B, A, Bv, Gen,
+                                            "fuzz.funnel.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -3851,7 +3900,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 92) {
+  switch (Gen() % 98) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4028,6 +4077,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 83:
     return emitRandomUnsignedSelectIdiom(B, A, Bv, Gen,
                                          "fuzz.cfg.select.idiom");
+  case 84:
+  case 85:
+  case 86:
+  case 87:
+  case 88:
+  case 89:
+    return emitRandomManualFunnelShiftIdiom(B, A, Bv, Gen,
+                                            "fuzz.cfg.funnel.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
