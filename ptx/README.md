@@ -262,6 +262,10 @@ that feature.
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
+| `DIV_DISABLE_WIDE_BFE` | 64-bit scratch-register `bfe.{u64,s64}` instructions. |
+| `DIV_DISABLE_SIGNED_WIDE_BFE` | 64-bit scratch-register `bfe.s64` instructions. |
+| `DIV_DISABLE_WIDE_BFI` | 64-bit scratch-register `bfi.b64` instructions. |
+| `DIV_DISABLE_PREDICATED_WIDE_BITFIELD` | Predicated 64-bit scratch-register `bfe` and `bfi` instructions. |
 | `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_24BIT` | Predicated `mad24` and `mul24` instructions. |

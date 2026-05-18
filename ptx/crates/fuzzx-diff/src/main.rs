@@ -114,6 +114,14 @@
 //!                         PTX bmsk.clamp.b32 generation
 //!   DIV_DISABLE_PREDICATED_BITFIELD default: false; set 1/true/yes/on to suppress
 //!                         predicated bfe.{u32,s32}/bfi.b32/bmsk.clamp.b32 generation
+//!   DIV_DISABLE_WIDE_BFE default: false; set 1/true/yes/on to suppress
+//!                         PTX bfe.{u64,s64} scratch-register generation
+//!   DIV_DISABLE_SIGNED_WIDE_BFE default: false; set 1/true/yes/on to suppress
+//!                         PTX bfe.s64 scratch-register generation
+//!   DIV_DISABLE_WIDE_BFI default: false; set 1/true/yes/on to suppress
+//!                         PTX bfi.b64 scratch-register generation
+//!   DIV_DISABLE_PREDICATED_WIDE_BITFIELD default: false; set 1/true/yes/on to suppress
+//!                         predicated 64-bit bfe/bfi generation
 //!   DIV_DISABLE_MAD24     default: false; set 1/true/yes/on to suppress
 //!                         PTX mad24.lo.u32/mad24.hi.u32 generation
 //!   DIV_DISABLE_MUL24     default: false; set 1/true/yes/on to suppress
@@ -391,6 +399,14 @@ struct Args {
     #[arg(long)]
     disable_predicated_bitfield: bool,
     #[arg(long)]
+    disable_wide_bfe: bool,
+    #[arg(long)]
+    disable_signed_wide_bfe: bool,
+    #[arg(long)]
+    disable_wide_bfi: bool,
+    #[arg(long)]
+    disable_predicated_wide_bitfield: bool,
+    #[arg(long)]
     disable_mad24: bool,
     #[arg(long)]
     disable_mul24: bool,
@@ -597,6 +613,13 @@ impl Args {
             self.disable_predicated_bitfield,
             "DIV_DISABLE_PREDICATED_BITFIELD"
         );
+        set_bool!(self.disable_wide_bfe, "DIV_DISABLE_WIDE_BFE");
+        set_bool!(self.disable_signed_wide_bfe, "DIV_DISABLE_SIGNED_WIDE_BFE");
+        set_bool!(self.disable_wide_bfi, "DIV_DISABLE_WIDE_BFI");
+        set_bool!(
+            self.disable_predicated_wide_bitfield,
+            "DIV_DISABLE_PREDICATED_WIDE_BITFIELD"
+        );
         set_bool!(self.disable_mad24, "DIV_DISABLE_MAD24");
         set_bool!(self.disable_mul24, "DIV_DISABLE_MUL24");
         set_bool!(
@@ -800,6 +823,11 @@ impl Config {
         let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
         let disable_predicated_bitfield =
             env_bool("DIV_DISABLE_PREDICATED_BITFIELD")?.unwrap_or(false);
+        let disable_wide_bfe = env_bool("DIV_DISABLE_WIDE_BFE")?.unwrap_or(false);
+        let disable_signed_wide_bfe = env_bool("DIV_DISABLE_SIGNED_WIDE_BFE")?.unwrap_or(false);
+        let disable_wide_bfi = env_bool("DIV_DISABLE_WIDE_BFI")?.unwrap_or(false);
+        let disable_predicated_wide_bitfield =
+            env_bool("DIV_DISABLE_PREDICATED_WIDE_BITFIELD")?.unwrap_or(false);
         let disable_mad24 = env_bool("DIV_DISABLE_MAD24")?.unwrap_or(false);
         let disable_mul24 = env_bool("DIV_DISABLE_MUL24")?.unwrap_or(false);
         let disable_predicated_24bit = env_bool("DIV_DISABLE_PREDICATED_24BIT")?.unwrap_or(false);
@@ -916,6 +944,12 @@ impl Config {
             emit_bfi: !disable_bfi,
             emit_bmsk: !disable_bmsk,
             emit_predicated_bitfield: !disable_predicated_bitfield,
+            emit_wide_bfe: !disable_wide_bfe,
+            emit_signed_wide_bfe: !disable_signed_wide_bfe,
+            emit_wide_bfi: !disable_wide_bfi,
+            emit_predicated_wide_bitfield: !disable_predicated_wide_bitfield
+                && !disable_predicated_bitfield
+                && (!disable_wide_bfe || !disable_wide_bfi),
             emit_mad24: !disable_mad24,
             emit_mul24: !disable_mul24,
             emit_predicated_24bit: !disable_predicated_24bit,
@@ -1150,7 +1184,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1216,6 +1250,10 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_bfi,
         cfg.gen_config.emit_bmsk,
         cfg.gen_config.emit_predicated_bitfield,
+        cfg.gen_config.emit_wide_bfe,
+        cfg.gen_config.emit_signed_wide_bfe,
+        cfg.gen_config.emit_wide_bfi,
+        cfg.gen_config.emit_predicated_wide_bitfield,
         cfg.gen_config.emit_mad24,
         cfg.gen_config.emit_mul24,
         cfg.gen_config.emit_predicated_24bit,

@@ -99,6 +99,10 @@ pub struct GenConfig {
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
     pub emit_predicated_bitfield: bool,
+    pub emit_wide_bfe: bool,
+    pub emit_signed_wide_bfe: bool,
+    pub emit_wide_bfi: bool,
+    pub emit_predicated_wide_bitfield: bool,
     pub emit_mad24: bool,
     pub emit_mul24: bool,
     pub emit_predicated_24bit: bool,
@@ -216,6 +220,10 @@ impl Default for GenConfig {
             emit_bfi: true,
             emit_bmsk: true,
             emit_predicated_bitfield: true,
+            emit_wide_bfe: true,
+            emit_signed_wide_bfe: true,
+            emit_wide_bfi: true,
+            emit_predicated_wide_bitfield: true,
             emit_mad24: true,
             emit_mul24: true,
             emit_predicated_24bit: true,
@@ -483,6 +491,28 @@ impl BfeOp {
         match self {
             BfeOp::U32 => "bfe.u32",
             BfeOp::S32 => "bfe.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WideBfeOp {
+    U64,
+    S64,
+}
+
+impl WideBfeOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideBfeOp::U64 => "bfe.u64",
+            WideBfeOp::S64 => "bfe.s64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideBfeOp::U64 => "cvt.u64.u32",
+            WideBfeOp::S64 => "cvt.s64.s32",
         }
     }
 }
@@ -1698,6 +1728,26 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// 64-bit `bfe` through scratch b64 registers, returning the low half.
+    WideBfe {
+        op: WideBfeOp,
+        dst: u32,
+        src: Operand,
+        pos: u32,
+        len: u32,
+    },
+    /// Predicated 64-bit `bfe` through scratch b64 registers.
+    PredicatedWideBfe {
+        op: WideBfeOp,
+        dst: u32,
+        src: Operand,
+        pos: u32,
+        len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `bfi.b32 dst, src, base, pos, len;` — insert low `len` bits of `src`
     /// into `base` starting at `pos`. PTX masks pos/len mod 32 → safe.
     Bfi {
@@ -1709,6 +1759,26 @@ enum Inst {
     },
     /// `setp.<cmp> pred, ca, cb; @pred bfi.b32 dst, src, base, pos, len;`.
     PredicatedBfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        pos: u32,
+        len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// 64-bit `bfi` through scratch b64 registers, returning the low half.
+    WideBfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        pos: u32,
+        len: u32,
+    },
+    /// Predicated 64-bit `bfi` through scratch b64 registers.
+    PredicatedWideBfi {
         dst: u32,
         src: Operand,
         base: Operand,
@@ -2564,7 +2634,30 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 235 {
-            if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
+            if self.cfg.emit_wide_bfe && u.arbitrary::<bool>()? {
+                let op = pick_wide_bfe(u, self.cfg.emit_signed_wide_bfe)?;
+                if self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedWideBfe {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        pos: u.int_in_range(0..=63)?,
+                        len: u.int_in_range(0..=63)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::WideBfe {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        pos: u.int_in_range(0..=63)?,
+                        len: u.int_in_range(0..=63)?,
+                    })
+                }
+            } else if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
                 if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedBmsk {
                         dst: self.pick_dst(u)?,
@@ -2604,8 +2697,32 @@ impl<'a> Generator<'a> {
                 })
             }
         } else if pick < 245 {
-            if self.cfg.emit_bfi {
-                if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
+            if self.cfg.emit_bfi || self.cfg.emit_wide_bfi {
+                let use_wide_bfi =
+                    self.cfg.emit_wide_bfi && (!self.cfg.emit_bfi || u.arbitrary::<bool>()?);
+                if use_wide_bfi {
+                    if self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()? {
+                        Ok(Inst::PredicatedWideBfi {
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            base: self.pick_operand(u)?,
+                            pos: u.int_in_range(0..=63)?,
+                            len: u.int_in_range(0..=63)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else {
+                        Ok(Inst::WideBfi {
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            base: self.pick_operand(u)?,
+                            pos: u.int_in_range(0..=63)?,
+                            len: u.int_in_range(0..=63)?,
+                        })
+                    }
+                } else if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedBfi {
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
@@ -3116,8 +3233,12 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedFunnel { dst, .. }
             | Inst::Bfe { dst, .. }
             | Inst::PredicatedBfe { dst, .. }
+            | Inst::WideBfe { dst, .. }
+            | Inst::PredicatedWideBfe { dst, .. }
             | Inst::Bfi { dst, .. }
             | Inst::PredicatedBfi { dst, .. }
+            | Inst::WideBfi { dst, .. }
+            | Inst::PredicatedWideBfi { dst, .. }
             | Inst::Bmsk { dst, .. }
             | Inst::PredicatedBmsk { dst, .. } => self.forget_tracked_write(*dst),
         }
@@ -4631,6 +4752,50 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ", {pos}, {len};").unwrap();
             }
+            Inst::WideBfe {
+                op,
+                dst,
+                src,
+                pos,
+                len,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd6, {pos}, {len};", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideBfe {
+                op,
+                dst,
+                src,
+                pos,
+                len,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd6, {pos}, {len};",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::Bfi {
                 dst,
                 src,
@@ -4661,6 +4826,55 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 base.emit(s);
                 writeln!(s, ", {pos}, {len};").unwrap();
+            }
+            Inst::WideBfi {
+                dst,
+                src,
+                base,
+                pos,
+                len,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    cvt.u64.u32   %rd6, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32   %rd7, ").unwrap();
+                base.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    bfi.b64       %rd6, %rd6, %rd7, {pos}, {len};").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideBfi {
+                dst,
+                src,
+                base,
+                pos,
+                len,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    cvt.u64.u32   %rd6, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32   %rd7, ").unwrap();
+                base.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} bfi.b64  %rd6, %rd6, %rd7, {pos}, {len};",
+                    pred_guard(pred)
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
             }
             Inst::Bmsk { dst, pos, len } => {
                 writeln!(s, "    bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
@@ -4965,6 +5179,17 @@ fn pick_bfind(
 fn pick_bfe(u: &mut Unstructured) -> Result<BfeOp> {
     let ops = [BfeOp::U32, BfeOp::S32];
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_wide_bfe(u: &mut Unstructured, emit_signed_wide_bfe: bool) -> Result<WideBfeOp> {
+    let unsigned_ops = [WideBfeOp::U64];
+    let all_ops = [WideBfeOp::U64, WideBfeOp::S64];
+    let ops: &[WideBfeOp] = if emit_signed_wide_bfe {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
 }
 
 fn pick_mad24(u: &mut Unstructured) -> Result<Mad24Op> {
@@ -5348,6 +5573,10 @@ mod tests {
     const SIGNED_WIDE_BFIND_MNEMONICS: &[&str] = &["bfind.s64", "bfind.shiftamt.s64"];
     const BFE_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32"];
     const BITFIELD_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32", "bfi.b32", "bmsk.clamp.b32"];
+    const WIDE_BFE_MNEMONICS: &[&str] = &["bfe.u64", "bfe.s64"];
+    const SIGNED_WIDE_BFE_MNEMONICS: &[&str] = &["bfe.s64"];
+    const WIDE_BFI_MNEMONICS: &[&str] = &["bfi.b64"];
+    const WIDE_BITFIELD_MNEMONICS: &[&str] = &["bfe.u64", "bfe.s64", "bfi.b64"];
     const DIVREM_MNEMONICS: &[&str] = &["div.u32", "rem.u32", "div.s32", "rem.s32"];
     const MAD24_MNEMONICS: &[&str] = &[
         "mad24.lo.u32",
@@ -5523,6 +5752,7 @@ mod tests {
             CVT_MNEMONICS,
             BFIND_MNEMONICS,
             BFE_MNEMONICS,
+            WIDE_BITFIELD_MNEMONICS,
             DIVREM_MNEMONICS,
             MUL_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
@@ -5562,6 +5792,7 @@ mod tests {
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
             BFE_MNEMONICS,
+            WIDE_BITFIELD_MNEMONICS,
             DIVREM_MNEMONICS,
             MAD_HI_MNEMONICS,
             MAD24_MNEMONICS,
@@ -5876,6 +6107,12 @@ mod tests {
             .any(|op| BITFIELD_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_wide_bitfield(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_BITFIELD_MNEMONICS.contains(&op))
+    }
+
     fn has_register_funnel(ptx: &str) -> bool {
         ptx.lines().any(|line| {
             let line = line.trim_start();
@@ -6054,6 +6291,8 @@ mod tests {
             emit_bfind: false,
             emit_bfi: false,
             emit_bmsk: false,
+            emit_wide_bfe: false,
+            emit_wide_bfi: false,
             emit_mad24: false,
             emit_mul24: false,
             emit_mul_wide: false,
@@ -7221,6 +7460,86 @@ mod tests {
     }
 
     #[test]
+    fn wide_bfe_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bmsk: false,
+            emit_bfi: false,
+            emit_wide_bfi: false,
+            emit_predicated_wide_bitfield: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 2048, WIDE_BFE_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_bfe_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_bfe: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_BFE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signed_wide_bfe_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_bfe: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_WIDE_BFE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_bfi_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfi: false,
+            emit_wide_bfe: false,
+            emit_predicated_wide_bitfield: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 1024, WIDE_BFI_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_bfi_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_bfi: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_BFI_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn predicated_bitfield_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; BITFIELD_MNEMONICS.len()];
@@ -7262,6 +7581,55 @@ mod tests {
             assert!(
                 !has_predicated_bitfield(&ptx),
                 "seed {seed:x} emitted predicated bitfield instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_wide_bitfield_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bmsk: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_BITFIELD_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in WIDE_BITFIELD_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_BITFIELD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_wide_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_bitfield: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_bitfield(&ptx),
+                "seed {seed:x} emitted predicated wide bitfield instruction"
             );
         }
     }
