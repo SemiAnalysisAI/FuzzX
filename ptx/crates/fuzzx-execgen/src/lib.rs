@@ -54,6 +54,7 @@ pub struct GenConfig {
     pub emit_arbitrary_loops: bool,
     pub control_flow: ControlFlowMode,
     pub emit_lop3: bool,
+    pub emit_predicated_lop3: bool,
     pub emit_minmax: bool,
     pub emit_selp: bool,
     pub emit_sub: bool,
@@ -65,6 +66,7 @@ pub struct GenConfig {
     pub emit_or: bool,
     pub emit_xor: bool,
     pub emit_prmt: bool,
+    pub emit_predicated_prmt: bool,
     pub emit_not: bool,
     pub emit_clz: bool,
     pub emit_brev: bool,
@@ -88,6 +90,7 @@ pub struct GenConfig {
     pub emit_predicated_bitfield: bool,
     pub emit_mad24: bool,
     pub emit_mul24: bool,
+    pub emit_predicated_24bit: bool,
     pub emit_mul_wide: bool,
     pub emit_wide_int: bool,
     pub emit_addc: bool,
@@ -133,6 +136,7 @@ impl Default for GenConfig {
             emit_arbitrary_loops: true,
             control_flow: ControlFlowMode::Arbitrary,
             emit_lop3: true,
+            emit_predicated_lop3: true,
             emit_minmax: true,
             emit_selp: true,
             emit_sub: true,
@@ -144,6 +148,7 @@ impl Default for GenConfig {
             emit_or: true,
             emit_xor: true,
             emit_prmt: true,
+            emit_predicated_prmt: true,
             emit_not: true,
             emit_clz: true,
             emit_brev: true,
@@ -167,6 +172,7 @@ impl Default for GenConfig {
             emit_predicated_bitfield: true,
             emit_mad24: true,
             emit_mul24: true,
+            emit_predicated_24bit: true,
             emit_mul_wide: true,
             emit_wide_int: true,
             emit_addc: true,
@@ -840,12 +846,35 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred mad24.* dst, a, b, c;`.
+    PredicatedMad24 {
+        op: Mad24Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `mul24.{lo,hi}.{u32,s32} dst, a, b;` — 24-bit multiply.
     Mul24 {
         op: Mul24Op,
         dst: u32,
         a: Operand,
         b: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred mul24.* dst, a, b;`.
+    PredicatedMul24 {
+        op: Mul24Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `mul.wide.{u32,s32}` through a scratch b64 register, low 32 bits kept.
     MulWide {
@@ -1001,6 +1030,18 @@ enum Inst {
         c: Operand,
         imm: u8,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred lop3.b32 dst, a, b, c, imm;`.
+    PredicatedLop3 {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        imm: u8,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `prmt.b32 dst, a, b, ctrl;` — byte permute. Each nibble of `ctrl`
     /// (low 16 bits) selects one byte from the 8 source bytes (a|b<<32).
     /// All u32 ctrl values are well-defined.
@@ -1009,6 +1050,17 @@ enum Inst {
         a: Operand,
         b: Operand,
         ctrl: u32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred prmt.b32 dst, a, b, ctrl;`.
+    PredicatedPrmt {
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        ctrl: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `shf.{l,r}.wrap.b32 dst, a, b, amount;` — funnel shift. `.wrap`
     /// masks `amount` to 5 bits → safe for any input.
@@ -1142,6 +1194,7 @@ struct Generator<'a> {
     n_working: u32,
     n_pred: u32,
     blocks: Vec<Block>,
+    prmt_result_regs: Vec<u32>,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -1158,6 +1211,7 @@ impl<'a> Generator<'a> {
             n_working: cfg.n_working_regs,
             n_pred: 0,
             blocks: Vec::new(),
+            prmt_result_regs: Vec::new(),
             counters: Vec::new(),
         }
     }
@@ -1215,7 +1269,9 @@ impl<'a> Generator<'a> {
             )?;
             let mut insts = Vec::with_capacity(n_insts);
             for _ in 0..n_insts {
-                insts.push(self.gen_inst(u)?);
+                let inst = self.gen_inst(u)?;
+                self.note_inst(&inst);
+                insts.push(inst);
             }
             let term = if i + 1 == n_blocks {
                 Term::Return
@@ -1257,6 +1313,17 @@ impl<'a> Generator<'a> {
             sanitize_xor_not_operand(operand)
         } else {
             operand
+        })
+    }
+
+    fn pick_cvt_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
+        let operand = self.pick_operand(u)?;
+        Ok(match operand {
+            // m024 is a `prmt.b32` + narrowing `cvt` fold bug. Avoid feeding
+            // prmt result registers into cvt so prmt sweeps do not keep
+            // rediscovering that family.
+            Operand::Reg(reg) if self.prmt_result_regs.contains(&reg) => Operand::Imm(0),
+            operand => operand,
         })
     }
 
@@ -1449,24 +1516,51 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 200 {
             if self.cfg.emit_lop3 {
-                Ok(Inst::Lop3 {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                    imm: u.arbitrary()?,
-                })
+                if self.cfg.emit_predicated_lop3 && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedLop3 {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        imm: u.arbitrary()?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Lop3 {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        imm: u.arbitrary()?,
+                    })
+                }
             } else {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 215 {
             if self.cfg.emit_prmt {
-                Ok(Inst::Prmt {
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    ctrl: u.int_in_range(0..=0xFFFF)?,
-                })
+                if self.cfg.emit_predicated_prmt && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedPrmt {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        ctrl: u.int_in_range(0..=0xFFFF)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_operand(u)?,
+                        cb: self.pick_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Prmt {
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        ctrl: u.int_in_range(0..=0xFFFF)?,
+                    })
+                }
             } else {
                 self.pick_mad_or_add(u)
             }
@@ -1584,7 +1678,7 @@ impl<'a> Generator<'a> {
                 Ok(Inst::PredicatedCvt {
                     op: pick_cvt(u)?,
                     dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
+                    src: self.pick_cvt_operand(u)?,
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
@@ -1594,7 +1688,7 @@ impl<'a> Generator<'a> {
                 Ok(Inst::Cvt {
                     op: pick_cvt(u)?,
                     dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
+                    src: self.pick_cvt_operand(u)?,
                 })
             }
         } else if pick < 251 {
@@ -1633,20 +1727,47 @@ impl<'a> Generator<'a> {
                     self.cfg.emit_mul24
                 };
                 if emit_mul24 {
-                    Ok(Inst::Mul24 {
-                        op: pick_mul24(u)?,
-                        dst: self.pick_dst(u)?,
-                        a: self.pick_operand(u)?,
-                        b: self.pick_operand(u)?,
-                    })
+                    if self.cfg.emit_predicated_24bit && u.arbitrary::<bool>()? {
+                        Ok(Inst::PredicatedMul24 {
+                            op: pick_mul24(u)?,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_operand(u)?,
+                            b: self.pick_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_operand(u)?,
+                            cb: self.pick_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else {
+                        Ok(Inst::Mul24 {
+                            op: pick_mul24(u)?,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_operand(u)?,
+                            b: self.pick_operand(u)?,
+                        })
+                    }
                 } else {
-                    Ok(Inst::Mad24 {
-                        op: pick_mad24(u)?,
-                        dst: self.pick_dst(u)?,
-                        a: self.pick_operand(u)?,
-                        b: self.pick_operand(u)?,
-                        c: self.pick_operand(u)?,
-                    })
+                    if self.cfg.emit_predicated_24bit && u.arbitrary::<bool>()? {
+                        Ok(Inst::PredicatedMad24 {
+                            op: pick_mad24(u)?,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_operand(u)?,
+                            b: self.pick_operand(u)?,
+                            c: self.pick_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_operand(u)?,
+                            cb: self.pick_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else {
+                        Ok(Inst::Mad24 {
+                            op: pick_mad24(u)?,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_operand(u)?,
+                            b: self.pick_operand(u)?,
+                            c: self.pick_operand(u)?,
+                        })
+                    }
                 }
             } else {
                 self.pick_mad_or_add(u)
@@ -1804,6 +1925,14 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn note_inst(&mut self, inst: &Inst) {
+        if let Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } = inst {
+            if !self.prmt_result_regs.contains(dst) {
+                self.prmt_result_regs.push(*dst);
+            }
+        }
+    }
+
     fn gen_terminator(&mut self, u: &mut Unstructured, i: usize, n_blocks: usize) -> Result<Term> {
         let pick: u8 = u.arbitrary()?;
         let fwd_lo = i + 1;
@@ -1841,7 +1970,9 @@ impl<'a> Generator<'a> {
         )?;
         let mut insts = Vec::with_capacity(n_insts);
         for _ in 0..n_insts {
-            insts.push(self.gen_inst(u)?);
+            let inst = self.gen_inst(u)?;
+            self.note_inst(&inst);
+            insts.push(inst);
         }
         Ok(StructuredStmt::Basic(insts))
     }
@@ -2222,8 +2353,45 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PredicatedMad24 {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Mul24 { op, dst, a, b } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedMul24 {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -2476,8 +2644,45 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ", 0x{imm:02x};").unwrap();
             }
+            Inst::PredicatedLop3 {
+                dst,
+                a,
+                b,
+                c,
+                imm,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} lop3.b32 %r{dst}, ", pred_guard(pred)).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                write!(s, ", ").unwrap();
+                c.emit(s);
+                writeln!(s, ", 0x{imm:02x};").unwrap();
+            }
             Inst::Prmt { dst, a, b, ctrl } => {
                 write!(s, "    prmt.b32      %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ", 0x{ctrl:x};").unwrap();
+            }
+            Inst::PredicatedPrmt {
+                dst,
+                a,
+                b,
+                ctrl,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} prmt.b32 %r{dst}, ", pred_guard(pred)).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -3352,6 +3557,24 @@ mod tests {
             .any(|op| MAD_LO_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_lop3(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| op == "lop3.b32")
+    }
+
+    fn has_predicated_prmt(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| op == "prmt.b32")
+    }
+
+    fn has_predicated_24bit(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| MAD24_MNEMONICS.contains(&op) || MUL24_MNEMONICS.contains(&op))
+    }
+
     fn has_predicated_sad(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -3401,6 +3624,46 @@ mod tests {
                 .split(',')
                 .next_back()
                 .is_some_and(|amount| amount.trim_start().starts_with("%r"))
+        })
+    }
+
+    fn prmt_dst(line: &str) -> Option<&str> {
+        let mut tokens = line.trim_start().split_whitespace();
+        let first = tokens.next()?;
+        let op = if first.starts_with('@') {
+            tokens.next()?
+        } else {
+            first
+        };
+        (op == "prmt.b32")
+            .then(|| tokens.next())
+            .flatten()
+            .map(|token| token.trim_end_matches(','))
+    }
+
+    fn cvt_src(line: &str) -> Option<&str> {
+        let mut tokens = line.trim_start().split_whitespace();
+        let first = tokens.next()?;
+        let op = if first.starts_with('@') {
+            tokens.next()?
+        } else {
+            first
+        };
+        if !CVT_MNEMONICS.contains(&op) {
+            return None;
+        }
+        let _dst = tokens.next()?;
+        tokens
+            .next()
+            .map(|token| token.trim_end_matches([';', ',']))
+    }
+
+    fn has_direct_prmt_cvt_dependency(ptx: &str) -> bool {
+        let lines: Vec<_> = ptx.lines().collect();
+        lines.windows(2).any(|pair| {
+            prmt_dst(pair[0])
+                .zip(cvt_src(pair[1]))
+                .is_some_and(|(dst, src)| dst == src)
         })
     }
 
@@ -3727,6 +3990,43 @@ mod tests {
     }
 
     #[test]
+    fn predicated_lop3_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_lop3 = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_lop3 |= has_predicated_lop3(&ptx);
+            if saw_predicated_lop3 {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_lop3,
+            "no seed in sample emitted predicated lop3"
+        );
+    }
+
+    #[test]
+    fn predicated_lop3_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_lop3: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_lop3(&ptx),
+                "seed {seed:x} emitted predicated lop3"
+            );
+        }
+    }
+
+    #[test]
     fn minmax_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_minmax: false,
@@ -3976,6 +4276,57 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("prmt.b32"), "seed {seed:x} emitted prmt");
+        }
+    }
+
+    #[test]
+    fn predicated_prmt_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_predicated_prmt = false;
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_prmt |= has_predicated_prmt(&ptx);
+            if saw_predicated_prmt {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_prmt,
+            "no seed in sample emitted predicated prmt"
+        );
+    }
+
+    #[test]
+    fn predicated_prmt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_prmt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_prmt(&ptx),
+                "seed {seed:x} emitted predicated prmt"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_prmt_cvt_dependencies_are_suppressed() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_direct_prmt_cvt_dependency(&ptx),
+                "seed {seed:x} emitted direct prmt-to-cvt dependency"
+            );
         }
     }
 
@@ -4543,6 +4894,91 @@ mod tests {
             ] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
+        }
+    }
+
+    #[test]
+    fn predicated_24bit_generation_is_reachable() {
+        let mad_cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+        let mut found_mad = vec![false; MAD24_MNEMONICS.len()];
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &mad_cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in MAD24_MNEMONICS.iter().enumerate() {
+                    found_mad[i] |= op == *mnemonic;
+                }
+            }
+            if found_mad.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_mad: Vec<_> = MAD24_MNEMONICS
+            .iter()
+            .zip(found_mad)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing_mad.is_empty(),
+            "sample did not emit predicated {missing_mad:?}"
+        );
+
+        let mul_cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_mad24: false,
+            ..coverage_heavy_config()
+        };
+        let mut found_mul = vec![false; MUL24_MNEMONICS.len()];
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &mul_cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in MUL24_MNEMONICS.iter().enumerate() {
+                    found_mul[i] |= op == *mnemonic;
+                }
+            }
+            if found_mul.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_mul: Vec<_> = MUL24_MNEMONICS
+            .iter()
+            .zip(found_mul)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing_mul.is_empty(),
+            "sample did not emit predicated {missing_mul:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_24bit_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_addc: false,
+            emit_subc: false,
+            emit_bfind: false,
+            emit_predicated_24bit: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_24bit(&ptx),
+                "seed {seed:x} emitted predicated 24-bit instruction"
+            );
         }
     }
 

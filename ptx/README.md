@@ -215,6 +215,7 @@ that feature.
 | `DIV_DISABLE_STRUCTURED_LOOPS` | Counted-loop shapes in structured mode. |
 | `DIV_DISABLE_ARBITRARY_LOOPS` | Backedge loop terminators in arbitrary CFG mode. |
 | `DIV_DISABLE_LOP3` | `lop3.b32`. |
+| `DIV_DISABLE_PREDICATED_LOP3` | Predicated `lop3.b32` instructions. |
 | `DIV_DISABLE_MINMAX` | `min.u32`, `max.u32`, `min.s32`, `max.s32`. |
 | `DIV_DISABLE_SELP` | `selp.b32`. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
@@ -226,6 +227,7 @@ that feature.
 | `DIV_DISABLE_OR` | `or.b32` while retaining `and.b32` and `xor.b32`. |
 | `DIV_DISABLE_XOR` | `xor.b32` while retaining `and.b32` and `or.b32`. |
 | `DIV_DISABLE_PRMT` | `prmt.b32`. |
+| `DIV_DISABLE_PREDICATED_PRMT` | Predicated `prmt.b32` instructions. |
 | `DIV_DISABLE_NOT` | `not.b32` and xor-by-`0xffffffff` forms. |
 | `DIV_DISABLE_CLZ` | `clz.b32`. |
 | `DIV_DISABLE_BREV` | `brev.b32`. |
@@ -249,6 +251,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
 | `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
+| `DIV_DISABLE_PREDICATED_24BIT` | Predicated `mad24` and `mul24` instructions. |
 | `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
 | `DIV_DISABLE_WIDE_INT` | 64-bit scratch-register ALU generation. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |

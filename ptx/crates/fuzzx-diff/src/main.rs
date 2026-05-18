@@ -22,6 +22,8 @@
 //!                                backedge loop terminators in arbitrary CFG mode
 //!   DIV_DISABLE_LOP3      default: false; set 1/true/yes/on to suppress
 //!                         explicit PTX lop3.b32 generation
+//!   DIV_DISABLE_PREDICATED_LOP3 default: false; set 1/true/yes/on to suppress
+//!                         predicated lop3.b32 generation
 //!   DIV_DISABLE_MINMAX    default: false; set 1/true/yes/on to suppress
 //!                         PTX min.u32/max.u32/min.s32/max.s32 generation
 //!   DIV_DISABLE_SELP      default: false; set 1/true/yes/on to suppress
@@ -44,6 +46,8 @@
 //!                         PTX xor.b32 generation while retaining and.b32/or.b32
 //!   DIV_DISABLE_PRMT      default: false; set 1/true/yes/on to suppress
 //!                         PTX prmt.b32 generation
+//!   DIV_DISABLE_PREDICATED_PRMT default: false; set 1/true/yes/on to suppress
+//!                         predicated prmt.b32 generation
 //!   DIV_DISABLE_NOT       default: false; set 1/true/yes/on to suppress
 //!                         PTX not.b32 generation and xor.b32-by-0xffffffff
 //!   DIV_DISABLE_CLZ       default: false; set 1/true/yes/on to suppress
@@ -90,6 +94,8 @@
 //!                         PTX mad24.lo.u32/mad24.hi.u32 generation
 //!   DIV_DISABLE_MUL24     default: false; set 1/true/yes/on to suppress
 //!                         PTX mul24.{lo,hi}.{u32,s32} generation
+//!   DIV_DISABLE_PREDICATED_24BIT default: false; set 1/true/yes/on to suppress
+//!                         predicated mad24/mul24 generation
 //!   DIV_DISABLE_MUL_WIDE  default: false; set 1/true/yes/on to suppress
 //!                         PTX mul.wide.{u32,s32} generation
 //!   DIV_DISABLE_WIDE_INT  default: false; set 1/true/yes/on to suppress
@@ -223,6 +229,8 @@ struct Args {
     #[arg(long)]
     disable_lop3: bool,
     #[arg(long)]
+    disable_predicated_lop3: bool,
+    #[arg(long)]
     disable_minmax: bool,
     #[arg(long)]
     disable_selp: bool,
@@ -244,6 +252,8 @@ struct Args {
     disable_xor: bool,
     #[arg(long)]
     disable_prmt: bool,
+    #[arg(long)]
+    disable_predicated_prmt: bool,
     #[arg(long)]
     disable_not: bool,
     #[arg(long)]
@@ -290,6 +300,8 @@ struct Args {
     disable_mad24: bool,
     #[arg(long)]
     disable_mul24: bool,
+    #[arg(long)]
+    disable_predicated_24bit: bool,
     #[arg(long)]
     disable_mul_wide: bool,
     #[arg(long)]
@@ -372,6 +384,7 @@ impl Args {
         );
         set_bool!(self.disable_arbitrary_loops, "DIV_DISABLE_ARBITRARY_LOOPS");
         set_bool!(self.disable_lop3, "DIV_DISABLE_LOP3");
+        set_bool!(self.disable_predicated_lop3, "DIV_DISABLE_PREDICATED_LOP3");
         set_bool!(self.disable_minmax, "DIV_DISABLE_MINMAX");
         set_bool!(self.disable_selp, "DIV_DISABLE_SELP");
         set_bool!(self.disable_sub, "DIV_DISABLE_SUB");
@@ -383,6 +396,7 @@ impl Args {
         set_bool!(self.disable_or, "DIV_DISABLE_OR");
         set_bool!(self.disable_xor, "DIV_DISABLE_XOR");
         set_bool!(self.disable_prmt, "DIV_DISABLE_PRMT");
+        set_bool!(self.disable_predicated_prmt, "DIV_DISABLE_PREDICATED_PRMT");
         set_bool!(self.disable_not, "DIV_DISABLE_NOT");
         set_bool!(self.disable_clz, "DIV_DISABLE_CLZ");
         set_bool!(self.disable_brev, "DIV_DISABLE_BREV");
@@ -418,6 +432,10 @@ impl Args {
         );
         set_bool!(self.disable_mad24, "DIV_DISABLE_MAD24");
         set_bool!(self.disable_mul24, "DIV_DISABLE_MUL24");
+        set_bool!(
+            self.disable_predicated_24bit,
+            "DIV_DISABLE_PREDICATED_24BIT"
+        );
         set_bool!(self.disable_mul_wide, "DIV_DISABLE_MUL_WIDE");
         set_bool!(self.disable_wide_int, "DIV_DISABLE_WIDE_INT");
         set_bool!(self.disable_addc, "DIV_DISABLE_ADDC");
@@ -515,6 +533,7 @@ impl Config {
         let disable_structured_loops = env_bool("DIV_DISABLE_STRUCTURED_LOOPS")?.unwrap_or(false);
         let disable_arbitrary_loops = env_bool("DIV_DISABLE_ARBITRARY_LOOPS")?.unwrap_or(false);
         let disable_lop3 = env_bool("DIV_DISABLE_LOP3")?.unwrap_or(false);
+        let disable_predicated_lop3 = env_bool("DIV_DISABLE_PREDICATED_LOP3")?.unwrap_or(false);
         let disable_minmax = env_bool("DIV_DISABLE_MINMAX")?.unwrap_or(false);
         let disable_selp = env_bool("DIV_DISABLE_SELP")?.unwrap_or(false);
         let disable_sub = env_bool("DIV_DISABLE_SUB")?.unwrap_or(false);
@@ -526,6 +545,7 @@ impl Config {
         let disable_or = env_bool("DIV_DISABLE_OR")?.unwrap_or(false);
         let disable_xor = env_bool("DIV_DISABLE_XOR")?.unwrap_or(false);
         let disable_prmt = env_bool("DIV_DISABLE_PRMT")?.unwrap_or(false);
+        let disable_predicated_prmt = env_bool("DIV_DISABLE_PREDICATED_PRMT")?.unwrap_or(false);
         let disable_not = env_bool("DIV_DISABLE_NOT")?.unwrap_or(false);
         let disable_clz = env_bool("DIV_DISABLE_CLZ")?.unwrap_or(false);
         let disable_brev = env_bool("DIV_DISABLE_BREV")?.unwrap_or(false);
@@ -550,6 +570,7 @@ impl Config {
             env_bool("DIV_DISABLE_PREDICATED_BITFIELD")?.unwrap_or(false);
         let disable_mad24 = env_bool("DIV_DISABLE_MAD24")?.unwrap_or(false);
         let disable_mul24 = env_bool("DIV_DISABLE_MUL24")?.unwrap_or(false);
+        let disable_predicated_24bit = env_bool("DIV_DISABLE_PREDICATED_24BIT")?.unwrap_or(false);
         let disable_mul_wide = env_bool("DIV_DISABLE_MUL_WIDE")?.unwrap_or(false);
         let disable_wide_int = env_bool("DIV_DISABLE_WIDE_INT")?.unwrap_or(false);
         let disable_addc = env_bool("DIV_DISABLE_ADDC")?.unwrap_or(false);
@@ -579,6 +600,7 @@ impl Config {
             emit_structured_loops: !disable_structured_loops,
             emit_arbitrary_loops: !disable_arbitrary_loops,
             emit_lop3: !disable_lop3,
+            emit_predicated_lop3: !disable_predicated_lop3 && !disable_lop3,
             emit_minmax: !disable_minmax,
             emit_selp: !disable_selp,
             emit_sub: !disable_sub,
@@ -590,6 +612,7 @@ impl Config {
             emit_or: !disable_or,
             emit_xor: !disable_xor,
             emit_prmt: !disable_prmt,
+            emit_predicated_prmt: !disable_predicated_prmt && !disable_prmt,
             emit_not: !disable_not,
             emit_clz: !disable_clz,
             emit_brev: !disable_brev,
@@ -613,6 +636,7 @@ impl Config {
             emit_predicated_bitfield: !disable_predicated_bitfield,
             emit_mad24: !disable_mad24,
             emit_mul24: !disable_mul24,
+            emit_predicated_24bit: !disable_predicated_24bit,
             emit_mul_wide: !disable_mul_wide,
             emit_wide_int: !disable_wide_int,
             emit_addc: !disable_addc,
@@ -816,7 +840,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -835,6 +859,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_structured_loops,
         cfg.gen_config.emit_arbitrary_loops,
         cfg.gen_config.emit_lop3,
+        cfg.gen_config.emit_predicated_lop3,
         cfg.gen_config.emit_minmax,
         cfg.gen_config.emit_selp,
         cfg.gen_config.emit_sub,
@@ -846,6 +871,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_or,
         cfg.gen_config.emit_xor,
         cfg.gen_config.emit_prmt,
+        cfg.gen_config.emit_predicated_prmt,
         cfg.gen_config.emit_not,
         cfg.gen_config.emit_clz,
         cfg.gen_config.emit_brev,
@@ -869,6 +895,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_predicated_bitfield,
         cfg.gen_config.emit_mad24,
         cfg.gen_config.emit_mul24,
+        cfg.gen_config.emit_predicated_24bit,
         cfg.gen_config.emit_mul_wide,
         cfg.gen_config.emit_wide_int,
         cfg.gen_config.emit_addc,
