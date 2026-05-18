@@ -83,6 +83,7 @@ pub struct GenConfig {
     pub emit_popc: bool,
     pub emit_abs: bool,
     pub emit_special_regs: bool,
+    pub emit_predicated_special_regs: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
     pub emit_reg_divrem: bool,
@@ -140,6 +141,8 @@ pub struct GenConfig {
     pub emit_predicated_wide_reg_shifts: bool,
     pub emit_wide_divrem: bool,
     pub emit_signed_wide_divrem: bool,
+    pub emit_reg_wide_divrem: bool,
+    pub emit_predicated_reg_wide_divrem: bool,
     pub emit_predicated_wide_divrem: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
@@ -225,6 +228,7 @@ impl Default for GenConfig {
             emit_popc: true,
             emit_abs: true,
             emit_special_regs: true,
+            emit_predicated_special_regs: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
             emit_reg_divrem: true,
@@ -282,6 +286,8 @@ impl Default for GenConfig {
             emit_predicated_wide_reg_shifts: true,
             emit_wide_divrem: true,
             emit_signed_wide_divrem: true,
+            emit_reg_wide_divrem: true,
+            emit_predicated_reg_wide_divrem: true,
             emit_predicated_wide_divrem: true,
             emit_addc: true,
             emit_subc: true,
@@ -469,9 +475,17 @@ impl UnaryOp {
 #[derive(Clone, Copy)]
 enum SpecialRegOp {
     TidX,
+    TidY,
+    TidZ,
     NtidX,
+    NtidY,
+    NtidZ,
     CtaidX,
+    CtaidY,
+    CtaidZ,
     NctaidX,
+    NctaidY,
+    NctaidZ,
     LaneId,
     LaneMaskEq,
     LaneMaskLt,
@@ -484,9 +498,17 @@ impl SpecialRegOp {
     fn reg_name(self) -> &'static str {
         match self {
             SpecialRegOp::TidX => "%tid.x",
+            SpecialRegOp::TidY => "%tid.y",
+            SpecialRegOp::TidZ => "%tid.z",
             SpecialRegOp::NtidX => "%ntid.x",
+            SpecialRegOp::NtidY => "%ntid.y",
+            SpecialRegOp::NtidZ => "%ntid.z",
             SpecialRegOp::CtaidX => "%ctaid.x",
+            SpecialRegOp::CtaidY => "%ctaid.y",
+            SpecialRegOp::CtaidZ => "%ctaid.z",
             SpecialRegOp::NctaidX => "%nctaid.x",
+            SpecialRegOp::NctaidY => "%nctaid.y",
+            SpecialRegOp::NctaidZ => "%nctaid.z",
             SpecialRegOp::LaneId => "%laneid",
             SpecialRegOp::LaneMaskEq => "%lanemask_eq",
             SpecialRegOp::LaneMaskLt => "%lanemask_lt",
@@ -924,6 +946,12 @@ impl WideDivRemOp {
     fn is_signed(self) -> bool {
         matches!(self, WideDivRemOp::DivS64 | WideDivRemOp::RemS64)
     }
+}
+
+#[derive(Clone, Copy)]
+enum WideDivisor {
+    Imm(i64),
+    Reg(Operand),
 }
 
 #[derive(Clone, Copy)]
@@ -1444,6 +1472,15 @@ enum Inst {
     },
     /// `mov.u32 dst, %special;` for deterministic per-lane special registers.
     SpecialReg { op: SpecialRegOp, dst: u32 },
+    /// `setp.<cmp> pred, ca, cb; @pred mov.u32 dst, %special;`.
+    PredicatedSpecialReg {
+        op: SpecialRegOp,
+        dst: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `cvt.{u32,s32}.{u8,u16,s8,s16} dst, src;` — subword integer extension.
     Cvt { op: CvtOp, dst: u32, src: Operand },
     /// `setp.<cmp> pred, ca, cb; @pred cvt.{...} dst, src;`.
@@ -1727,19 +1764,19 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
-    /// 64-bit div/rem through scratch b64 registers with a nonzero immediate divisor.
+    /// 64-bit div/rem through scratch b64 registers with a nonzero divisor.
     WideDivRem {
         op: WideDivRemOp,
         dst: u32,
         src: Operand,
-        divisor: i64,
+        divisor: WideDivisor,
     },
-    /// Predicated 64-bit div/rem with a nonzero immediate divisor.
+    /// Predicated 64-bit div/rem with a nonzero divisor.
     PredicatedWideDivRem {
         op: WideDivRemOp,
         dst: u32,
         src: Operand,
-        divisor: i64,
+        divisor: WideDivisor,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2600,8 +2637,13 @@ impl<'a> Generator<'a> {
 
     fn pick_wide_divrem(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let op = pick_wide_divrem(u, self.cfg.emit_signed_wide_divrem)?;
-        let divisor = self.pick_wide_divisor(u, op)?;
-        if self.cfg.emit_predicated_wide_divrem && u.arbitrary::<bool>()? {
+        let predicated = self.cfg.emit_predicated_wide_divrem && u.arbitrary::<bool>()?;
+        let allow_reg_divisor = self.cfg.emit_reg_wide_divrem
+            && self.cfg.emit_bitwise_binops
+            && self.cfg.emit_or
+            && (!predicated || self.cfg.emit_predicated_reg_wide_divrem);
+        let divisor = self.pick_wide_divisor(u, op, allow_reg_divisor)?;
+        if predicated {
             Ok(Inst::PredicatedWideDivRem {
                 op,
                 dst: self.pick_dst(u)?,
@@ -2622,13 +2664,22 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn pick_wide_divisor(&mut self, u: &mut Unstructured, op: WideDivRemOp) -> Result<i64> {
+    fn pick_wide_divisor(
+        &mut self,
+        u: &mut Unstructured,
+        op: WideDivRemOp,
+        allow_reg: bool,
+    ) -> Result<WideDivisor> {
+        if allow_reg && u.arbitrary::<bool>()? {
+            return Ok(WideDivisor::Reg(self.pick_reg_operand(u)?));
+        }
+
         let max = self.cfg.max_immediate.max(1).min(i32::MAX as u32);
         let magnitude = i64::from(u.int_in_range(1..=max)?);
         if op.is_signed() && u.arbitrary::<bool>()? {
-            Ok(-magnitude)
+            Ok(WideDivisor::Imm(-magnitude))
         } else {
-            Ok(magnitude)
+            Ok(WideDivisor::Imm(magnitude))
         }
     }
 
@@ -2843,8 +2894,22 @@ impl<'a> Generator<'a> {
                 return self.pick_mad_or_add(u);
             }
             if self.cfg.emit_special_regs && (!self.can_emit_unary() || u.arbitrary::<bool>()?) {
+                let op = pick_special_reg(u)?;
+                if self.cfg.emit_predicated_unary
+                    && self.cfg.emit_predicated_special_regs
+                    && u.arbitrary::<bool>()?
+                {
+                    return Ok(Inst::PredicatedSpecialReg {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    });
+                }
                 return Ok(Inst::SpecialReg {
-                    op: pick_special_reg(u)?,
+                    op,
                     dst: self.pick_dst(u)?,
                 });
             }
@@ -3636,6 +3701,7 @@ impl<'a> Generator<'a> {
             | Inst::Unary { dst, .. }
             | Inst::PredicatedUnary { dst, .. }
             | Inst::SpecialReg { dst, .. }
+            | Inst::PredicatedSpecialReg { dst, .. }
             | Inst::Cvt { dst, .. }
             | Inst::PredicatedCvt { dst, .. }
             | Inst::Szext { dst, .. }
@@ -3951,6 +4017,21 @@ impl<'a> Generator<'a> {
         write!(s, ", ").unwrap();
         cb.emit(s);
         writeln!(s, ";").unwrap();
+    }
+
+    fn emit_wide_divisor(&self, s: &mut String, op: WideDivRemOp, divisor: WideDivisor) -> String {
+        match divisor {
+            WideDivisor::Imm(value) => value.to_string(),
+            WideDivisor::Reg(src) => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    or.b32        %r{scratch}, ").unwrap();
+                src.emit(s);
+                writeln!(s, ", 1;").unwrap();
+                write!(s, "    {:<13} %rd7, ", op.cvt_mnemonic()).unwrap();
+                writeln!(s, "%r{scratch};").unwrap();
+                "%rd7".to_string()
+            }
+        }
     }
 
     fn emit_inst(&self, s: &mut String, inst: &Inst) {
@@ -4286,6 +4367,23 @@ impl<'a> Generator<'a> {
             }
             Inst::SpecialReg { op, dst } => {
                 writeln!(s, "    mov.u32       %r{dst}, {};", op.reg_name()).unwrap();
+            }
+            Inst::PredicatedSpecialReg {
+                op,
+                dst,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(
+                    s,
+                    "    {} mov.u32 %r{dst}, {};",
+                    pred_guard(pred),
+                    op.reg_name()
+                )
+                .unwrap();
             }
             Inst::Cvt { op, dst, src } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
@@ -4935,6 +5033,7 @@ impl<'a> Generator<'a> {
                 write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
+                let divisor = self.emit_wide_divisor(s, op, divisor);
                 writeln!(s, "    {:<13} %rd6, %rd6, {divisor};", op.mnemonic()).unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
@@ -4953,6 +5052,7 @@ impl<'a> Generator<'a> {
                 write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
+                let divisor = self.emit_wide_divisor(s, op, divisor);
                 writeln!(
                     s,
                     "    {} {:<8} %rd6, %rd6, {divisor};",
@@ -5810,9 +5910,17 @@ fn pick_unary(
 fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
     let ops = [
         SpecialRegOp::TidX,
+        SpecialRegOp::TidY,
+        SpecialRegOp::TidZ,
         SpecialRegOp::NtidX,
+        SpecialRegOp::NtidY,
+        SpecialRegOp::NtidZ,
         SpecialRegOp::CtaidX,
+        SpecialRegOp::CtaidY,
+        SpecialRegOp::CtaidZ,
         SpecialRegOp::NctaidX,
+        SpecialRegOp::NctaidY,
+        SpecialRegOp::NctaidZ,
         SpecialRegOp::LaneId,
         SpecialRegOp::LaneMaskEq,
         SpecialRegOp::LaneMaskLt,
@@ -6323,9 +6431,17 @@ mod tests {
     const POST_KNOWN_UNARY_MNEMONICS: &[&str] = &["popc.b32", "clz.b32"];
     const SPECIAL_REG_NAMES: &[&str] = &[
         "%tid.x",
+        "%tid.y",
+        "%tid.z",
         "%ntid.x",
+        "%ntid.y",
+        "%ntid.z",
         "%ctaid.x",
+        "%ctaid.y",
+        "%ctaid.z",
         "%nctaid.x",
+        "%nctaid.y",
+        "%nctaid.z",
         "%laneid",
         "%lanemask_eq",
         "%lanemask_lt",
@@ -6651,6 +6767,17 @@ mod tests {
         })
     }
 
+    fn has_predicated_special_reg(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with('@')
+                && line.contains(" mov.u32 ")
+                && SPECIAL_REG_NAMES
+                    .iter()
+                    .any(|reg_name| line.ends_with(&format!("{reg_name};")))
+        })
+    }
+
     fn parse_u32_reg(token: &str) -> Option<u32> {
         token.trim().strip_prefix("%r")?.parse().ok()
     }
@@ -6948,6 +7075,35 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_DIVREM_MNEMONICS.contains(&op))
+    }
+
+    fn is_wide_reg_divrem_line(line: &str, predicated: bool) -> bool {
+        let line = line.trim_start();
+        if predicated != line.starts_with('@') {
+            return false;
+        }
+        let mut tokens = line.split_whitespace();
+        let op = if predicated {
+            let _pred = tokens.next();
+            tokens.next()
+        } else {
+            tokens.next()
+        };
+        if !op.is_some_and(|op| WIDE_DIVREM_MNEMONICS.contains(&op)) {
+            return false;
+        }
+        line.trim_end_matches(';')
+            .split(',')
+            .next_back()
+            .is_some_and(|divisor| divisor.trim_start().starts_with("%rd"))
+    }
+
+    fn has_wide_reg_divrem(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_wide_reg_divrem_line(line, false))
+    }
+
+    fn has_predicated_wide_reg_divrem(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_wide_reg_divrem_line(line, true))
     }
 
     fn has_predicated_carry(ptx: &str) -> bool {
@@ -8317,6 +8473,51 @@ mod tests {
                     "seed {seed:x} emitted {reg_name}"
                 );
             }
+            assert!(
+                !has_predicated_special_reg(&ptx),
+                "seed {seed:x} emitted predicated special register"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_special_reg_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_not: false,
+            emit_clz: false,
+            emit_brev: false,
+            emit_neg: false,
+            emit_cnot: false,
+            emit_popc: false,
+            emit_abs: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_special_reg(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated special-register mov");
+    }
+
+    #[test]
+    fn predicated_special_reg_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_special_regs: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_special_reg(&ptx),
+                "seed {seed:x} emitted predicated special-register mov"
+            );
         }
     }
 
@@ -9962,6 +10163,14 @@ mod tests {
                 !has_predicated_wide_divrem(&ptx),
                 "seed {seed:x} emitted predicated wide div/rem"
             );
+            assert!(
+                !has_wide_reg_divrem(&ptx),
+                "seed {seed:x} emitted register-divisor wide div/rem"
+            );
+            assert!(
+                !has_predicated_wide_reg_divrem(&ptx),
+                "seed {seed:x} emitted predicated register-divisor wide div/rem"
+            );
         }
     }
 
@@ -9981,6 +10190,48 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn wide_reg_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_predicated_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_wide_reg_divrem(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit register-divisor wide div/rem");
+    }
+
+    #[test]
+    fn wide_reg_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_wide_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_wide_reg_divrem(&ptx),
+                "seed {seed:x} emitted register-divisor wide div/rem"
+            );
         }
     }
 
@@ -10026,6 +10277,7 @@ mod tests {
     fn predicated_wide_divrem_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_predicated_wide_divrem: false,
+            emit_predicated_reg_wide_divrem: false,
             ..GenConfig::default()
         };
 
@@ -10035,6 +10287,51 @@ mod tests {
             assert!(
                 !has_predicated_wide_divrem(&ptx),
                 "seed {seed:x} emitted predicated wide div/rem"
+            );
+            assert!(
+                !has_predicated_wide_reg_divrem(&ptx),
+                "seed {seed:x} emitted predicated register-divisor wide div/rem"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_wide_reg_divrem_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_reg_divrem(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated register-divisor wide div/rem");
+    }
+
+    #[test]
+    fn predicated_wide_reg_divrem_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_reg_wide_divrem: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_reg_divrem(&ptx),
+                "seed {seed:x} emitted predicated register-divisor wide div/rem"
             );
         }
     }

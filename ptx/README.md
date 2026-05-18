@@ -250,6 +250,7 @@ that feature.
 | `DIV_DISABLE_POPC` | `popc.b32`. |
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
+| `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
 | `DIV_DISABLE_REG_DIVREM` | Register-divisor `div.u32` and `rem.u32` with sanitized divisors. |
@@ -308,6 +309,8 @@ that feature.
 | `DIV_DISABLE_PREDICATED_WIDE_REG_SHIFTS` | Predicated masked register-count 64-bit scratch-register shifts. |
 | `DIV_DISABLE_WIDE_DIVREM` | 64-bit scratch-register `div/rem.{u64,s64}` instructions. |
 | `DIV_DISABLE_SIGNED_WIDE_DIVREM` | 64-bit scratch-register `div/rem.s64` instructions. |
+| `DIV_DISABLE_REG_WIDE_DIVREM` | Register-divisor 64-bit scratch-register `div/rem.{u64,s64}` instructions with sanitized divisors. |
+| `DIV_DISABLE_PREDICATED_REG_WIDE_DIVREM` | Predicated register-divisor 64-bit scratch-register `div/rem` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_DIVREM` | Predicated 64-bit scratch-register `div/rem` instructions. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
