@@ -131,7 +131,7 @@
 //!   DIV_DISABLE_F32_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         f32 rounded sqrt/rcp plus approx rcp/rsqrt/ex2/lg2/sin/cos generation
 //!   DIV_DISABLE_F32_COMPARE default: false; set 1/true/yes/on to suppress
-//!                         sanitized f32 compare generation
+//!                         sanitized ordered/unordered f32 compare generation
 //!   DIV_DISABLE_F32_SELP default: false; set 1/true/yes/on to suppress
 //!                         sanitized setp.f32 + selp.f32 generation
 //!   DIV_DISABLE_F64_ARITH default: false; set 1/true/yes/on to suppress
@@ -145,7 +145,7 @@
 //!   DIV_DISABLE_F64_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         rounded f64 sqrt/rcp generation
 //!   DIV_DISABLE_F64_COMPARE default: false; set 1/true/yes/on to suppress
-//!                         sanitized f64 compare generation
+//!                         sanitized ordered/unordered f64 compare generation
 //!   DIV_DISABLE_F64_SELP default: false; set 1/true/yes/on to suppress
 //!                         sanitized setp.f64 + selp.f64 generation
 //!   DIV_DISABLE_SIGNED_CMP default: false; set 1/true/yes/on to suppress
