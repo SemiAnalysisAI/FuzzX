@@ -419,6 +419,19 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::smul_with_overflow:
   case Intrinsic::fshl:
   case Intrinsic::fshr:
+  case Intrinsic::amdgcn_ubfe:
+  case Intrinsic::amdgcn_sbfe:
+  case Intrinsic::amdgcn_lerp:
+  case Intrinsic::amdgcn_sad_u8:
+  case Intrinsic::amdgcn_msad_u8:
+  case Intrinsic::amdgcn_sad_hi_u8:
+  case Intrinsic::amdgcn_sad_u16:
+  case Intrinsic::amdgcn_mul_i24:
+  case Intrinsic::amdgcn_mul_u24:
+  case Intrinsic::amdgcn_mulhi_i24:
+  case Intrinsic::amdgcn_mulhi_u24:
+  case Intrinsic::amdgcn_perm:
+  case Intrinsic::amdgcn_bitop3:
     return true;
   default:
     return false;
@@ -2493,6 +2506,78 @@ Value *emitRandomOverflowInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                            Value *A, Value *Bv,
+                                            std::minstd_rand &Gen,
+                                            StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *C = interestingI32(Ctx, Gen);
+  switch (Gen() % 13) {
+  case 0: {
+    unsigned Offset = Gen() % 32;
+    unsigned Width = Gen() % (33 - Offset);
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_ubfe, {I32}),
+        {A, ci32(Ctx, Offset), ci32(Ctx, Width)},
+        Twine(NamePrefix) + ".ubfe");
+  }
+  case 1: {
+    unsigned Offset = Gen() % 32;
+    unsigned Width = Gen() % (33 - Offset);
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sbfe, {I32}),
+        {A, ci32(Ctx, Offset), ci32(Ctx, Width)},
+        Twine(NamePrefix) + ".sbfe");
+  }
+  case 2:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_lerp),
+        {A, Bv, C}, Twine(NamePrefix) + ".lerp");
+  case 3:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sad_u8),
+        {A, Bv, C}, Twine(NamePrefix) + ".sad.u8");
+  case 4:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_msad_u8),
+        {A, Bv, C}, Twine(NamePrefix) + ".msad.u8");
+  case 5:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sad_hi_u8),
+        {A, Bv, C}, Twine(NamePrefix) + ".sad.hi.u8");
+  case 6:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sad_u16),
+        {A, Bv, C}, Twine(NamePrefix) + ".sad.u16");
+  case 7:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mul_i24, {I32}),
+        {A, Bv}, Twine(NamePrefix) + ".mul.i24");
+  case 8:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mul_u24, {I32}),
+        {A, Bv}, Twine(NamePrefix) + ".mul.u24");
+  case 9:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mulhi_i24),
+        {A, Bv}, Twine(NamePrefix) + ".mulhi.i24");
+  case 10:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mulhi_u24),
+        {A, Bv}, Twine(NamePrefix) + ".mulhi.u24");
+  case 11:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_perm),
+        {A, Bv, C}, Twine(NamePrefix) + ".perm");
+  default:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_bitop3, {I32}),
+        {A, Bv, C, ci32(Ctx, Gen() & 255u)},
+        Twine(NamePrefix) + ".bitop3");
+  }
+}
+
 Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
                                        Value *Bv, bool IsRem,
                                        StringRef NamePrefix) {
@@ -2559,7 +2644,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 88) {
+  switch (Gen() % 96) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -2724,6 +2809,14 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 72:
   case 73:
     return emitRandomOverflowInstruction(B, M, A, Bv, Gen, "fuzz.overflow");
+  case 74:
+  case 75:
+  case 76:
+  case 77:
+  case 78:
+  case 79:
+    return emitRandomAMDGPUIntrinsicInstruction(B, M, A, Bv, Gen,
+                                                "fuzz.amdgcn");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -2758,7 +2851,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 74) {
+  switch (Gen() % 80) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2911,6 +3004,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 65:
     return emitRandomOverflowInstruction(B, M, A, Bv, Gen,
                                          "fuzz.cfg.overflow");
+  case 66:
+  case 67:
+  case 68:
+  case 69:
+  case 70:
+  case 71:
+    return emitRandomAMDGPUIntrinsicInstruction(B, M, A, Bv, Gen,
+                                                "fuzz.cfg.amdgcn");
   default:
     switch (Gen() % 5) {
     case 0:

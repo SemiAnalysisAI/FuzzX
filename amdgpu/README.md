@@ -50,7 +50,10 @@ rare signed division/remainder by proven-positive divisors,
 subexpressions and narrow `<4/8 x i8>` / `<4/8 x i16>` vector subexpressions
 reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
 `i32`, and LLVM bit, min/max, saturation, absolute-value, funnel-shift, and
-integer overflow intrinsics. It also emits a finite scalar FP subset by masking
+integer overflow intrinsics. It also emits a small AMDGPU-specific pure
+integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
+`perm`, and explicit `bitop3` operations. It also emits a finite scalar FP
+subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
 `fptoui`; a signed variant uses small sign-extended integers, `sitofp`,
