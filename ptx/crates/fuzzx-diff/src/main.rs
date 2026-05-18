@@ -347,7 +347,7 @@
 //!   DIV_DISABLE_PREDICATED_SZEXT default: false; set 1/true/yes/on to suppress
 //!                         predicated szext generation
 //!   DIV_DISABLE_SETP_BOOL default: false; set 1/true/yes/on to suppress
-//!                         setp.<cmp>.{and,or,xor} predicate-combiner generation
+//!                         integer/floating setp.<cmp>.{and,or,xor} predicate-combiner generation
 //!   DIV_DISABLE_SETP_DUAL default: false; set 1/true/yes/on to suppress
 //!                         setp.<cmp> %p|%q complement-predicate generation
 //!   DIV_DISABLE_PRED_LOGIC default: false; set 1/true/yes/on to suppress

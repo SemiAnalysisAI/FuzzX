@@ -385,7 +385,7 @@ that feature.
 | `DIV_DISABLE_SZEXT` | `szext.{wrap,clamp}.{u32,s32}`. |
 | `DIV_DISABLE_SIGNED_SZEXT` | `szext.*.s32`. |
 | `DIV_DISABLE_PREDICATED_SZEXT` | Predicated `szext` instructions. |
-| `DIV_DISABLE_SETP_BOOL` | `setp.<cmp>.{and,or,xor}` predicate-combiner instructions. |
+| `DIV_DISABLE_SETP_BOOL` | Integer and floating `setp.<cmp>.{and,or,xor}` predicate-combiner instructions. |
 | `DIV_DISABLE_SETP_DUAL` | `setp.<cmp> %p|%q` complement-predicate instructions. |
 | `DIV_DISABLE_PRED_LOGIC` | `and.pred`, `or.pred`, `xor.pred`, and `not.pred`. |
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
