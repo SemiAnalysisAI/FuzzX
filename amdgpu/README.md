@@ -295,18 +295,10 @@ Tested toolchains as of 2026-05-18:
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
-*Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
-
-*Human-written note:* After m038, AMD asked us to switch active fuzzing back to
-HEAD builds.  The current LLVM HEAD column uses upstream main at
-`0dd29960cd6102b37651cc3f58f872652099b83b` with llvm/llvm-project#198373
-and llvm/llvm-project#196418 applied.  After m039, the ROCm HEAD column was
-refreshed to ROCm `amd-staging` at
-`a5de13684ba84db953b28e632ea304080a4318d0` with the same PRs applied.
-llvm/llvm-project#198373 fixes m002, m004, m006, m007, m008, m009, m010, and
-m011 in both HEAD builds.  llvm/llvm-project#196418 fixes m024 and m025 in
-both HEAD builds, so the fuzzer no longer suppresses unsigned division or
-remainder by odd `or` denominators in HEAD campaigns.
+*Human-written note:* Up through bug m016 I was testing against upstream LLVM.
+But then it became clear that the ROCm 7.2.3 release didn't have many of these
+bugs, so I switched to testing the release.  After m038, AMD asked me to switch
+fuzzing back to upstream.
 
 ## LLVM Source Builds
 
