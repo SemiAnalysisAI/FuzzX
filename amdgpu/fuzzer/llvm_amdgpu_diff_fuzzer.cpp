@@ -419,6 +419,18 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::smul_with_overflow:
   case Intrinsic::fshl:
   case Intrinsic::fshr:
+  case Intrinsic::amdgcn_fma_legacy:
+  case Intrinsic::amdgcn_frexp_exp:
+  case Intrinsic::amdgcn_frexp_mant:
+  case Intrinsic::amdgcn_fract:
+  case Intrinsic::amdgcn_cvt_pkrtz:
+  case Intrinsic::amdgcn_cvt_pknorm_i16:
+  case Intrinsic::amdgcn_cvt_pknorm_u16:
+  case Intrinsic::amdgcn_cvt_pk_i16:
+  case Intrinsic::amdgcn_cvt_pk_u16:
+  case Intrinsic::amdgcn_cvt_pk_u8_f32:
+  case Intrinsic::amdgcn_class:
+  case Intrinsic::amdgcn_fmed3:
   case Intrinsic::amdgcn_ubfe:
   case Intrinsic::amdgcn_sbfe:
   case Intrinsic::amdgcn_lerp:
@@ -712,6 +724,7 @@ bool isAllowedIRInstruction(const Instruction &I) {
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
           SIToFPInst, FPToUIInst, FPToSIInst, FPExtInst, FPTruncInst,
+          BitCastInst,
           ICmpInst, FCmpInst, PHINode, SelectInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
@@ -1485,6 +1498,15 @@ bool triggersC001SUDotISELICE(const Instruction &I) {
   return ID == Intrinsic::amdgcn_sudot4 || ID == Intrinsic::amdgcn_sudot8;
 }
 
+bool triggersC002FMALegacyISELICE(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::amdgcn_fma_legacy;
+}
+
 bool hasName(const Value *V, StringRef Name) {
   return V && V->hasName() && V->getName() == Name;
 }
@@ -1581,6 +1603,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
+  bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
   if (!Kernel)
     return false;
@@ -1616,7 +1639,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
               (!AllowM033 && triggersM033SubZExtBool(I)) ||
               (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
-              (!AllowC001 && triggersC001SUDotISELICE(I)))
+              (!AllowC001 && triggersC001SUDotISELICE(I)) ||
+              (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
       continue;
     }
@@ -2591,6 +2615,165 @@ Value *reduceV4I32ToI32(IRBuilder<NoFolder> &B, Value *V,
   }
 }
 
+Value *boundedUIToF32(IRBuilder<NoFolder> &B, Value *V, uint32_t Mask,
+                      const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Value *Masked = B.CreateAnd(V, ci32(Ctx, Mask), Twine(Name) + ".mask");
+  return B.CreateUIToFP(Masked, Type::getFloatTy(Ctx),
+                        Twine(Name) + ".uitofp");
+}
+
+Value *positiveUIToF32(IRBuilder<NoFolder> &B, Value *V, uint32_t Mask,
+                       const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Value *Masked = B.CreateAnd(V, ci32(Ctx, Mask), Twine(Name) + ".mask");
+  Value *Positive = B.CreateOr(Masked, ci32(Ctx, 1), Twine(Name) + ".nz");
+  return B.CreateUIToFP(Positive, Type::getFloatTy(Ctx),
+                        Twine(Name) + ".uitofp");
+}
+
+Value *mixI32IntrinsicResult(IRBuilder<NoFolder> &B, Value *Result, Value *A,
+                             Value *Bv, std::minstd_rand &Gen,
+                             const Twine &Name) {
+  switch (Gen() % 4) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateXor(Result, A, Twine(Name) + ".xor");
+  case 2:
+    return B.CreateAdd(Result, Bv, Twine(Name) + ".add");
+  default:
+    return B.CreateSub(A, Result, Twine(Name) + ".sub");
+  }
+}
+
+Value *fp32ToBoundedI32(IRBuilder<NoFolder> &B, Value *F, Value *A, Value *Bv,
+                        std::minstd_rand &Gen, const Twine &Name) {
+  Type *I32 = Type::getInt32Ty(F->getContext());
+  Value *Int = B.CreateFPToUI(F, I32, Twine(Name) + ".fptoui");
+  return mixI32IntrinsicResult(B, Int, A, Bv, Gen, Name);
+}
+
+Value *bitcastPackedV2ToI32(IRBuilder<NoFolder> &B, Value *V,
+                            const Twine &Name) {
+  return B.CreateBitCast(V, Type::getInt32Ty(V->getContext()),
+                         Twine(Name) + ".bits");
+}
+
+Value *emitRandomAMDGPUFPIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                              Value *A, Value *Bv,
+                                              std::minstd_rand &Gen,
+                                              StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *F32 = Type::getFloatTy(Ctx);
+  Value *FA = boundedUIToF32(B, A, 31, Twine(NamePrefix) + ".fp.a");
+  Value *FB = boundedUIToF32(B, Bv, 31, Twine(NamePrefix) + ".fp.b");
+  Value *FC = boundedUIToF32(B, interestingI32(Ctx, Gen), 31,
+                             Twine(NamePrefix) + ".fp.c");
+  bool AllowFMALegacy =
+      envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
+
+  unsigned Choice = Gen() % (AllowFMALegacy ? 10 : 9);
+  if (!AllowFMALegacy)
+    ++Choice;
+
+  switch (Choice) {
+  case 0: {
+    Value *Mul = boundedUIToF32(B, Bv, 15, Twine(NamePrefix) + ".fma.mul");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_fma_legacy),
+        {FA, Mul, FC}, Twine(NamePrefix) + ".fma.legacy");
+    return fp32ToBoundedI32(B, R, A, Bv, Gen, Twine(NamePrefix) + ".fma");
+  }
+  case 1: {
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_fmed3, {F32}),
+        {FA, FB, FC}, Twine(NamePrefix) + ".fmed3");
+    return fp32ToBoundedI32(B, R, A, Bv, Gen, Twine(NamePrefix) + ".fmed3");
+  }
+  case 2: {
+    static constexpr std::array<uint32_t, 12> Masks = {
+        1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 96, 1023};
+    Value *Mask = ci32(Ctx, Masks[Gen() % Masks.size()]);
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_class, {F32}),
+        {FA, Mask}, Twine(NamePrefix) + ".class");
+    Value *Z = B.CreateZExt(R, I32, Twine(NamePrefix) + ".class.zext");
+    return mixI32IntrinsicResult(B, Z, A, Bv, Gen,
+                                 Twine(NamePrefix) + ".class");
+  }
+  case 3: {
+    Value *FPos = positiveUIToF32(B, A, 1023, Twine(NamePrefix) + ".frexp");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_frexp_exp,
+                                          {I32, F32}),
+        {FPos}, Twine(NamePrefix) + ".frexp.exp");
+    return mixI32IntrinsicResult(B, R, A, Bv, Gen,
+                                 Twine(NamePrefix) + ".frexp.exp");
+  }
+  case 4: {
+    Value *FPos = positiveUIToF32(B, A, 1023, Twine(NamePrefix) + ".frexp");
+    Value *Mant = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_frexp_mant,
+                                          {F32}),
+        {FPos}, Twine(NamePrefix) + ".frexp.mant");
+    Value *Scaled = B.CreateFMul(
+        Mant, ConstantFP::get(F32, 1024.0), Twine(NamePrefix) + ".mant.scale");
+    return fp32ToBoundedI32(B, Scaled, A, Bv, Gen,
+                            Twine(NamePrefix) + ".frexp.mant");
+  }
+  case 5: {
+    Value *Base = boundedUIToF32(B, A, 31, Twine(NamePrefix) + ".fract.base");
+    Value *FracInput = B.CreateFAdd(Base, ConstantFP::get(F32, 0.5),
+                                    Twine(NamePrefix) + ".fract.input");
+    Value *Frac = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_fract, {F32}),
+        {FracInput}, Twine(NamePrefix) + ".fract");
+    Value *Scaled = B.CreateFMul(
+        Frac, ConstantFP::get(F32, 1024.0), Twine(NamePrefix) + ".fract.scale");
+    return fp32ToBoundedI32(B, Scaled, A, Bv, Gen,
+                            Twine(NamePrefix) + ".fract");
+  }
+  case 6: {
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_cvt_pkrtz),
+        {FA, FB}, Twine(NamePrefix) + ".cvt.pkrtz");
+    return mixI32IntrinsicResult(
+        B, bitcastPackedV2ToI32(B, R, Twine(NamePrefix) + ".cvt.pkrtz"), A, Bv,
+        Gen, Twine(NamePrefix) + ".cvt.pkrtz");
+  }
+  case 7: {
+    Value *NormA = boundedUIToF32(B, A, 1, Twine(NamePrefix) + ".norm.a");
+    Value *NormB = boundedUIToF32(B, Bv, 1, Twine(NamePrefix) + ".norm.b");
+    Intrinsic::ID ID = (Gen() % 2) == 0 ? Intrinsic::amdgcn_cvt_pknorm_i16
+                                        : Intrinsic::amdgcn_cvt_pknorm_u16;
+    Value *R = B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID),
+                            {NormA, NormB},
+                            Twine(NamePrefix) + ".cvt.pknorm");
+    return mixI32IntrinsicResult(
+        B, bitcastPackedV2ToI32(B, R, Twine(NamePrefix) + ".cvt.pknorm"), A,
+        Bv, Gen, Twine(NamePrefix) + ".cvt.pknorm");
+  }
+  case 8: {
+    Intrinsic::ID ID = (Gen() % 2) == 0 ? Intrinsic::amdgcn_cvt_pk_i16
+                                        : Intrinsic::amdgcn_cvt_pk_u16;
+    Value *R = B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID), {A, Bv},
+                            Twine(NamePrefix) + ".cvt.pk.i16");
+    return mixI32IntrinsicResult(
+        B, bitcastPackedV2ToI32(B, R, Twine(NamePrefix) + ".cvt.pk.i16"), A,
+        Bv, Gen, Twine(NamePrefix) + ".cvt.pk.i16");
+  }
+  default: {
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_cvt_pk_u8_f32),
+        {FA, A, ci32(Ctx, Gen() & 3u)}, Twine(NamePrefix) + ".cvt.pk.u8");
+    return mixI32IntrinsicResult(B, R, A, Bv, Gen,
+                                 Twine(NamePrefix) + ".cvt.pk.u8");
+  }
+  }
+}
+
 Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
                                             Value *A, Value *Bv,
                                             std::minstd_rand &Gen,
@@ -2603,7 +2786,7 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
   Value *C = interestingI32(Ctx, Gen);
   Value *Clamp = ConstantInt::getFalse(Ctx);
   bool AllowSUDot = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
-  switch (Gen() % (AllowSUDot ? 30 : 28)) {
+  switch (Gen() % (AllowSUDot ? 40 : 38)) {
   case 0: {
     unsigned Offset = Gen() % 32;
     unsigned Width = Gen() % (33 - Offset);
@@ -2766,9 +2949,23 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot8),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot8");
   case 28:
+  case 29:
+  case 30:
+  case 31:
+  case 32:
+  case 33:
+  case 34:
+  case 35:
+  case 36:
+  case 37:
+    return emitRandomAMDGPUFPIntrinsicInstruction(B, M, A, Bv, Gen,
+                                                  NamePrefix);
+  case 38:
     return B.CreateCall(
-        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot8),
-        {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot8");
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot4),
+        {ConstantInt::get(I1, Gen() & 1), A,
+         ConstantInt::get(I1, Gen() & 1), Bv, C, Clamp},
+        Twine(NamePrefix) + ".sudot4");
   default:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot8),

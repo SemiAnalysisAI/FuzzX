@@ -53,8 +53,10 @@ reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
 integer overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
-explicit `bitop3`, and integer dot-product operations, with known `sudot*`
-instruction-selection crashes gated off by default. It also emits a finite
+explicit `bitop3`, and integer dot-product operations, plus bounded AMDGPU
+FP/packing intrinsics such as `fmed3`, `frexp`, `fract`, `class`, and packed
+FP/int conversions. Known `sudot*` and `fma.legacy` instruction-selection
+crashes are gated off by default. It also emits a finite
 scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
@@ -170,6 +172,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
 | `FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT=1` | unset | Re-enable `add(fshl(Y, x, 30), x)` shapes for [m034](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
+| `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
 ## Layout
 
@@ -195,7 +198,7 @@ differential test: ✅ means no mismatch was observed for that reproducer, and
 Confirmed compiler ICEs should be recorded here too, with the table entry
 describing the crashing toolchain and phase instead of a differential result.
 
-Tested toolchains as of 2026-05-17:
+Tested toolchains as of 2026-05-18:
 
 | Column | Toolchain |
 | --- | --- |
@@ -240,6 +243,7 @@ Tested toolchains as of 2026-05-17:
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
 | [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
+| [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
 
