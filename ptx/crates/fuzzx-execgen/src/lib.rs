@@ -247,6 +247,7 @@ pub struct GenConfig {
     pub emit_predicated_video: bool,
     pub emit_set: bool,
     pub emit_s32_slct: bool,
+    pub emit_f32_slct: bool,
     pub emit_video: bool,
     pub emit_signed_video: bool,
     pub emit_video_sat: bool,
@@ -463,6 +464,7 @@ impl Default for GenConfig {
             emit_predicated_video: true,
             emit_set: true,
             emit_s32_slct: true,
+            emit_f32_slct: true,
             emit_video: true,
             emit_signed_video: true,
             emit_video_sat: true,
@@ -2985,6 +2987,11 @@ enum SlctOp {
     U32S32,
     S32S32,
     B32S32,
+    U32F32,
+    S32F32,
+    B32F32,
+    F32S32,
+    F32F32,
 }
 
 impl SlctOp {
@@ -2993,7 +3000,23 @@ impl SlctOp {
             SlctOp::U32S32 => "slct.u32.s32",
             SlctOp::S32S32 => "slct.s32.s32",
             SlctOp::B32S32 => "slct.b32.s32",
+            SlctOp::U32F32 => "slct.u32.f32",
+            SlctOp::S32F32 => "slct.s32.f32",
+            SlctOp::B32F32 => "slct.b32.f32",
+            SlctOp::F32S32 => "slct.f32.s32",
+            SlctOp::F32F32 => "slct.f32.f32",
         }
+    }
+
+    fn selector_is_f32(self) -> bool {
+        matches!(
+            self,
+            SlctOp::U32F32 | SlctOp::S32F32 | SlctOp::B32F32 | SlctOp::F32F32
+        )
+    }
+
+    fn dst_is_f32(self) -> bool {
+        matches!(self, SlctOp::F32S32 | SlctOp::F32F32)
     }
 }
 
@@ -8858,7 +8881,7 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 255 {
             if self.cfg.emit_slct {
-                let op = pick_slct(u, self.cfg.emit_s32_slct)?;
+                let op = pick_slct(u, self.cfg.emit_s32_slct, self.cfg.emit_f32_slct)?;
                 if self.cfg.emit_predicated_slct && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedSlct {
                         op,
@@ -9645,6 +9668,17 @@ impl<'a> Generator<'a> {
         operand.emit(s);
         writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
         writeln!(s, "    cvt.rn.f32.u32 %f{freg}, %r{scratch};").unwrap();
+    }
+
+    fn emit_raw_f32_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
+        let cvt = if signed {
+            "cvt.rn.f32.s32"
+        } else {
+            "cvt.rn.f32.u32"
+        };
+        write!(s, "    {cvt:<13} %f{freg}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ";").unwrap();
     }
 
     fn emit_sanitized_f32_math_operand(
@@ -12882,13 +12916,34 @@ impl<'a> Generator<'a> {
                 writeln!(s, ";").unwrap();
             }
             Inst::Slct { op, dst, a, b, c } => {
-                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
-                a.emit(s);
-                write!(s, ", ").unwrap();
-                b.emit(s);
-                write!(s, ", ").unwrap();
-                c.emit(s);
-                writeln!(s, ";").unwrap();
+                if op.dst_is_f32() {
+                    self.emit_raw_f32_operand(s, 0, a, false);
+                    self.emit_raw_f32_operand(s, 1, b, false);
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 2, c, true);
+                        writeln!(s, "    {:<13} %f3, %f0, %f1, %f2;", op.mnemonic()).unwrap();
+                    } else {
+                        write!(s, "    {:<13} %f3, %f0, %f1, ", op.mnemonic()).unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+                } else {
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                    }
+                    write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                    a.emit(s);
+                    write!(s, ", ").unwrap();
+                    b.emit(s);
+                    write!(s, ", ").unwrap();
+                    if op.selector_is_f32() {
+                        writeln!(s, "%f0;").unwrap();
+                    } else {
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                }
             }
             Inst::PredicatedSlct {
                 op,
@@ -12902,13 +12957,47 @@ impl<'a> Generator<'a> {
                 pred,
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
-                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
-                a.emit(s);
-                write!(s, ", ").unwrap();
-                b.emit(s);
-                write!(s, ", ").unwrap();
-                c.emit(s);
-                writeln!(s, ";").unwrap();
+                if op.dst_is_f32() {
+                    self.emit_raw_f32_operand(s, 0, a, false);
+                    self.emit_raw_f32_operand(s, 1, b, false);
+                    writeln!(s, "    mov.f32       %f3, %f0;").unwrap();
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 2, c, true);
+                        writeln!(
+                            s,
+                            "    {} {:<8} %f3, %f0, %f1, %f2;",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    } else {
+                        write!(
+                            s,
+                            "    {} {:<8} %f3, %f0, %f1, ",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                    writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+                } else {
+                    if op.selector_is_f32() {
+                        self.emit_raw_f32_operand(s, 0, c, true);
+                    }
+                    write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                    a.emit(s);
+                    write!(s, ", ").unwrap();
+                    b.emit(s);
+                    write!(s, ", ").unwrap();
+                    if op.selector_is_f32() {
+                        writeln!(s, "%f0;").unwrap();
+                    } else {
+                        c.emit(s);
+                        writeln!(s, ";").unwrap();
+                    }
+                }
             }
             Inst::Dp4a { op, dst, a, b, c } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
@@ -14365,13 +14454,35 @@ fn pick_sad(u: &mut Unstructured) -> Result<SadOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_slct(u: &mut Unstructured, emit_s32_slct: bool) -> Result<SlctOp> {
-    let ops: &[SlctOp] = if emit_s32_slct {
-        &[SlctOp::U32S32, SlctOp::S32S32, SlctOp::B32S32]
-    } else {
-        &[SlctOp::U32S32, SlctOp::B32S32]
+fn pick_slct(u: &mut Unstructured, emit_s32_slct: bool, emit_f32_slct: bool) -> Result<SlctOp> {
+    const BASE_OPS: &[SlctOp] = &[SlctOp::U32S32, SlctOp::B32S32];
+    const BASE_WITH_S32_OPS: &[SlctOp] = &[SlctOp::U32S32, SlctOp::S32S32, SlctOp::B32S32];
+    const F32_OPS: &[SlctOp] = &[
+        SlctOp::U32S32,
+        SlctOp::B32S32,
+        SlctOp::U32F32,
+        SlctOp::B32F32,
+        SlctOp::F32S32,
+        SlctOp::F32F32,
+    ];
+    const F32_WITH_S32_OPS: &[SlctOp] = &[
+        SlctOp::U32S32,
+        SlctOp::S32S32,
+        SlctOp::B32S32,
+        SlctOp::U32F32,
+        SlctOp::S32F32,
+        SlctOp::B32F32,
+        SlctOp::F32S32,
+        SlctOp::F32F32,
+    ];
+
+    let ops = match (emit_s32_slct, emit_f32_slct) {
+        (false, false) => BASE_OPS,
+        (true, false) => BASE_WITH_S32_OPS,
+        (false, true) => F32_OPS,
+        (true, true) => F32_WITH_S32_OPS,
     };
-    Ok(*u.choose(&ops)?)
+    Ok(*u.choose(ops)?)
 }
 
 fn pick_video(
@@ -15841,6 +15952,13 @@ mod tests {
     ];
     const SAD_MNEMONICS: &[&str] = &["sad.u32", "sad.s32"];
     const SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.s32.s32", "slct.b32.s32"];
+    const F32_SLCT_MNEMONICS: &[&str] = &[
+        "slct.u32.f32",
+        "slct.s32.f32",
+        "slct.b32.f32",
+        "slct.f32.s32",
+        "slct.f32.f32",
+    ];
     const POST_KNOWN_SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.b32.s32"];
     const DP4A_MNEMONICS: &[&str] = &[
         "dp4a.u32.u32",
@@ -16940,10 +17058,34 @@ mod tests {
             .any(|op| SAD_MNEMONICS.contains(&op))
     }
 
+    fn is_slct_mnemonic(mnemonic: &str) -> bool {
+        SLCT_MNEMONICS.contains(&mnemonic) || F32_SLCT_MNEMONICS.contains(&mnemonic)
+    }
+
+    fn is_s32_slct_mnemonic(mnemonic: &str) -> bool {
+        mnemonic.starts_with("slct.s32.")
+    }
+
+    fn has_slct_mnemonic(ptx: &str) -> bool {
+        ptx.lines().filter_map(body_mnemonic).any(is_slct_mnemonic)
+    }
+
+    fn has_f32_slct_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(|op| F32_SLCT_MNEMONICS.contains(&op))
+    }
+
+    fn has_s32_slct_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(is_s32_slct_mnemonic)
+    }
+
     fn has_predicated_slct(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
-            .any(|op| SLCT_MNEMONICS.contains(&op))
+            .any(is_slct_mnemonic)
     }
 
     fn has_predicated_dp(ptx: &str) -> bool {
@@ -17247,6 +17389,7 @@ mod tests {
             max_insts_per_block: 24,
             n_working_regs: 24,
             max_immediate: 65536,
+            emit_f32_slct: false,
             emit_signed_video: false,
             emit_video_sat: false,
             ..GenConfig::default()
@@ -17296,6 +17439,7 @@ mod tests {
             emit_i32_boundary_immediates: false,
             emit_set: false,
             emit_s32_slct: false,
+            emit_f32_slct: false,
             emit_vsub4: false,
             ..GenConfig::default()
         }
@@ -17349,6 +17493,7 @@ mod tests {
             emit_dp2a: true,
             emit_set: false,
             emit_s32_slct: false,
+            emit_f32_slct: false,
             emit_video: true,
             emit_signed_video: false,
             emit_video_sat: false,
@@ -23942,12 +24087,48 @@ mod tests {
         for seed in 0..1024 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in SLCT_MNEMONICS {
-                assert!(
-                    !has_mnemonic(&ptx, mnemonic),
-                    "seed {seed:x} emitted {mnemonic}"
-                );
-            }
+            assert!(
+                !has_slct_mnemonic(&ptx),
+                "seed {seed:x} emitted slct instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn f32_slct_generation_is_reachable() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 1024,
+            max_insts_per_block: 1024,
+            n_working_regs: 96,
+            max_immediate: u32::MAX,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_slct: true,
+            emit_s32_slct: true,
+            emit_f32_slct: true,
+            emit_predicated_slct: false,
+            ..GenConfig::default()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 2048, F32_SLCT_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_slct_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_slct: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_f32_slct_mnemonic(&ptx),
+                "seed {seed:x} emitted f32 slct"
+            );
         }
     }
 
@@ -24008,8 +24189,8 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(
-                !ptx.contains("slct.s32.s32"),
-                "seed {seed:x} emitted slct.s32.s32"
+                !has_s32_slct_mnemonic(&ptx),
+                "seed {seed:x} emitted slct.s32.*"
             );
         }
     }
