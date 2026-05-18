@@ -110,7 +110,9 @@ pub struct GenConfig {
     pub emit_wide_unary: bool,
     pub emit_predicated_wide_unary: bool,
     pub emit_wide_shifts: bool,
+    pub emit_wide_reg_shifts: bool,
     pub emit_predicated_wide_shifts: bool,
+    pub emit_predicated_wide_reg_shifts: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
@@ -218,7 +220,9 @@ impl Default for GenConfig {
             emit_wide_unary: true,
             emit_predicated_wide_unary: true,
             emit_wide_shifts: true,
+            emit_wide_reg_shifts: true,
             emit_predicated_wide_shifts: true,
+            emit_predicated_wide_reg_shifts: true,
             emit_addc: true,
             emit_subc: true,
             emit_predicated_carry: true,
@@ -1318,12 +1322,30 @@ enum Inst {
         src: Operand,
         amount: u32,
     },
+    /// 64-bit shift through scratch b64 registers with an explicitly masked register count.
+    RegWideShift {
+        op: WideShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: Operand,
+    },
     /// Predicated 64-bit shift through scratch b64 registers.
     PredicatedWideShift {
         op: WideShiftOp,
         dst: u32,
         src: Operand,
         amount: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated 64-bit shift with an explicitly masked register count.
+    PredicatedRegWideShift {
+        op: WideShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2644,7 +2666,30 @@ impl<'a> Generator<'a> {
                 }
             } else if self.cfg.emit_wide_shifts && wide_pick == 2 {
                 let op = pick_wide_shift(u)?;
-                if self.cfg.emit_predicated_wide_shifts && u.arbitrary::<bool>()? {
+                if self.cfg.emit_wide_reg_shifts
+                    && self.cfg.emit_bitwise_binops
+                    && u.arbitrary::<bool>()?
+                {
+                    if self.cfg.emit_predicated_wide_reg_shifts && u.arbitrary::<bool>()? {
+                        Ok(Inst::PredicatedRegWideShift {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            amount: self.pick_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else {
+                        Ok(Inst::RegWideShift {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            amount: self.pick_operand(u)?,
+                        })
+                    }
+                } else if self.cfg.emit_predicated_wide_shifts && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedWideShift {
                         op,
                         dst: self.pick_dst(u)?,
@@ -2910,7 +2955,9 @@ impl<'a> Generator<'a> {
             | Inst::WideUnary { dst, .. }
             | Inst::PredicatedWideUnary { dst, .. }
             | Inst::WideShift { dst, .. }
+            | Inst::RegWideShift { dst, .. }
             | Inst::PredicatedWideShift { dst, .. }
+            | Inst::PredicatedRegWideShift { dst, .. }
             | Inst::Sad { dst, .. }
             | Inst::PredicatedSad { dst, .. }
             | Inst::Slct { dst, .. }
@@ -3898,6 +3945,22 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {:<13} %rd6, %rd6, {amount};", op.mnemonic()).unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
+            Inst::RegWideShift {
+                op,
+                dst,
+                src,
+                amount,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                amount.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd6, %r{scratch_hi};", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
             Inst::PredicatedWideShift {
                 op,
                 dst,
@@ -3916,6 +3979,38 @@ impl<'a> Generator<'a> {
                 writeln!(
                     s,
                     "    {} {:<8} %rd6, %rd6, {amount};",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
+            Inst::PredicatedRegWideShift {
+                op,
+                dst,
+                src,
+                amount,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                amount.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd6, %r{scratch_hi};",
                     pred_guard(pred),
                     op.mnemonic()
                 )
@@ -5403,6 +5498,35 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_SHIFT_MNEMONICS.contains(&op))
+    }
+
+    fn is_wide_reg_shift_line(line: &str, predicated: bool) -> bool {
+        let line = line.trim_start();
+        if predicated != line.starts_with('@') {
+            return false;
+        }
+        let mut tokens = line.split_whitespace();
+        let op = if predicated {
+            let _pred = tokens.next();
+            tokens.next()
+        } else {
+            tokens.next()
+        };
+        if !op.is_some_and(|op| WIDE_SHIFT_MNEMONICS.contains(&op)) {
+            return false;
+        }
+        line.trim_end_matches(';')
+            .split(',')
+            .next_back()
+            .is_some_and(|amount| amount.trim_start().starts_with("%r"))
+    }
+
+    fn has_wide_reg_shift(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_wide_reg_shift_line(line, false))
+    }
+
+    fn has_predicated_wide_reg_shift(ptx: &str) -> bool {
+        ptx.lines().any(|line| is_wide_reg_shift_line(line, true))
     }
 
     fn has_predicated_wide_unary(ptx: &str) -> bool {
@@ -7541,10 +7665,66 @@ mod tests {
     }
 
     #[test]
+    fn wide_register_shift_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_predicated_wide_reg_shifts: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_SHIFT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for line in ptx.lines() {
+                if !is_wide_reg_shift_line(line, false) {
+                    continue;
+                }
+                let op = line.trim_start().split_whitespace().next().unwrap();
+                for (i, mnemonic) in WIDE_SHIFT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_SHIFT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit register-count {missing:?}"
+        );
+    }
+
+    #[test]
+    fn wide_register_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_reg_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_wide_reg_shift(&ptx),
+                "seed {seed:x} emitted register-count wide shift"
+            );
+        }
+    }
+
+    #[test]
     fn predicated_wide_shift_generation_is_reachable() {
         let cfg = GenConfig {
             emit_mul_wide: false,
             emit_wide_int: false,
+            emit_predicated_wide_reg_shifts: false,
             ..coverage_heavy_config()
         };
         let mut found = vec![false; WIDE_SHIFT_MNEMONICS.len()];
@@ -7579,6 +7759,7 @@ mod tests {
             emit_mul_wide: false,
             emit_wide_int: false,
             emit_predicated_wide_shifts: false,
+            emit_predicated_wide_reg_shifts: false,
             ..GenConfig::default()
         };
 
@@ -7588,6 +7769,61 @@ mod tests {
             assert!(
                 !has_predicated_wide_shift(&ptx),
                 "seed {seed:x} emitted predicated wide shift"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_wide_register_shift_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_predicated_wide_shifts: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_SHIFT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for line in ptx.lines() {
+                if !is_wide_reg_shift_line(line, true) {
+                    continue;
+                }
+                let op = predicated_mnemonic(line).unwrap();
+                for (i, mnemonic) in WIDE_SHIFT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_SHIFT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated register-count {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_wide_register_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_reg_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_reg_shift(&ptx),
+                "seed {seed:x} emitted predicated register-count wide shift"
             );
         }
     }
