@@ -334,7 +334,7 @@
 //!   DIV_DISABLE_CVT default: false; set 1/true/yes/on to suppress
 //!                         base cvt generation
 //!   DIV_DISABLE_PREDICATED_CVT default: false; set 1/true/yes/on to suppress
-//!                         predicated cvt generation
+//!                         predicated integer and floating-point cvt generation
 //!   DIV_DISABLE_NARROW_CVT default: false; set 1/true/yes/on to suppress
 //!                         narrow cvt round-trip generation
 //!   DIV_DISABLE_SIGNED_NARROW_CVT default: false; set 1/true/yes/on to suppress

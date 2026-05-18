@@ -377,7 +377,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated integer ALU and floating-point arithmetic instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated integer unary, floating-point unary, and floating-point special-math instructions. |
 | `DIV_DISABLE_CVT` | Direct base `cvt.{u32,s32}.{u8,u16,s8,s16}` instructions; narrow and wide round-trips have separate flags. |
-| `DIV_DISABLE_PREDICATED_CVT` | Predicated `cvt` instructions. |
+| `DIV_DISABLE_PREDICATED_CVT` | Predicated integer and floating-point `cvt` instructions. |
 | `DIV_DISABLE_NARROW_CVT` | Narrow `cvt` round-trips through 8/16-bit destination types. |
 | `DIV_DISABLE_SIGNED_NARROW_CVT` | Signed narrow `cvt` round-trips. |
 | `DIV_DISABLE_PREDICATED_NARROW_CVT` | Predicated narrow `cvt` round-trips. |
