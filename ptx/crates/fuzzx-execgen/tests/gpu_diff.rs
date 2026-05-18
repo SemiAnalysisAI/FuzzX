@@ -21,6 +21,7 @@ fn every_generated_kernel_matches_at_o0_and_o3() {
         control_flow: ControlFlowMode::Structured,
         emit_lop3: false,
         emit_minmax: false,
+        emit_sat_arith: false,
         emit_mulhi: false,
         emit_prmt: false,
         emit_not: false,

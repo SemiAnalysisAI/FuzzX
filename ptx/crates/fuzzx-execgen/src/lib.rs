@@ -115,6 +115,7 @@ pub struct GenConfig {
     pub emit_predicated_cvt: bool,
     pub emit_setp_bool: bool,
     pub emit_setp_dual: bool,
+    pub emit_pred_logic: bool,
     pub emit_predicated_mad: bool,
     pub emit_predicated_mad_hi: bool,
     pub emit_predicated_set: bool,
@@ -215,6 +216,7 @@ impl Default for GenConfig {
             emit_predicated_cvt: true,
             emit_setp_bool: true,
             emit_setp_dual: true,
+            emit_pred_logic: true,
             emit_predicated_mad: true,
             emit_predicated_mad_hi: true,
             emit_predicated_set: true,
@@ -791,6 +793,25 @@ impl PredicateBoolOp {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PredicateLogicOp {
+    And,
+    Or,
+    Xor,
+    Not,
+}
+
+impl PredicateLogicOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            PredicateLogicOp::And => "and.pred",
+            PredicateLogicOp::Or => "or.pred",
+            PredicateLogicOp::Xor => "xor.pred",
+            PredicateLogicOp::Not => "not.pred",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FunnelDir {
     Left,
@@ -918,6 +939,23 @@ enum Inst {
         false_op: BinOp,
         false_a: Operand,
         false_b: Operand,
+    },
+    /// Predicate logic op fed by one or two `setp` producers, then guarded ALU.
+    PredLogicBin {
+        logic_op: PredicateLogicOp,
+        lhs_cmp: CmpOp,
+        lhs_a: Operand,
+        lhs_b: Operand,
+        rhs_cmp: CmpOp,
+        rhs_a: Operand,
+        rhs_b: Operand,
+        lhs_pred: u32,
+        rhs_pred: u32,
+        guard_pred: u32,
+        op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred <shift> dst, src, imm;`.
     PredicatedShift {
@@ -1797,6 +1835,38 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_pred_logic_bin(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_binop(
+            u,
+            self.cfg.emit_minmax,
+            self.cfg.emit_sub,
+            self.cfg.emit_mul_lo,
+            self.cfg.emit_signed_lo_alu,
+            self.cfg.emit_sat_arith,
+            self.cfg.emit_mulhi,
+            self.cfg.emit_signed_mulhi,
+            self.cfg.emit_bitwise_binops,
+            self.cfg.emit_or,
+            self.cfg.emit_xor,
+        )?;
+        Ok(Inst::PredLogicBin {
+            logic_op: pick_predicate_logic_op(u)?,
+            lhs_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            lhs_a: self.pick_guard_operand(u)?,
+            lhs_b: self.pick_guard_operand(u)?,
+            rhs_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            rhs_a: self.pick_guard_operand(u)?,
+            rhs_b: self.pick_guard_operand(u)?,
+            lhs_pred: self.alloc_pred(),
+            rhs_pred: self.alloc_pred(),
+            guard_pred: self.alloc_inst_pred(u)?,
+            op,
+            dst: self.pick_dst(u)?,
+            a: self.pick_bin_operand(u, op)?,
+            b: self.pick_bin_operand(u, op)?,
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -1839,7 +1909,12 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_setp_dual && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            if self.cfg.emit_pred_logic && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+                self.pick_pred_logic_bin(u)
+            } else if self.cfg.emit_setp_dual
+                && self.cfg.emit_predicated_alu
+                && u.arbitrary::<bool>()?
+            {
                 self.pick_setp_dual_bin(u)
             } else if self.cfg.emit_setp_bool
                 && self.cfg.emit_predicated_alu
@@ -2554,6 +2629,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedBin { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
+            | Inst::PredLogicBin { dst, .. }
             | Inst::PredicatedShift { dst, .. }
             | Inst::Shift { dst, .. }
             | Inst::RegShift { dst, .. }
@@ -3005,6 +3081,57 @@ impl<'a> Generator<'a> {
                 false_a.emit(s);
                 write!(s, ", ").unwrap();
                 false_b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredLogicBin {
+                logic_op,
+                lhs_cmp,
+                lhs_a,
+                lhs_b,
+                rhs_cmp,
+                rhs_a,
+                rhs_b,
+                lhs_pred,
+                rhs_pred,
+                guard_pred,
+                op,
+                dst,
+                a,
+                b,
+            } => {
+                write!(s, "    {:<13} %p{lhs_pred}, ", lhs_cmp.mnemonic()).unwrap();
+                lhs_a.emit(s);
+                write!(s, ", ").unwrap();
+                lhs_b.emit(s);
+                writeln!(s, ";").unwrap();
+                if !matches!(logic_op, PredicateLogicOp::Not) {
+                    write!(s, "    {:<13} %p{rhs_pred}, ", rhs_cmp.mnemonic()).unwrap();
+                    rhs_a.emit(s);
+                    write!(s, ", ").unwrap();
+                    rhs_b.emit(s);
+                    writeln!(s, ";").unwrap();
+                }
+                write!(
+                    s,
+                    "    {:<13} %p{}, %p{lhs_pred}",
+                    logic_op.mnemonic(),
+                    pred_id(guard_pred)
+                )
+                .unwrap();
+                if !matches!(logic_op, PredicateLogicOp::Not) {
+                    write!(s, ", %p{rhs_pred}").unwrap();
+                }
+                writeln!(s, ";").unwrap();
+                write!(
+                    s,
+                    "    {} {:<8} %r{dst}, ",
+                    pred_guard(guard_pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
                 writeln!(s, ";").unwrap();
             }
             Inst::PredicatedShift {
@@ -3980,6 +4107,16 @@ fn pick_predicate_bool_op(u: &mut Unstructured) -> Result<PredicateBoolOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_predicate_logic_op(u: &mut Unstructured) -> Result<PredicateLogicOp> {
+    let ops = [
+        PredicateLogicOp::And,
+        PredicateLogicOp::Or,
+        PredicateLogicOp::Xor,
+        PredicateLogicOp::Not,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_shift(
     u: &mut Unstructured,
     emit_shl: bool,
@@ -4369,6 +4506,7 @@ mod tests {
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
+    const PRED_LOGIC_MNEMONICS: &[&str] = &["and.pred", "or.pred", "xor.pred", "not.pred"];
     const SHIFT_MNEMONICS: &[&str] = &["shl.b32", "shr.u32", "shr.s32"];
     const UNARY_MNEMONICS: &[&str] = &[
         "not.b32", "cnot.b32", "popc.b32", "clz.b32", "brev.b32", "abs.s32", "neg.s32",
@@ -4642,6 +4780,12 @@ mod tests {
             let line = line.trim_start();
             line.starts_with("setp.") && line.contains("|%p")
         })
+    }
+
+    fn has_pred_logic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(|line| line.trim_start().split_whitespace().next())
+            .any(|op| PRED_LOGIC_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_shift(ptx: &str) -> bool {
@@ -7853,6 +7997,29 @@ mod tests {
             assert!(
                 !has_setp_dual(&ptx),
                 "seed {seed:x} emitted setp dual destination"
+            );
+        }
+    }
+
+    #[test]
+    fn pred_logic_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, PRED_LOGIC_MNEMONICS);
+    }
+
+    #[test]
+    fn pred_logic_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_pred_logic: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_pred_logic(&ptx),
+                "seed {seed:x} emitted predicate logic"
             );
         }
     }

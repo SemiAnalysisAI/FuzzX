@@ -278,6 +278,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
 | `DIV_DISABLE_SETP_BOOL` | `setp.<cmp>.{and,or,xor}` predicate-combiner instructions. |
 | `DIV_DISABLE_SETP_DUAL` | `setp.<cmp> %p|%q` complement-predicate instructions. |
+| `DIV_DISABLE_PRED_LOGIC` | `and.pred`, `or.pred`, `xor.pred`, and `not.pred`. |
 | `DIV_DISABLE_PREDICATED_MAD` | Predicated `mad.lo.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_MAD_HI` | Predicated `mad.hi.{u32,s32}` instructions. |
 | `DIV_DISABLE_PREDICATED_SET` | Predicated `set.{cmp}` instructions. |
