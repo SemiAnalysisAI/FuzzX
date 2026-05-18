@@ -272,17 +272,17 @@ that feature.
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips. |
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded memory loads and store/load roundtrips. |
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
-| `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/fma/min/max.f32` arithmetic. |
-| `DIV_DISABLE_F32_ROUNDING` | Sanitized `.rz/.rm/.rp` f32 add/sub/mul/fma arithmetic. |
+| `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/min/max.f32` arithmetic, including approximate f32 division. |
+| `DIV_DISABLE_F32_ROUNDING` | Sanitized `.rz/.rm/.rp` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs.f32` and `neg.f32`. |
-| `DIV_DISABLE_F32_CVT` | Sanitized f32/int conversion chains. |
-| `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, and `lg2`. |
+| `DIV_DISABLE_F32_CVT` | Sanitized f32/int and f64-to-f32 conversion chains. |
+| `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, `lg2`, `sin`, and `cos`. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized `set.*.u32.f32` and `setp.*.f32` comparisons. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
-| `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/fma/min/max.f64` arithmetic. |
-| `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/fma arithmetic. |
+| `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/div/fma/min/max.f64` arithmetic. |
+| `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F64_UNARY` | Sanitized `abs.f64` and `neg.f64`. |
-| `DIV_DISABLE_F64_CVT` | Sanitized f64/int conversion chains. |
+| `DIV_DISABLE_F64_CVT` | Sanitized f64/int and f32-to-f64 conversion chains. |
 | `DIV_DISABLE_F64_SPECIAL_MATH` | Sanitized rounded f64 `sqrt` and `rcp`. |
 | `DIV_DISABLE_F64_COMPARE` | Sanitized `set.*.u32.f64` and `setp.*.f64` comparisons. |
 | `DIV_DISABLE_F64_SELP` | Sanitized `setp.*.f64` feeding `selp.f64`. |

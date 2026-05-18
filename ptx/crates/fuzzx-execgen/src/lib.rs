@@ -951,6 +951,8 @@ enum F32ArithOp {
     Add,
     Sub,
     Mul,
+    Div,
+    DivApprox,
     Fma,
     Min,
     Max,
@@ -962,6 +964,8 @@ impl F32ArithOp {
             F32ArithOp::Add => "add.rn.f32",
             F32ArithOp::Sub => "sub.rn.f32",
             F32ArithOp::Mul => "mul.rn.f32",
+            F32ArithOp::Div => "div.rn.f32",
+            F32ArithOp::DivApprox => "div.approx.ftz.f32",
             F32ArithOp::Fma => "fma.rn.f32",
             F32ArithOp::Min => "min.f32",
             F32ArithOp::Max => "max.f32",
@@ -970,6 +974,10 @@ impl F32ArithOp {
 
     fn uses_c(self) -> bool {
         matches!(self, F32ArithOp::Fma)
+    }
+
+    fn needs_positive_b(self) -> bool {
+        matches!(self, F32ArithOp::Div | F32ArithOp::DivApprox)
     }
 }
 
@@ -984,6 +992,9 @@ enum F32RoundingArithOp {
     MulRz,
     MulRm,
     MulRp,
+    DivRz,
+    DivRm,
+    DivRp,
     FmaRz,
     FmaRm,
     FmaRp,
@@ -1001,6 +1012,9 @@ impl F32RoundingArithOp {
             F32RoundingArithOp::MulRz => "mul.rz.f32",
             F32RoundingArithOp::MulRm => "mul.rm.f32",
             F32RoundingArithOp::MulRp => "mul.rp.f32",
+            F32RoundingArithOp::DivRz => "div.rz.f32",
+            F32RoundingArithOp::DivRm => "div.rm.f32",
+            F32RoundingArithOp::DivRp => "div.rp.f32",
             F32RoundingArithOp::FmaRz => "fma.rz.f32",
             F32RoundingArithOp::FmaRm => "fma.rm.f32",
             F32RoundingArithOp::FmaRp => "fma.rp.f32",
@@ -1011,6 +1025,13 @@ impl F32RoundingArithOp {
         matches!(
             self,
             F32RoundingArithOp::FmaRz | F32RoundingArithOp::FmaRm | F32RoundingArithOp::FmaRp
+        )
+    }
+
+    fn needs_positive_b(self) -> bool {
+        matches!(
+            self,
+            F32RoundingArithOp::DivRz | F32RoundingArithOp::DivRm | F32RoundingArithOp::DivRp
         )
     }
 }
@@ -1073,6 +1094,25 @@ impl F32ToIntCvtOp {
 }
 
 #[derive(Clone, Copy)]
+enum F32FromF64CvtOp {
+    Rn,
+    Rz,
+    Rm,
+    Rp,
+}
+
+impl F32FromF64CvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32FromF64CvtOp::Rn => "cvt.rn.f32.f64",
+            F32FromF64CvtOp::Rz => "cvt.rz.f32.f64",
+            F32FromF64CvtOp::Rm => "cvt.rm.f32.f64",
+            F32FromF64CvtOp::Rp => "cvt.rp.f32.f64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum FloatInputDomain {
     NonNegative,
     Positive,
@@ -1093,6 +1133,8 @@ enum F32SpecialMathOp {
     RsqrtApprox,
     Ex2Approx,
     Lg2Approx,
+    SinApprox,
+    CosApprox,
 }
 
 impl F32SpecialMathOp {
@@ -1110,6 +1152,8 @@ impl F32SpecialMathOp {
             F32SpecialMathOp::RsqrtApprox => "rsqrt.approx.ftz.f32",
             F32SpecialMathOp::Ex2Approx => "ex2.approx.ftz.f32",
             F32SpecialMathOp::Lg2Approx => "lg2.approx.ftz.f32",
+            F32SpecialMathOp::SinApprox => "sin.approx.ftz.f32",
+            F32SpecialMathOp::CosApprox => "cos.approx.ftz.f32",
         }
     }
 
@@ -1126,7 +1170,9 @@ impl F32SpecialMathOp {
             | F32SpecialMathOp::RcpApprox
             | F32SpecialMathOp::RsqrtApprox
             | F32SpecialMathOp::Lg2Approx => FloatInputDomain::Positive,
-            F32SpecialMathOp::Ex2Approx => FloatInputDomain::SmallNonNegative,
+            F32SpecialMathOp::Ex2Approx
+            | F32SpecialMathOp::SinApprox
+            | F32SpecialMathOp::CosApprox => FloatInputDomain::SmallNonNegative,
         }
     }
 }
@@ -1136,6 +1182,7 @@ enum F64ArithOp {
     Add,
     Sub,
     Mul,
+    Div,
     Fma,
     Min,
     Max,
@@ -1147,6 +1194,7 @@ impl F64ArithOp {
             F64ArithOp::Add => "add.rn.f64",
             F64ArithOp::Sub => "sub.rn.f64",
             F64ArithOp::Mul => "mul.rn.f64",
+            F64ArithOp::Div => "div.rn.f64",
             F64ArithOp::Fma => "fma.rn.f64",
             F64ArithOp::Min => "min.f64",
             F64ArithOp::Max => "max.f64",
@@ -1155,6 +1203,10 @@ impl F64ArithOp {
 
     fn uses_c(self) -> bool {
         matches!(self, F64ArithOp::Fma)
+    }
+
+    fn needs_positive_b(self) -> bool {
+        matches!(self, F64ArithOp::Div)
     }
 }
 
@@ -1169,6 +1221,9 @@ enum F64RoundingArithOp {
     MulRz,
     MulRm,
     MulRp,
+    DivRz,
+    DivRm,
+    DivRp,
     FmaRz,
     FmaRm,
     FmaRp,
@@ -1186,6 +1241,9 @@ impl F64RoundingArithOp {
             F64RoundingArithOp::MulRz => "mul.rz.f64",
             F64RoundingArithOp::MulRm => "mul.rm.f64",
             F64RoundingArithOp::MulRp => "mul.rp.f64",
+            F64RoundingArithOp::DivRz => "div.rz.f64",
+            F64RoundingArithOp::DivRm => "div.rm.f64",
+            F64RoundingArithOp::DivRp => "div.rp.f64",
             F64RoundingArithOp::FmaRz => "fma.rz.f64",
             F64RoundingArithOp::FmaRm => "fma.rm.f64",
             F64RoundingArithOp::FmaRp => "fma.rp.f64",
@@ -1196,6 +1254,13 @@ impl F64RoundingArithOp {
         matches!(
             self,
             F64RoundingArithOp::FmaRz | F64RoundingArithOp::FmaRm | F64RoundingArithOp::FmaRp
+        )
+    }
+
+    fn needs_positive_b(self) -> bool {
+        matches!(
+            self,
+            F64RoundingArithOp::DivRz | F64RoundingArithOp::DivRm | F64RoundingArithOp::DivRp
         )
     }
 }
@@ -1253,6 +1318,19 @@ impl F64ToIntCvtOp {
             F64ToIntCvtOp::U32Rni => "cvt.rni.u32.f64",
             F64ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f64",
             F64ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64FromF32CvtOp {
+    Default,
+}
+
+impl F64FromF32CvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64FromF32CvtOp::Default => "cvt.f64.f32",
         }
     }
 }
@@ -2677,6 +2755,12 @@ enum Inst {
         dst: u32,
         src: Operand,
     },
+    /// Sanitized f64-to-f32 conversion.
+    F32FloatCvt {
+        op: F32FromF64CvtOp,
+        dst: u32,
+        src: Operand,
+    },
     /// Sanitized single-precision special math.
     F32SpecialMath {
         op: F32SpecialMathOp,
@@ -2737,6 +2821,12 @@ enum Inst {
     F64Cvt {
         from_int: F64FromIntCvtOp,
         to_int: F64ToIntCvtOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Sanitized f32-to-f64 conversion.
+    F64FloatCvt {
+        op: F64FromF32CvtOp,
         dst: u32,
         src: Operand,
     },
@@ -5041,6 +5131,8 @@ impl<'a> Generator<'a> {
             F32ArithOp::Add,
             F32ArithOp::Sub,
             F32ArithOp::Mul,
+            F32ArithOp::Div,
+            F32ArithOp::DivApprox,
             F32ArithOp::Fma,
             F32ArithOp::Min,
             F32ArithOp::Max,
@@ -5065,6 +5157,9 @@ impl<'a> Generator<'a> {
             F32RoundingArithOp::MulRz,
             F32RoundingArithOp::MulRm,
             F32RoundingArithOp::MulRp,
+            F32RoundingArithOp::DivRz,
+            F32RoundingArithOp::DivRm,
+            F32RoundingArithOp::DivRp,
             F32RoundingArithOp::FmaRz,
             F32RoundingArithOp::FmaRm,
             F32RoundingArithOp::FmaRp,
@@ -5088,6 +5183,20 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f32_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        if u.arbitrary::<bool>()? {
+            let ops = [
+                F32FromF64CvtOp::Rn,
+                F32FromF64CvtOp::Rz,
+                F32FromF64CvtOp::Rm,
+                F32FromF64CvtOp::Rp,
+            ];
+            return Ok(Inst::F32FloatCvt {
+                op: *u.choose(&ops)?,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            });
+        }
+
         let from_ops = [
             F32FromIntCvtOp::Rz,
             F32FromIntCvtOp::Rm,
@@ -5124,6 +5233,8 @@ impl<'a> Generator<'a> {
             F32SpecialMathOp::RsqrtApprox,
             F32SpecialMathOp::Ex2Approx,
             F32SpecialMathOp::Lg2Approx,
+            F32SpecialMathOp::SinApprox,
+            F32SpecialMathOp::CosApprox,
         ];
         Ok(Inst::F32SpecialMath {
             op: *u.choose(&ops)?,
@@ -5171,6 +5282,7 @@ impl<'a> Generator<'a> {
             F64ArithOp::Add,
             F64ArithOp::Sub,
             F64ArithOp::Mul,
+            F64ArithOp::Div,
             F64ArithOp::Fma,
             F64ArithOp::Min,
             F64ArithOp::Max,
@@ -5195,6 +5307,9 @@ impl<'a> Generator<'a> {
             F64RoundingArithOp::MulRz,
             F64RoundingArithOp::MulRm,
             F64RoundingArithOp::MulRp,
+            F64RoundingArithOp::DivRz,
+            F64RoundingArithOp::DivRm,
+            F64RoundingArithOp::DivRp,
             F64RoundingArithOp::FmaRz,
             F64RoundingArithOp::FmaRm,
             F64RoundingArithOp::FmaRp,
@@ -5218,6 +5333,14 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f64_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        if u.arbitrary::<bool>()? {
+            return Ok(Inst::F64FloatCvt {
+                op: F64FromF32CvtOp::Default,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            });
+        }
+
         let from_ops = [
             F64FromIntCvtOp::Rz,
             F64FromIntCvtOp::Rm,
@@ -6693,12 +6816,14 @@ impl<'a> Generator<'a> {
             | Inst::F32RoundingArith { dst, .. }
             | Inst::F32Unary { dst, .. }
             | Inst::F32Cvt { dst, .. }
+            | Inst::F32FloatCvt { dst, .. }
             | Inst::F32SpecialMath { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::F64Arith { dst, .. }
             | Inst::F64RoundingArith { dst, .. }
             | Inst::F64Unary { dst, .. }
             | Inst::F64Cvt { dst, .. }
+            | Inst::F64FloatCvt { dst, .. }
             | Inst::F64SpecialMath { dst, .. }
             | Inst::F64Selp { dst, .. }
             | Inst::Sel { dst, .. }
@@ -7560,7 +7685,11 @@ impl<'a> Generator<'a> {
             }
             Inst::F32Arith { op, dst, a, b, c } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
-                self.emit_sanitized_f32_operand(s, 1, b);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f32_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f32_operand(s, 1, b);
+                }
                 if op.uses_c() {
                     self.emit_sanitized_f32_operand(s, 2, c);
                     writeln!(s, "    {:<13} %f3, %f0, %f1, %f2;", op.mnemonic()).unwrap();
@@ -7571,7 +7700,11 @@ impl<'a> Generator<'a> {
             }
             Inst::F32RoundingArith { op, dst, a, b, c } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
-                self.emit_sanitized_f32_operand(s, 1, b);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f32_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f32_operand(s, 1, b);
+                }
                 if op.uses_c() {
                     self.emit_sanitized_f32_operand(s, 2, c);
                     writeln!(s, "    {:<13} %f3, %f0, %f1, %f2;", op.mnemonic()).unwrap();
@@ -7597,6 +7730,11 @@ impl<'a> Generator<'a> {
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
                 writeln!(s, "    {:<13} %f0, %r{scratch};", from_int.mnemonic()).unwrap();
                 writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
+            }
+            Inst::F32FloatCvt { op, dst, src } => {
+                self.emit_sanitized_f64_operand(s, 0, src);
+                writeln!(s, "    {:<13} %f0, %fd0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f0;").unwrap();
             }
             Inst::F32SpecialMath { op, dst, src } => {
                 self.emit_sanitized_f32_math_operand(s, 0, src, op.input_domain());
@@ -7646,7 +7784,11 @@ impl<'a> Generator<'a> {
             }
             Inst::F64Arith { op, dst, a, b, c } => {
                 self.emit_sanitized_f64_operand(s, 0, a);
-                self.emit_sanitized_f64_operand(s, 1, b);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f64_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f64_operand(s, 1, b);
+                }
                 if op.uses_c() {
                     self.emit_sanitized_f64_operand(s, 2, c);
                     writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %fd2;", op.mnemonic()).unwrap();
@@ -7657,7 +7799,11 @@ impl<'a> Generator<'a> {
             }
             Inst::F64RoundingArith { op, dst, a, b, c } => {
                 self.emit_sanitized_f64_operand(s, 0, a);
-                self.emit_sanitized_f64_operand(s, 1, b);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f64_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f64_operand(s, 1, b);
+                }
                 if op.uses_c() {
                     self.emit_sanitized_f64_operand(s, 2, c);
                     writeln!(s, "    {:<13} %fd3, %fd0, %fd1, %fd2;", op.mnemonic()).unwrap();
@@ -7683,6 +7829,11 @@ impl<'a> Generator<'a> {
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
                 writeln!(s, "    {:<13} %fd0, %r{scratch};", from_int.mnemonic()).unwrap();
                 writeln!(s, "    {:<13} %r{dst}, %fd0;", to_int.mnemonic()).unwrap();
+            }
+            Inst::F64FloatCvt { op, dst, src } => {
+                self.emit_sanitized_f32_operand(s, 0, src);
+                writeln!(s, "    {:<13} %fd0, %f0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd0;").unwrap();
             }
             Inst::F64SpecialMath { op, dst, src } => {
                 self.emit_sanitized_f64_math_operand(s, 0, src, op.input_domain());
@@ -11221,6 +11372,8 @@ mod tests {
         "add.rn.f32",
         "sub.rn.f32",
         "mul.rn.f32",
+        "div.rn.f32",
+        "div.approx.ftz.f32",
         "fma.rn.f32",
         "min.f32",
         "max.f32",
@@ -11235,6 +11388,9 @@ mod tests {
         "mul.rz.f32",
         "mul.rm.f32",
         "mul.rp.f32",
+        "div.rz.f32",
+        "div.rm.f32",
+        "div.rp.f32",
         "fma.rz.f32",
         "fma.rm.f32",
         "fma.rp.f32",
@@ -11251,6 +11407,10 @@ mod tests {
         "cvt.rni.u32.f32",
         "cvt.rmi.u32.f32",
         "cvt.rpi.u32.f32",
+        "cvt.rn.f32.f64",
+        "cvt.rz.f32.f64",
+        "cvt.rm.f32.f64",
+        "cvt.rp.f32.f64",
     ];
     const F32_SPECIAL_MATH_MNEMONICS: &[&str] = &[
         "sqrt.rn.f32",
@@ -11265,6 +11425,8 @@ mod tests {
         "rsqrt.approx.ftz.f32",
         "ex2.approx.ftz.f32",
         "lg2.approx.ftz.f32",
+        "sin.approx.ftz.f32",
+        "cos.approx.ftz.f32",
     ];
     const F32_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f32",
@@ -11307,6 +11469,7 @@ mod tests {
         "add.rn.f64",
         "sub.rn.f64",
         "mul.rn.f64",
+        "div.rn.f64",
         "fma.rn.f64",
         "min.f64",
         "max.f64",
@@ -11321,6 +11484,9 @@ mod tests {
         "mul.rz.f64",
         "mul.rm.f64",
         "mul.rp.f64",
+        "div.rz.f64",
+        "div.rm.f64",
+        "div.rp.f64",
         "fma.rz.f64",
         "fma.rm.f64",
         "fma.rp.f64",
@@ -11337,6 +11503,7 @@ mod tests {
         "cvt.rni.u32.f64",
         "cvt.rmi.u32.f64",
         "cvt.rpi.u32.f64",
+        "cvt.f64.f32",
     ];
     const F64_SPECIAL_MATH_MNEMONICS: &[&str] = &[
         "sqrt.rn.f64",

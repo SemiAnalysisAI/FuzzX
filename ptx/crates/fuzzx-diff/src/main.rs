@@ -121,27 +121,27 @@
 //!   DIV_DISABLE_VECTOR_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         vectorized memory loads and store/load roundtrips
 //!   DIV_DISABLE_F32_ARITH default: false; set 1/true/yes/on to suppress
-//!                         sanitized f32 arithmetic generation
+//!                         sanitized f32 add/sub/mul/div/fma/min/max generation
 //!   DIV_DISABLE_F32_ROUNDING default: false; set 1/true/yes/on to suppress
-//!                         non-default rounding-mode f32 arithmetic generation
+//!                         non-default rounding-mode f32 add/sub/mul/div/fma generation
 //!   DIV_DISABLE_F32_UNARY default: false; set 1/true/yes/on to suppress
 //!                         f32 abs/neg generation
 //!   DIV_DISABLE_F32_CVT default: false; set 1/true/yes/on to suppress
-//!                         explicit f32/int conversion chains
+//!                         explicit f32/int and f64-to-f32 conversion chains
 //!   DIV_DISABLE_F32_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
-//!                         f32 rounded sqrt/rcp plus approx rcp/rsqrt/ex2/lg2 generation
+//!                         f32 rounded sqrt/rcp plus approx rcp/rsqrt/ex2/lg2/sin/cos generation
 //!   DIV_DISABLE_F32_COMPARE default: false; set 1/true/yes/on to suppress
 //!                         sanitized f32 compare generation
 //!   DIV_DISABLE_F32_SELP default: false; set 1/true/yes/on to suppress
 //!                         sanitized setp.f32 + selp.f32 generation
 //!   DIV_DISABLE_F64_ARITH default: false; set 1/true/yes/on to suppress
-//!                         sanitized f64 arithmetic generation
+//!                         sanitized f64 add/sub/mul/div/fma/min/max generation
 //!   DIV_DISABLE_F64_ROUNDING default: false; set 1/true/yes/on to suppress
-//!                         non-default rounding-mode f64 arithmetic generation
+//!                         non-default rounding-mode f64 add/sub/mul/div/fma generation
 //!   DIV_DISABLE_F64_UNARY default: false; set 1/true/yes/on to suppress
 //!                         f64 abs/neg generation
 //!   DIV_DISABLE_F64_CVT default: false; set 1/true/yes/on to suppress
-//!                         explicit f64/int conversion chains
+//!                         explicit f64/int and f32-to-f64 conversion chains
 //!   DIV_DISABLE_F64_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         rounded f64 sqrt/rcp generation
 //!   DIV_DISABLE_F64_COMPARE default: false; set 1/true/yes/on to suppress
