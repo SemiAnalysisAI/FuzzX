@@ -112,6 +112,7 @@ pub struct GenConfig {
     pub emit_vector_memory: bool,
     pub emit_wide_memory: bool,
     pub emit_memory_cache_ops: bool,
+    pub emit_volatile_memory: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -324,6 +325,7 @@ impl Default for GenConfig {
             emit_vector_memory: true,
             emit_wide_memory: true,
             emit_memory_cache_ops: true,
+            emit_volatile_memory: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -782,6 +784,10 @@ impl GlobalLoadOp {
         }
     }
 
+    fn volatile_mnemonic(self) -> String {
+        format!("ld.volatile.global.{}", self.type_suffix())
+    }
+
     fn width(self) -> u32 {
         match self {
             GlobalLoadOp::U8 | GlobalLoadOp::S8 => 1,
@@ -859,12 +865,32 @@ impl GlobalStoreRoundtripOp {
         }
     }
 
+    fn load_type_suffix(self) -> &'static str {
+        match self {
+            GlobalStoreRoundtripOp::U8 => "u8",
+            GlobalStoreRoundtripOp::S8 => "s8",
+            GlobalStoreRoundtripOp::U16 => "u16",
+            GlobalStoreRoundtripOp::S16 => "s16",
+            GlobalStoreRoundtripOp::U32 => "u32",
+            GlobalStoreRoundtripOp::U64 => "u64",
+            GlobalStoreRoundtripOp::S64 => "s64",
+        }
+    }
+
     fn store_mnemonic_with_cache(self, cache: GlobalStoreCacheOp) -> String {
         if matches!(cache, GlobalStoreCacheOp::Default) {
             self.store_mnemonic().to_string()
         } else {
             format!("{}.{}", cache.prefix(), self.store_type_suffix())
         }
+    }
+
+    fn volatile_load_mnemonic(self) -> String {
+        format!("ld.volatile.global.{}", self.load_type_suffix())
+    }
+
+    fn volatile_store_mnemonic(self) -> String {
+        format!("st.volatile.global.{}", self.store_type_suffix())
     }
 
     fn width(self) -> u32 {
@@ -993,6 +1019,18 @@ impl SharedMemOp {
         }
     }
 
+    fn load_type_suffix(self) -> &'static str {
+        match self {
+            SharedMemOp::U8 => "u8",
+            SharedMemOp::S8 => "s8",
+            SharedMemOp::U16 => "u16",
+            SharedMemOp::S16 => "s16",
+            SharedMemOp::U32 => "u32",
+            SharedMemOp::U64 => "u64",
+            SharedMemOp::S64 => "s64",
+        }
+    }
+
     fn store_mnemonic(self) -> &'static str {
         match self {
             SharedMemOp::U8 | SharedMemOp::S8 => "st.shared.u8",
@@ -1000,6 +1038,23 @@ impl SharedMemOp {
             SharedMemOp::U32 => "st.shared.u32",
             SharedMemOp::U64 | SharedMemOp::S64 => "st.shared.u64",
         }
+    }
+
+    fn store_type_suffix(self) -> &'static str {
+        match self {
+            SharedMemOp::U8 | SharedMemOp::S8 => "u8",
+            SharedMemOp::U16 | SharedMemOp::S16 => "u16",
+            SharedMemOp::U32 => "u32",
+            SharedMemOp::U64 | SharedMemOp::S64 => "u64",
+        }
+    }
+
+    fn volatile_load_mnemonic(self) -> String {
+        format!("ld.volatile.shared.{}", self.load_type_suffix())
+    }
+
+    fn volatile_store_mnemonic(self) -> String {
+        format!("st.volatile.shared.{}", self.store_type_suffix())
     }
 
     fn width(self) -> u32 {
@@ -1063,6 +1118,10 @@ impl VectorMemOp {
         }
     }
 
+    fn volatile_global_load_mnemonic(self) -> String {
+        format!("ld.volatile.global.{}", self.type_suffix())
+    }
+
     fn global_store_mnemonic(self) -> &'static str {
         match self {
             VectorMemOp::V2 => "st.global.v2.u32",
@@ -1077,6 +1136,10 @@ impl VectorMemOp {
         } else {
             format!("{}.{}", cache.prefix(), self.type_suffix())
         }
+    }
+
+    fn volatile_global_store_mnemonic(self) -> String {
+        format!("st.volatile.global.{}", self.type_suffix())
     }
 
     fn const_load_mnemonic(self) -> &'static str {
@@ -1111,12 +1174,20 @@ impl VectorMemOp {
         }
     }
 
+    fn volatile_shared_load_mnemonic(self) -> String {
+        format!("ld.volatile.shared.{}", self.type_suffix())
+    }
+
     fn shared_store_mnemonic(self) -> &'static str {
         match self {
             VectorMemOp::V2 => "st.shared.v2.u32",
             VectorMemOp::V4 => "st.shared.v4.u32",
             VectorMemOp::V2U64 => "st.shared.v2.u64",
         }
+    }
+
+    fn volatile_shared_store_mnemonic(self) -> String {
+        format!("st.volatile.shared.{}", self.type_suffix())
     }
 }
 
@@ -3301,6 +3372,7 @@ enum Inst {
     GlobalLoad {
         op: GlobalLoadOp,
         cache: GlobalLoadCacheOp,
+        volatile: bool,
         dst: u32,
         offset: u32,
     },
@@ -3308,6 +3380,7 @@ enum Inst {
     PredicatedGlobalLoad {
         op: GlobalLoadOp,
         cache: GlobalLoadCacheOp,
+        volatile: bool,
         dst: u32,
         offset: u32,
         cmp: CmpOp,
@@ -3319,6 +3392,7 @@ enum Inst {
     GlobalStoreRoundtrip {
         op: GlobalStoreRoundtripOp,
         store_cache: GlobalStoreCacheOp,
+        volatile: bool,
         dst: u32,
         src: u32,
         offset: u32,
@@ -3327,6 +3401,7 @@ enum Inst {
     PredicatedGlobalStoreRoundtrip {
         op: GlobalStoreRoundtripOp,
         store_cache: GlobalStoreCacheOp,
+        volatile: bool,
         dst: u32,
         src: u32,
         offset: u32,
@@ -3372,6 +3447,7 @@ enum Inst {
     /// Store to and reload from this thread's private shared-memory slot.
     SharedMem {
         op: SharedMemOp,
+        volatile: bool,
         dst: u32,
         src: u32,
         offset: u32,
@@ -3379,6 +3455,7 @@ enum Inst {
     /// Predicated store/reload through this thread's private shared-memory slot.
     PredicatedSharedMem {
         op: SharedMemOp,
+        volatile: bool,
         dst: u32,
         src: u32,
         offset: u32,
@@ -3391,6 +3468,7 @@ enum Inst {
     GlobalVectorLoad {
         op: VectorMemOp,
         cache: GlobalLoadCacheOp,
+        volatile: bool,
         dsts: [u32; 4],
         offset: u32,
     },
@@ -3398,6 +3476,7 @@ enum Inst {
     PredicatedGlobalVectorLoad {
         op: VectorMemOp,
         cache: GlobalLoadCacheOp,
+        volatile: bool,
         dsts: [u32; 4],
         offset: u32,
         cmp: CmpOp,
@@ -3409,6 +3488,7 @@ enum Inst {
     GlobalVectorStoreRoundtrip {
         op: VectorMemOp,
         store_cache: GlobalStoreCacheOp,
+        volatile: bool,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -3417,6 +3497,7 @@ enum Inst {
     PredicatedGlobalVectorStoreRoundtrip {
         op: VectorMemOp,
         store_cache: GlobalStoreCacheOp,
+        volatile: bool,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -3462,6 +3543,7 @@ enum Inst {
     /// Aligned vector store/reload through this thread's private shared slot.
     SharedVectorMem {
         op: VectorMemOp,
+        volatile: bool,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -3469,6 +3551,7 @@ enum Inst {
     /// Predicated aligned vector store/reload through this thread's private shared slot.
     PredicatedSharedVectorMem {
         op: VectorMemOp,
+        volatile: bool,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
@@ -5902,6 +5985,10 @@ impl<'a> Generator<'a> {
         Ok(*u.choose(ops)?)
     }
 
+    fn pick_volatile_memory(&mut self, u: &mut Unstructured) -> Result<bool> {
+        Ok(self.cfg.emit_volatile_memory && u.arbitrary::<bool>()?)
+    }
+
     fn pick_global_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let base_ops = [
             GlobalLoadOp::U8,
@@ -5925,7 +6012,12 @@ impl<'a> Generator<'a> {
             &base_ops[..]
         };
         let op = *u.choose(ops)?;
-        let cache = self.pick_global_load_cache(u)?;
+        let volatile = self.pick_volatile_memory(u)?;
+        let cache = if volatile {
+            GlobalLoadCacheOp::Default
+        } else {
+            self.pick_global_load_cache(u)?
+        };
         let width = op.width();
         let max_offset = input_len() as u32 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5935,6 +6027,7 @@ impl<'a> Generator<'a> {
             return Ok(Inst::PredicatedGlobalLoad {
                 op,
                 cache,
+                volatile,
                 dst,
                 offset,
                 cmp,
@@ -5946,6 +6039,7 @@ impl<'a> Generator<'a> {
         Ok(Inst::GlobalLoad {
             op,
             cache,
+            volatile,
             dst,
             offset,
         })
@@ -5974,7 +6068,12 @@ impl<'a> Generator<'a> {
             &base_ops[..]
         };
         let op = *u.choose(ops)?;
-        let store_cache = self.pick_global_store_cache(u)?;
+        let volatile = self.pick_volatile_memory(u)?;
+        let store_cache = if volatile {
+            GlobalStoreCacheOp::Default
+        } else {
+            self.pick_global_store_cache(u)?
+        };
         let width = op.width();
         let max_offset = N_OUTPUTS * 4 - width;
         let offset = u.int_in_range(0..=max_offset / width)? * width;
@@ -5985,6 +6084,7 @@ impl<'a> Generator<'a> {
             return Ok(Inst::PredicatedGlobalStoreRoundtrip {
                 op,
                 store_cache,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -5997,6 +6097,7 @@ impl<'a> Generator<'a> {
         Ok(Inst::GlobalStoreRoundtrip {
             op,
             store_cache,
+            volatile,
             dst,
             src,
             offset,
@@ -6122,10 +6223,12 @@ impl<'a> Generator<'a> {
         let offset = u.int_in_range(0..=max_offset / width)? * width;
         let dst = self.pick_dst(u)?;
         let src = self.pick_safe_reg(u)?;
+        let volatile = self.pick_volatile_memory(u)?;
         if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
             let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
             return Ok(Inst::PredicatedSharedMem {
                 op,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -6137,6 +6240,7 @@ impl<'a> Generator<'a> {
         }
         Ok(Inst::SharedMem {
             op,
+            volatile,
             dst,
             src,
             offset,
@@ -6222,6 +6326,7 @@ impl<'a> Generator<'a> {
         match (space, guard) {
             (0, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorLoad {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 cache: self.pick_global_load_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
@@ -6232,12 +6337,14 @@ impl<'a> Generator<'a> {
             }),
             (0, None) => Ok(Inst::GlobalVectorLoad {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 cache: self.pick_global_load_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
             }),
             (1, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorStoreRoundtrip {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 store_cache: self.pick_global_store_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
@@ -6249,6 +6356,7 @@ impl<'a> Generator<'a> {
             }),
             (1, None) => Ok(Inst::GlobalVectorStoreRoundtrip {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 store_cache: self.pick_global_store_cache(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
@@ -6286,6 +6394,7 @@ impl<'a> Generator<'a> {
             }),
             (4, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedSharedVectorMem {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, SHARED_SLOT_BYTES)?,
@@ -6296,6 +6405,7 @@ impl<'a> Generator<'a> {
             }),
             (4, None) => Ok(Inst::SharedVectorMem {
                 op,
+                volatile: self.pick_volatile_memory(u)?,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, SHARED_SLOT_BYTES)?,
@@ -9260,16 +9370,22 @@ impl<'a> Generator<'a> {
             Inst::GlobalLoad {
                 op,
                 cache,
+                volatile,
                 dst,
                 offset,
             } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                let mnemonic = op.mnemonic_with_cache(cache);
+                let mnemonic = if volatile {
+                    op.volatile_mnemonic()
+                } else {
+                    op.mnemonic_with_cache(cache)
+                };
                 self.emit_memory_load(s, &mnemonic, dst, "%rd6", offset, op.is_wide(), None);
             }
             Inst::PredicatedGlobalLoad {
                 op,
                 cache,
+                volatile,
                 dst,
                 offset,
                 cmp,
@@ -9279,12 +9395,17 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                let mnemonic = op.mnemonic_with_cache(cache);
+                let mnemonic = if volatile {
+                    op.volatile_mnemonic()
+                } else {
+                    op.mnemonic_with_cache(cache)
+                };
                 self.emit_memory_load(s, &mnemonic, dst, "%rd6", offset, op.is_wide(), Some(pred));
             }
             Inst::GlobalStoreRoundtrip {
                 op,
                 store_cache,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -9293,21 +9414,23 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                let store_mnemonic = op.store_mnemonic_with_cache(store_cache);
+                let store_mnemonic = if volatile {
+                    op.volatile_store_mnemonic()
+                } else {
+                    op.store_mnemonic_with_cache(store_cache)
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_load_mnemonic()
+                } else {
+                    op.load_mnemonic().to_string()
+                };
                 self.emit_memory_store(s, &store_mnemonic, src, "%rd8", offset, op.is_wide(), None);
-                self.emit_memory_load(
-                    s,
-                    op.load_mnemonic(),
-                    dst,
-                    "%rd8",
-                    offset,
-                    op.is_wide(),
-                    None,
-                );
+                self.emit_memory_load(s, &load_mnemonic, dst, "%rd8", offset, op.is_wide(), None);
             }
             Inst::PredicatedGlobalStoreRoundtrip {
                 op,
                 store_cache,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -9321,7 +9444,16 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                let store_mnemonic = op.store_mnemonic_with_cache(store_cache);
+                let store_mnemonic = if volatile {
+                    op.volatile_store_mnemonic()
+                } else {
+                    op.store_mnemonic_with_cache(store_cache)
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_load_mnemonic()
+                } else {
+                    op.load_mnemonic().to_string()
+                };
                 self.emit_memory_store(
                     s,
                     &store_mnemonic,
@@ -9333,7 +9465,7 @@ impl<'a> Generator<'a> {
                 );
                 self.emit_memory_load(
                     s,
-                    op.load_mnemonic(),
+                    &load_mnemonic,
                     dst,
                     "%rd8",
                     offset,
@@ -9425,6 +9557,7 @@ impl<'a> Generator<'a> {
             }
             Inst::SharedMem {
                 op,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -9437,27 +9570,22 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                self.emit_memory_store(
-                    s,
-                    op.store_mnemonic(),
-                    src,
-                    "%rd6",
-                    offset,
-                    op.is_wide(),
-                    None,
-                );
-                self.emit_memory_load(
-                    s,
-                    op.load_mnemonic(),
-                    dst,
-                    "%rd6",
-                    offset,
-                    op.is_wide(),
-                    None,
-                );
+                let store_mnemonic = if volatile {
+                    op.volatile_store_mnemonic()
+                } else {
+                    op.store_mnemonic().to_string()
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_load_mnemonic()
+                } else {
+                    op.load_mnemonic().to_string()
+                };
+                self.emit_memory_store(s, &store_mnemonic, src, "%rd6", offset, op.is_wide(), None);
+                self.emit_memory_load(s, &load_mnemonic, dst, "%rd6", offset, op.is_wide(), None);
             }
             Inst::PredicatedSharedMem {
                 op,
+                volatile,
                 dst,
                 src,
                 offset,
@@ -9475,9 +9603,19 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                let store_mnemonic = if volatile {
+                    op.volatile_store_mnemonic()
+                } else {
+                    op.store_mnemonic().to_string()
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_load_mnemonic()
+                } else {
+                    op.load_mnemonic().to_string()
+                };
                 self.emit_memory_store(
                     s,
-                    op.store_mnemonic(),
+                    &store_mnemonic,
                     src,
                     "%rd6",
                     offset,
@@ -9486,7 +9624,7 @@ impl<'a> Generator<'a> {
                 );
                 self.emit_memory_load(
                     s,
-                    op.load_mnemonic(),
+                    &load_mnemonic,
                     dst,
                     "%rd6",
                     offset,
@@ -9497,16 +9635,22 @@ impl<'a> Generator<'a> {
             Inst::GlobalVectorLoad {
                 op,
                 cache,
+                volatile,
                 dsts,
                 offset,
             } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                let mnemonic = op.global_load_mnemonic_with_cache(cache);
+                let mnemonic = if volatile {
+                    op.volatile_global_load_mnemonic()
+                } else {
+                    op.global_load_mnemonic_with_cache(cache)
+                };
                 self.emit_vector_memory_load(s, &mnemonic, op, dsts, "%rd6", offset, None);
             }
             Inst::PredicatedGlobalVectorLoad {
                 op,
                 cache,
+                volatile,
                 dsts,
                 offset,
                 cmp,
@@ -9516,12 +9660,17 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                let mnemonic = op.global_load_mnemonic_with_cache(cache);
+                let mnemonic = if volatile {
+                    op.volatile_global_load_mnemonic()
+                } else {
+                    op.global_load_mnemonic_with_cache(cache)
+                };
                 self.emit_vector_memory_load(s, &mnemonic, op, dsts, "%rd6", offset, Some(pred));
             }
             Inst::GlobalVectorStoreRoundtrip {
                 op,
                 store_cache,
+                volatile,
                 dsts,
                 srcs,
                 offset,
@@ -9530,21 +9679,23 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                let store_mnemonic = op.global_store_mnemonic_with_cache(store_cache);
+                let store_mnemonic = if volatile {
+                    op.volatile_global_store_mnemonic()
+                } else {
+                    op.global_store_mnemonic_with_cache(store_cache)
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_global_load_mnemonic()
+                } else {
+                    op.global_load_mnemonic().to_string()
+                };
                 self.emit_vector_memory_store(s, &store_mnemonic, op, srcs, "%rd8", offset, None);
-                self.emit_vector_memory_load(
-                    s,
-                    op.global_load_mnemonic(),
-                    op,
-                    dsts,
-                    "%rd8",
-                    offset,
-                    None,
-                );
+                self.emit_vector_memory_load(s, &load_mnemonic, op, dsts, "%rd8", offset, None);
             }
             Inst::PredicatedGlobalVectorStoreRoundtrip {
                 op,
                 store_cache,
+                volatile,
                 dsts,
                 srcs,
                 offset,
@@ -9558,7 +9709,16 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                let store_mnemonic = op.global_store_mnemonic_with_cache(store_cache);
+                let store_mnemonic = if volatile {
+                    op.volatile_global_store_mnemonic()
+                } else {
+                    op.global_store_mnemonic_with_cache(store_cache)
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_global_load_mnemonic()
+                } else {
+                    op.global_load_mnemonic().to_string()
+                };
                 self.emit_vector_memory_store(
                     s,
                     &store_mnemonic,
@@ -9570,7 +9730,7 @@ impl<'a> Generator<'a> {
                 );
                 self.emit_vector_memory_load(
                     s,
-                    op.global_load_mnemonic(),
+                    &load_mnemonic,
                     op,
                     dsts,
                     "%rd8",
@@ -9670,6 +9830,7 @@ impl<'a> Generator<'a> {
             }
             Inst::SharedVectorMem {
                 op,
+                volatile,
                 dsts,
                 srcs,
                 offset,
@@ -9682,27 +9843,22 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                self.emit_vector_memory_store(
-                    s,
-                    op.shared_store_mnemonic(),
-                    op,
-                    srcs,
-                    "%rd6",
-                    offset,
-                    None,
-                );
-                self.emit_vector_memory_load(
-                    s,
-                    op.shared_load_mnemonic(),
-                    op,
-                    dsts,
-                    "%rd6",
-                    offset,
-                    None,
-                );
+                let store_mnemonic = if volatile {
+                    op.volatile_shared_store_mnemonic()
+                } else {
+                    op.shared_store_mnemonic().to_string()
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_shared_load_mnemonic()
+                } else {
+                    op.shared_load_mnemonic().to_string()
+                };
+                self.emit_vector_memory_store(s, &store_mnemonic, op, srcs, "%rd6", offset, None);
+                self.emit_vector_memory_load(s, &load_mnemonic, op, dsts, "%rd6", offset, None);
             }
             Inst::PredicatedSharedVectorMem {
                 op,
+                volatile,
                 dsts,
                 srcs,
                 offset,
@@ -9720,9 +9876,19 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                let store_mnemonic = if volatile {
+                    op.volatile_shared_store_mnemonic()
+                } else {
+                    op.shared_store_mnemonic().to_string()
+                };
+                let load_mnemonic = if volatile {
+                    op.volatile_shared_load_mnemonic()
+                } else {
+                    op.shared_load_mnemonic().to_string()
+                };
                 self.emit_vector_memory_store(
                     s,
-                    op.shared_store_mnemonic(),
+                    &store_mnemonic,
                     op,
                     srcs,
                     "%rd6",
@@ -9731,7 +9897,7 @@ impl<'a> Generator<'a> {
                 );
                 self.emit_vector_memory_load(
                     s,
-                    op.shared_load_mnemonic(),
+                    &load_mnemonic,
                     op,
                     dsts,
                     "%rd6",
@@ -14148,6 +14314,42 @@ mod tests {
         "st.shared.u32",
         "st.shared.u64",
     ];
+    const VOLATILE_MEMORY_MNEMONICS: &[&str] = &[
+        "ld.volatile.global.u8",
+        "ld.volatile.global.s8",
+        "ld.volatile.global.u16",
+        "ld.volatile.global.s16",
+        "ld.volatile.global.u32",
+        "ld.volatile.global.u64",
+        "ld.volatile.global.s64",
+        "st.volatile.global.u8",
+        "st.volatile.global.u16",
+        "st.volatile.global.u32",
+        "st.volatile.global.u64",
+        "ld.volatile.shared.u8",
+        "ld.volatile.shared.s8",
+        "ld.volatile.shared.u16",
+        "ld.volatile.shared.s16",
+        "ld.volatile.shared.u32",
+        "ld.volatile.shared.u64",
+        "ld.volatile.shared.s64",
+        "st.volatile.shared.u8",
+        "st.volatile.shared.u16",
+        "st.volatile.shared.u32",
+        "st.volatile.shared.u64",
+        "ld.volatile.global.v2.u32",
+        "ld.volatile.global.v4.u32",
+        "ld.volatile.global.v2.u64",
+        "st.volatile.global.v2.u32",
+        "st.volatile.global.v4.u32",
+        "st.volatile.global.v2.u64",
+        "ld.volatile.shared.v2.u32",
+        "ld.volatile.shared.v4.u32",
+        "ld.volatile.shared.v2.u64",
+        "st.volatile.shared.v2.u32",
+        "st.volatile.shared.v4.u32",
+        "st.volatile.shared.v2.u64",
+    ];
     const WIDE_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.u64",
         "ld.global.s64",
@@ -15349,6 +15551,15 @@ mod tests {
         }
     }
 
+    fn shared_memory_width(mnemonic: &str) -> Option<u32> {
+        let type_suffix = mnemonic
+            .strip_prefix("ld.shared.")
+            .or_else(|| mnemonic.strip_prefix("st.shared."))
+            .or_else(|| mnemonic.strip_prefix("ld.volatile.shared."))
+            .or_else(|| mnemonic.strip_prefix("st.volatile.shared."))?;
+        scalar_global_load_width(type_suffix).or_else(|| scalar_global_store_width(type_suffix))
+    }
+
     fn vector_memory_width_suffix(type_suffix: &str) -> Option<u32> {
         match type_suffix {
             "v2.u32" => Some(8),
@@ -15363,6 +15574,9 @@ mod tests {
                 return Some(width);
             }
         }
+        if let Some(type_suffix) = mnemonic.strip_prefix("ld.volatile.global.") {
+            return scalar_global_load_width(type_suffix);
+        }
         GLOBAL_LOAD_CACHE_PREFIXES.iter().find_map(|prefix| {
             mnemonic
                 .strip_prefix(prefix)
@@ -15376,6 +15590,9 @@ mod tests {
                 return Some(width);
             }
         }
+        if let Some(type_suffix) = mnemonic.strip_prefix("st.volatile.global.") {
+            return scalar_global_store_width(type_suffix);
+        }
         GLOBAL_STORE_CACHE_PREFIXES.iter().find_map(|prefix| {
             mnemonic
                 .strip_prefix(prefix)
@@ -15387,6 +15604,8 @@ mod tests {
         if let Some(type_suffix) = mnemonic
             .strip_prefix("ld.global.")
             .or_else(|| mnemonic.strip_prefix("st.global."))
+            .or_else(|| mnemonic.strip_prefix("ld.volatile.global."))
+            .or_else(|| mnemonic.strip_prefix("st.volatile.global."))
         {
             if let Some(width) = vector_memory_width_suffix(type_suffix) {
                 return Some(width);
@@ -15402,6 +15621,15 @@ mod tests {
             })
     }
 
+    fn shared_vector_width(mnemonic: &str) -> Option<u32> {
+        let type_suffix = mnemonic
+            .strip_prefix("ld.shared.")
+            .or_else(|| mnemonic.strip_prefix("st.shared."))
+            .or_else(|| mnemonic.strip_prefix("ld.volatile.shared."))
+            .or_else(|| mnemonic.strip_prefix("st.volatile.shared."))?;
+        vector_memory_width_suffix(type_suffix)
+    }
+
     fn is_global_load_mnemonic(mnemonic: &str) -> bool {
         global_load_width(mnemonic).is_some()
     }
@@ -15411,7 +15639,9 @@ mod tests {
     }
 
     fn is_vector_memory_mnemonic(mnemonic: &str) -> bool {
-        VECTOR_MEMORY_MNEMONICS.contains(&mnemonic) || global_vector_width(mnemonic).is_some()
+        VECTOR_MEMORY_MNEMONICS.contains(&mnemonic)
+            || global_vector_width(mnemonic).is_some()
+            || shared_vector_width(mnemonic).is_some()
     }
 
     fn is_global_memory_cache_mnemonic(mnemonic: &str) -> bool {
@@ -15419,6 +15649,10 @@ mod tests {
             .iter()
             .chain(GLOBAL_STORE_CACHE_PREFIXES.iter())
             .any(|prefix| mnemonic.starts_with(prefix))
+    }
+
+    fn is_volatile_memory_mnemonic(mnemonic: &str) -> bool {
+        mnemonic.starts_with("ld.volatile.") || mnemonic.starts_with("st.volatile.")
     }
 
     fn body_global_load(line: &str) -> Option<(&str, u32)> {
@@ -15526,10 +15760,8 @@ mod tests {
         if !line.contains("[%rd6 + ") {
             return None;
         }
-        let mnemonic = line.split_whitespace().next()?;
-        if !SHARED_MEM_LOAD_MNEMONICS.contains(&mnemonic)
-            && !SHARED_MEM_STORE_MNEMONICS.contains(&mnemonic)
-        {
+        let mnemonic = body_mnemonic(line)?;
+        if shared_memory_width(mnemonic).is_none() {
             return None;
         }
         let offset = line
@@ -16349,6 +16581,37 @@ mod tests {
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    fn assert_body_mnemonic_coverage(
+        cfg: &GenConfig,
+        program_bytes: usize,
+        n_seeds: u64,
+        mnemonics: &[&'static str],
+    ) {
+        let mut found = vec![false; mnemonics.len()];
+
+        for seed in 0..n_seeds {
+            let bytes = bytes_from_seed(seed, program_bytes);
+            let ptx = generate_from_bytes_with_config(&bytes, cfg).unwrap();
+            let seen: HashSet<_> = ptx.lines().filter_map(body_mnemonic).collect();
+            for (i, mnemonic) in mnemonics.iter().enumerate() {
+                found[i] |= seen.contains(mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = mnemonics
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit body mnemonics {missing:?}"
+        );
     }
 
     fn coverage_heavy_config() -> GenConfig {
@@ -18162,6 +18425,35 @@ mod tests {
     }
 
     #[test]
+    fn volatile_memory_generation_is_reachable() {
+        assert_body_mnemonic_coverage(
+            &coverage_heavy_config(),
+            8192,
+            32768,
+            VOLATILE_MEMORY_MNEMONICS,
+        );
+    }
+
+    #[test]
+    fn volatile_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_volatile_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in ptx.lines().filter_map(body_mnemonic) {
+                assert!(
+                    !is_volatile_memory_mnemonic(mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn const_load_generation_is_reachable() {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; CONST_LOAD_MNEMONICS.len()];
@@ -18387,13 +18679,7 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, offset) in ptx.lines().filter_map(body_shared_mem_access) {
-                let width = match mnemonic {
-                    "ld.shared.u8" | "ld.shared.s8" | "st.shared.u8" => 1,
-                    "ld.shared.u16" | "ld.shared.s16" | "st.shared.u16" => 2,
-                    "ld.shared.u32" | "st.shared.u32" => 4,
-                    "ld.shared.u64" | "ld.shared.s64" | "st.shared.u64" => 8,
-                    _ => unreachable!(),
-                };
+                let width = shared_memory_width(mnemonic).unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -18563,25 +18849,33 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (mnemonic, address, offset) in ptx.lines().filter_map(body_vector_memory_access) {
-                let width = global_vector_width(mnemonic).unwrap_or_else(|| {
-                    if mnemonic.contains(".u64") {
-                        16
-                    } else if mnemonic.contains(".v2.") {
-                        8
-                    } else {
-                        16
-                    }
-                });
+                let width = global_vector_width(mnemonic)
+                    .or_else(|| shared_vector_width(mnemonic))
+                    .unwrap_or_else(|| {
+                        if mnemonic.contains(".u64") {
+                            16
+                        } else if mnemonic.contains(".v2.") {
+                            8
+                        } else {
+                            16
+                        }
+                    });
                 let limit = if global_vector_width(mnemonic).is_some()
-                    && mnemonic.starts_with("ld.global")
+                    && (mnemonic.starts_with("ld.global")
+                        || mnemonic.starts_with("ld.volatile.global"))
                     && address == "%rd6"
                 {
                     input_len() as u32
                 } else if global_vector_width(mnemonic).is_some()
-                    && (mnemonic.starts_with("ld.global") || mnemonic.starts_with("st.global"))
+                    && (mnemonic.starts_with("ld.global")
+                        || mnemonic.starts_with("st.global")
+                        || mnemonic.starts_with("ld.volatile.global")
+                        || mnemonic.starts_with("st.volatile.global"))
                     && address == "%rd8"
                 {
                     N_OUTPUTS * 4
+                } else if shared_vector_width(mnemonic).is_some() && address == "%rd6" {
+                    SHARED_SLOT_BYTES
                 } else {
                     match (mnemonic, address) {
                         ("ld.const.v2.u32" | "ld.const.v4.u32" | "ld.const.v2.u64", "%rd6") => {

@@ -274,6 +274,7 @@ that feature.
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 and `v2.u64` memory loads and store/load roundtrips. |
 | `DIV_DISABLE_WIDE_MEMORY` | Scalar 64-bit and `v2.u64` memory loads and store/load roundtrips. |
 | `DIV_DISABLE_MEMORY_CACHE_OPS` | Scalar/vector global-memory cache-policy variants such as `ld.global.ca`, `ld.global.nc`, and `st.global.wt`. |
+| `DIV_DISABLE_VOLATILE_MEMORY` | Volatile scalar/vector global and shared memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |
