@@ -61,6 +61,9 @@ pub struct GenConfig {
     pub emit_mul_lo: bool,
     pub emit_signed_lo_alu: bool,
     pub emit_sat_arith: bool,
+    pub emit_packed_add: bool,
+    pub emit_signed_packed_add: bool,
+    pub emit_predicated_packed_add: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_mad_hi: bool,
@@ -70,6 +73,9 @@ pub struct GenConfig {
     pub emit_xor: bool,
     pub emit_prmt: bool,
     pub emit_predicated_prmt: bool,
+    pub emit_reg_prmt: bool,
+    pub emit_predicated_reg_prmt: bool,
+    pub emit_prmt_modes: bool,
     pub emit_not: bool,
     pub emit_clz: bool,
     pub emit_brev: bool,
@@ -197,6 +203,9 @@ impl Default for GenConfig {
             emit_mul_lo: true,
             emit_signed_lo_alu: true,
             emit_sat_arith: true,
+            emit_packed_add: true,
+            emit_signed_packed_add: true,
+            emit_predicated_packed_add: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_mad_hi: true,
@@ -206,6 +215,9 @@ impl Default for GenConfig {
             emit_xor: true,
             emit_prmt: true,
             emit_predicated_prmt: true,
+            emit_reg_prmt: true,
+            emit_predicated_reg_prmt: true,
+            emit_prmt_modes: true,
             emit_not: true,
             emit_clz: true,
             emit_brev: true,
@@ -396,6 +408,21 @@ impl BinOp {
 }
 
 #[derive(Clone, Copy)]
+enum PackedAddOp {
+    U16x2,
+    S16x2,
+}
+
+impl PackedAddOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            PackedAddOp::U16x2 => "add.u16x2",
+            PackedAddOp::S16x2 => "add.s16x2",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum ShiftOp {
     Shl,
     Shr,
@@ -441,6 +468,10 @@ impl UnaryOp {
 
 #[derive(Clone, Copy)]
 enum SpecialRegOp {
+    TidX,
+    NtidX,
+    CtaidX,
+    NctaidX,
     LaneId,
     LaneMaskEq,
     LaneMaskLt,
@@ -452,6 +483,10 @@ enum SpecialRegOp {
 impl SpecialRegOp {
     fn reg_name(self) -> &'static str {
         match self {
+            SpecialRegOp::TidX => "%tid.x",
+            SpecialRegOp::NtidX => "%ntid.x",
+            SpecialRegOp::CtaidX => "%ctaid.x",
+            SpecialRegOp::NctaidX => "%nctaid.x",
             SpecialRegOp::LaneId => "%laneid",
             SpecialRegOp::LaneMaskEq => "%lanemask_eq",
             SpecialRegOp::LaneMaskLt => "%lanemask_lt",
@@ -578,6 +613,37 @@ impl BmskMode {
         match self {
             BmskMode::Clamp => "bmsk.clamp.b32",
             BmskMode::Wrap => "bmsk.wrap.b32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PrmtMode {
+    F4e,
+    B4e,
+    Rc8,
+    Ecl,
+    Ecr,
+    Rc16,
+}
+
+impl PrmtMode {
+    fn suffix(self) -> &'static str {
+        match self {
+            PrmtMode::F4e => ".f4e",
+            PrmtMode::B4e => ".b4e",
+            PrmtMode::Rc8 => ".rc8",
+            PrmtMode::Ecl => ".ecl",
+            PrmtMode::Ecr => ".ecr",
+            PrmtMode::Rc16 => ".rc16",
+        }
+    }
+
+    fn ctrl_mask(self) -> u32 {
+        match self {
+            PrmtMode::F4e | PrmtMode::B4e => 3,
+            PrmtMode::Rc8 | PrmtMode::Ecl | PrmtMode::Ecr => 7,
+            PrmtMode::Rc16 => 1,
         }
     }
 }
@@ -1209,6 +1275,13 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// Packed halfword add through a 32-bit register.
+    PackedAdd {
+        op: PackedAddOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
     Sel {
         dst: u32,
         a: Operand,
@@ -1235,6 +1308,17 @@ enum Inst {
     /// `setp.<cmp> pred, ca, cb; @pred <binop> dst, a, b;`.
     PredicatedBin {
         op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred add.{u16x2,s16x2} dst, a, b;`.
+    PredicatedPackedAdd {
+        op: PackedAddOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -1851,17 +1935,19 @@ enum Inst {
     /// (low 16 bits) selects one byte from the 8 source bytes (a|b<<32).
     /// All u32 ctrl values are well-defined.
     Prmt {
+        mode: Option<PrmtMode>,
         dst: u32,
         a: Operand,
         b: Operand,
-        ctrl: u32,
+        ctrl: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred prmt.b32 dst, a, b, ctrl;`.
     PredicatedPrmt {
+        mode: Option<PrmtMode>,
         dst: u32,
         a: Operand,
         b: Operand,
-        ctrl: u32,
+        ctrl: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2224,6 +2310,20 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_prmt_ctrl(
+        &mut self,
+        u: &mut Unstructured,
+        mode: Option<PrmtMode>,
+        allow_reg: bool,
+    ) -> Result<Operand> {
+        if allow_reg && self.cfg.emit_bitwise_binops && u.arbitrary::<bool>()? {
+            return self.pick_reg_operand(u);
+        }
+
+        let max = mode.map_or(0xFFFF, PrmtMode::ctrl_mask);
+        Ok(Operand::Imm(u.int_in_range(0..=max)?))
+    }
+
     fn pick_divisor(&mut self, u: &mut Unstructured, op: DivRemOp) -> Result<u32> {
         if op.is_signed() {
             pick_signed_divisor_imm32(u, self.cfg.max_immediate)
@@ -2554,6 +2654,30 @@ impl<'a> Generator<'a> {
         //   255..256 (<1%) Dp4a/Dp2a
         let pick: u8 = u.arbitrary()?;
         if pick < 90 {
+            if self.cfg.emit_packed_add && u.int_in_range(0..=7)? == 0 {
+                let op = pick_packed_add(u, self.cfg.emit_signed_packed_add)?;
+                if self.cfg.emit_predicated_alu
+                    && self.cfg.emit_predicated_packed_add
+                    && u.arbitrary::<bool>()?
+                {
+                    return Ok(Inst::PredicatedPackedAdd {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_reg_operand(u)?,
+                        b: self.pick_reg_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    });
+                }
+                return Ok(Inst::PackedAdd {
+                    op,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_reg_operand(u)?,
+                    b: self.pick_reg_operand(u)?,
+                });
+            }
             let op = pick_binop(
                 u,
                 self.cfg.emit_minmax,
@@ -2779,12 +2903,18 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 215 {
             if self.cfg.emit_prmt {
+                let mode = pick_prmt_mode(u, self.cfg.emit_prmt_modes)?;
                 if self.cfg.emit_predicated_prmt && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedPrmt {
+                        mode,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
-                        ctrl: u.int_in_range(0..=0xFFFF)?,
+                        ctrl: self.pick_prmt_ctrl(
+                            u,
+                            mode,
+                            self.cfg.emit_reg_prmt && self.cfg.emit_predicated_reg_prmt,
+                        )?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2792,10 +2922,11 @@ impl<'a> Generator<'a> {
                     })
                 } else {
                     Ok(Inst::Prmt {
+                        mode,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
-                        ctrl: u.int_in_range(0..=0xFFFF)?,
+                        ctrl: self.pick_prmt_ctrl(u, mode, self.cfg.emit_reg_prmt)?,
                     })
                 }
             } else {
@@ -3490,9 +3621,11 @@ impl<'a> Generator<'a> {
                 self.forget_tracked_write(*dst_hi);
             }
             Inst::Bin { dst, .. }
+            | Inst::PackedAdd { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
+            | Inst::PredicatedPackedAdd { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
             | Inst::PredLogicBin { dst, .. }
@@ -3829,6 +3962,13 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PackedAdd { op, dst, a, b } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
             Inst::Sel {
                 dst,
                 a,
@@ -3875,6 +4015,23 @@ impl<'a> Generator<'a> {
                 writeln!(s, ", %p{};", pred_id(pred)).unwrap();
             }
             Inst::PredicatedBin {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedPackedAdd {
                 op,
                 dst,
                 a,
@@ -5115,14 +5272,33 @@ impl<'a> Generator<'a> {
                 c.emit(s);
                 writeln!(s, ", 0x{imm:02x};").unwrap();
             }
-            Inst::Prmt { dst, a, b, ctrl } => {
-                write!(s, "    prmt.b32      %r{dst}, ").unwrap();
+            Inst::Prmt {
+                mode,
+                dst,
+                a,
+                b,
+                ctrl,
+            } => {
+                let mnemonic = format!("prmt.b32{}", mode.map_or("", PrmtMode::suffix));
+                let ctrl_text = match ctrl {
+                    Operand::Reg(_) => {
+                        let scratch = self.wide_scratch_hi_reg();
+                        let mask = mode.map_or(0xFFFF, PrmtMode::ctrl_mask);
+                        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                        ctrl.emit(s);
+                        writeln!(s, ", {mask};").unwrap();
+                        format!("%r{scratch}")
+                    }
+                    Operand::Imm(v) => format!("0x{v:x}"),
+                };
+                write!(s, "    {mnemonic:<13} %r{dst}, ").unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
-                writeln!(s, ", 0x{ctrl:x};").unwrap();
+                writeln!(s, ", {ctrl_text};").unwrap();
             }
             Inst::PredicatedPrmt {
+                mode,
                 dst,
                 a,
                 b,
@@ -5132,12 +5308,24 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
+                let mnemonic = format!("prmt.b32{}", mode.map_or("", PrmtMode::suffix));
+                let ctrl_text = match ctrl {
+                    Operand::Reg(_) => {
+                        let scratch = self.wide_scratch_hi_reg();
+                        let mask = mode.map_or(0xFFFF, PrmtMode::ctrl_mask);
+                        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                        ctrl.emit(s);
+                        writeln!(s, ", {mask};").unwrap();
+                        format!("%r{scratch}")
+                    }
+                    Operand::Imm(v) => format!("0x{v:x}"),
+                };
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
-                write!(s, "    {} prmt.b32 %r{dst}, ", pred_guard(pred)).unwrap();
+                write!(s, "    {} {mnemonic:<8} %r{dst}, ", pred_guard(pred)).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
-                writeln!(s, ", 0x{ctrl:x};").unwrap();
+                writeln!(s, ", {ctrl_text};").unwrap();
             }
             Inst::Funnel {
                 dir,
@@ -5498,6 +5686,17 @@ fn pick_binop(
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_packed_add(u: &mut Unstructured, emit_signed_packed_add: bool) -> Result<PackedAddOp> {
+    let unsigned_ops = [PackedAddOp::U16x2];
+    let all_ops = [PackedAddOp::U16x2, PackedAddOp::S16x2];
+    let ops: &[PackedAddOp] = if emit_signed_packed_add {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
 fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
     let ops_with_signed = [
         CmpOp::Eq,
@@ -5610,6 +5809,10 @@ fn pick_unary(
 
 fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
     let ops = [
+        SpecialRegOp::TidX,
+        SpecialRegOp::NtidX,
+        SpecialRegOp::CtaidX,
+        SpecialRegOp::NctaidX,
         SpecialRegOp::LaneId,
         SpecialRegOp::LaneMaskEq,
         SpecialRegOp::LaneMaskLt,
@@ -5618,6 +5821,21 @@ fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
         SpecialRegOp::LaneMaskGe,
     ];
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_prmt_mode(u: &mut Unstructured, emit_prmt_modes: bool) -> Result<Option<PrmtMode>> {
+    if !emit_prmt_modes || !u.arbitrary::<bool>()? {
+        return Ok(None);
+    }
+    let ops = [
+        PrmtMode::F4e,
+        PrmtMode::B4e,
+        PrmtMode::Rc8,
+        PrmtMode::Ecl,
+        PrmtMode::Ecr,
+        PrmtMode::Rc16,
+    ];
+    Ok(Some(*u.choose(&ops)?))
 }
 
 fn pick_cvt(u: &mut Unstructured) -> Result<CvtOp> {
@@ -6092,6 +6310,8 @@ mod tests {
         "mul.lo.s32",
     ];
     const SAT_ARITH_MNEMONICS: &[&str] = &["add.sat.s32", "sub.sat.s32"];
+    const PACKED_ADD_MNEMONICS: &[&str] = &["add.u16x2", "add.s16x2"];
+    const SIGNED_PACKED_ADD_MNEMONICS: &[&str] = &["add.s16x2"];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
@@ -6102,6 +6322,10 @@ mod tests {
     ];
     const POST_KNOWN_UNARY_MNEMONICS: &[&str] = &["popc.b32", "clz.b32"];
     const SPECIAL_REG_NAMES: &[&str] = &[
+        "%tid.x",
+        "%ntid.x",
+        "%ctaid.x",
+        "%nctaid.x",
         "%laneid",
         "%lanemask_eq",
         "%lanemask_lt",
@@ -6127,6 +6351,14 @@ mod tests {
     ];
     const SIGNED_SZEXT_MNEMONICS: &[&str] = &["szext.wrap.s32", "szext.clamp.s32"];
     const FNS_MNEMONICS: &[&str] = &["fns.b32"];
+    const PRMT_MODE_MNEMONICS: &[&str] = &[
+        "prmt.b32.f4e",
+        "prmt.b32.b4e",
+        "prmt.b32.rc8",
+        "prmt.b32.ecl",
+        "prmt.b32.ecr",
+        "prmt.b32.rc16",
+    ];
     const BFIND_MNEMONICS: &[&str] = &[
         "bfind.u32",
         "bfind.shiftamt.u32",
@@ -6336,11 +6568,13 @@ mod tests {
         let mut mnemonics = Vec::new();
         for group in [
             BIN_MNEMONICS,
+            PACKED_ADD_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
+            PRMT_MODE_MNEMONICS,
             BFIND_MNEMONICS,
             BFE_MNEMONICS,
             BMSK_MNEMONICS,
@@ -6413,7 +6647,7 @@ mod tests {
     fn has_special_reg(ptx: &str, reg_name: &str) -> bool {
         ptx.lines().any(|line| {
             let line = line.trim_start();
-            line.starts_with("mov.u32") && line.ends_with(&format!("{reg_name};"))
+            line.starts_with("mov.u32       %r") && line.ends_with(&format!("{reg_name};"))
         })
     }
 
@@ -6502,7 +6736,7 @@ mod tests {
     fn has_predicated_alu(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
-            .any(|op| BIN_MNEMONICS.contains(&op))
+            .any(|op| BIN_MNEMONICS.contains(&op) || PACKED_ADD_MNEMONICS.contains(&op))
     }
 
     fn setp_bool_suffix(line: &str) -> Option<&'static str> {
@@ -6828,10 +7062,43 @@ mod tests {
         } else {
             first
         };
-        (op == "prmt.b32")
+        (op == "prmt.b32" || PRMT_MODE_MNEMONICS.contains(&op))
             .then(|| tokens.next())
             .flatten()
             .map(|token| token.trim_end_matches(','))
+    }
+
+    fn prmt_control_register(line: &str) -> Option<(bool, bool)> {
+        let line = line.trim_start();
+        let predicated = line.starts_with('@');
+        let mut tokens = line.split_whitespace();
+        let op = if predicated {
+            let _pred = tokens.next()?;
+            tokens.next()?
+        } else {
+            tokens.next()?
+        };
+        if op != "prmt.b32" && !PRMT_MODE_MNEMONICS.contains(&op) {
+            return None;
+        }
+        let last_arg = line
+            .trim_end_matches(';')
+            .split(',')
+            .next_back()?
+            .trim_start();
+        Some((predicated, last_arg.starts_with("%r")))
+    }
+
+    fn has_register_prmt_control(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(prmt_control_register)
+            .any(|(_, is_reg)| is_reg)
+    }
+
+    fn has_predicated_register_prmt_control(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(prmt_control_register)
+            .any(|(predicated, is_reg)| predicated && is_reg)
     }
 
     fn cvt_src(line: &str) -> Option<&str> {
@@ -6920,6 +7187,8 @@ mod tests {
             emit_selp: false,
             emit_mul_lo: false,
             emit_sat_arith: false,
+            emit_packed_add: false,
+            emit_signed_packed_add: false,
             emit_mulhi: false,
             emit_or: false,
             emit_xor: false,
@@ -7348,6 +7617,95 @@ mod tests {
     }
 
     #[test]
+    fn packed_add_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 2048, PACKED_ADD_MNEMONICS);
+    }
+
+    #[test]
+    fn packed_add_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_packed_add: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in PACKED_ADD_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_packed_add_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_packed_add: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_PACKED_ADD_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+            saw_unsigned |= has_mnemonic(&ptx, "add.u16x2");
+        }
+        assert!(saw_unsigned, "sample did not retain add.u16x2 coverage");
+    }
+
+    #[test]
+    fn predicated_packed_add_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; PACKED_ADD_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in PACKED_ADD_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = PACKED_ADD_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_packed_add_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_packed_add: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !PACKED_ADD_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn predicated_mad_generation_is_reachable() {
         let cfg = GenConfig {
             emit_lop3: false,
@@ -7648,6 +8006,104 @@ mod tests {
                 "seed {seed:x} emitted predicated prmt"
             );
         }
+    }
+
+    #[test]
+    fn register_prmt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_predicated_prmt: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_register_prmt_control(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit register-control prmt.b32");
+    }
+
+    #[test]
+    fn register_prmt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_prmt: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_register_prmt_control(&ptx),
+                "seed {seed:x} emitted register-control prmt.b32"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_register_prmt_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_register_prmt_control(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated register-control prmt.b32");
+    }
+
+    #[test]
+    fn predicated_register_prmt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_reg_prmt: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_register_prmt_control(&ptx),
+                "seed {seed:x} emitted predicated register-control prmt.b32"
+            );
+        }
+    }
+
+    #[test]
+    fn prmt_mode_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, PRMT_MODE_MNEMONICS);
+    }
+
+    #[test]
+    fn prmt_mode_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_prmt_modes: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_generic_prmt = false;
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in PRMT_MODE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_generic_prmt |= has_mnemonic(&ptx, "prmt.b32");
+        }
+        assert!(
+            saw_generic_prmt,
+            "sample did not retain generic prmt.b32 coverage"
+        );
     }
 
     #[test]

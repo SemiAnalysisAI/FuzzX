@@ -108,6 +108,9 @@ Version | Description |
 | 13.2.78 | [m022-neg-funnel-left-add](known-miscompiles/m022-neg-funnel-left-add/NOTES.md): `neg.s32` plus `shf.l.wrap.b32` fold produces a sign-extension-shaped error. |
 | 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/NOTES.md): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
 | 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/NOTES.md): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
+| 13.0.88 | [m055-prmt-reg-control-eq-fold](known-miscompiles/m055-prmt-reg-control-eq-fold/NOTES.md): Register-control `prmt.b32` feeding an equality fold selects the wrong arm. |
+| 13.0.88 | [m054-packed-add-cvt-fold](known-miscompiles/m054-packed-add-cvt-fold/NOTES.md): `add.s16x2` feeding `cvt.u16` and another packed add drops the first packed-add contribution. |
+| 13.0.88 | [m056-packed-add-cvt-s16-fold](known-miscompiles/m056-packed-add-cvt-s16-fold/NOTES.md): Likely same root cause as m054; `add.u16x2` feeding `cvt.s16` drops the packed-add contribution. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
 | 13.2.78 | [m028-shf-r-wrap-sub-fold](known-miscompiles/m028-shf-r-wrap-sub-fold/NOTES.md): `shf.r.wrap.b32` output is folded to zero before a final subtract. |
@@ -225,6 +228,9 @@ that feature.
 | `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
 | `DIV_DISABLE_SIGNED_LO_ALU` | Signed low-ALU spellings, including saturating add/sub. |
 | `DIV_DISABLE_SAT_ARITH` | `add.sat.s32` and `sub.sat.s32`. |
+| `DIV_DISABLE_PACKED_ADD` | `add.u16x2` and `add.s16x2`. |
+| `DIV_DISABLE_SIGNED_PACKED_ADD` | `add.s16x2` only. |
+| `DIV_DISABLE_PREDICATED_PACKED_ADD` | Predicated `add.u16x2` and `add.s16x2` instructions. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_MAD_HI` | `mad.hi.u32` and `mad.hi.s32`. |
@@ -234,6 +240,9 @@ that feature.
 | `DIV_DISABLE_XOR` | `xor.b32` while retaining `and.b32` and `or.b32`. |
 | `DIV_DISABLE_PRMT` | `prmt.b32`. |
 | `DIV_DISABLE_PREDICATED_PRMT` | Predicated `prmt.b32` instructions. |
+| `DIV_DISABLE_REG_PRMT` | Register-control `prmt.b32` instructions. |
+| `DIV_DISABLE_PREDICATED_REG_PRMT` | Predicated register-control `prmt.b32` instructions. |
+| `DIV_DISABLE_PRMT_MODES` | `prmt.b32` mode variants such as `.f4e`, `.ecl`, and `.rc16`. |
 | `DIV_DISABLE_NOT` | `not.b32` and xor-by-`0xffffffff` forms. |
 | `DIV_DISABLE_CLZ` | `clz.b32`. |
 | `DIV_DISABLE_BREV` | `brev.b32`. |

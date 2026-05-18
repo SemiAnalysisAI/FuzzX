@@ -36,6 +36,12 @@
 //!                         PTX signed low-ALU spellings, including saturating add/sub
 //!   DIV_DISABLE_SAT_ARITH default: false; set 1/true/yes/on to suppress
 //!                         PTX add.sat.s32/sub.sat.s32 generation
+//!   DIV_DISABLE_PACKED_ADD default: false; set 1/true/yes/on to suppress
+//!                         PTX add.{u16x2,s16x2} generation
+//!   DIV_DISABLE_SIGNED_PACKED_ADD default: false; set 1/true/yes/on to suppress
+//!                         PTX add.s16x2 generation while retaining add.u16x2
+//!   DIV_DISABLE_PREDICATED_PACKED_ADD default: false; set 1/true/yes/on to suppress
+//!                         predicated add.{u16x2,s16x2} generation
 //!   DIV_DISABLE_MULHI     default: false; set 1/true/yes/on to suppress
 //!                         PTX mul.hi.u32/mul.hi.s32 generation
 //!   DIV_DISABLE_SIGNED_MULHI default: false; set 1/true/yes/on to suppress
@@ -54,6 +60,12 @@
 //!                         PTX prmt.b32 generation
 //!   DIV_DISABLE_PREDICATED_PRMT default: false; set 1/true/yes/on to suppress
 //!                         predicated prmt.b32 generation
+//!   DIV_DISABLE_REG_PRMT default: false; set 1/true/yes/on to suppress
+//!                         register-control prmt.b32 generation
+//!   DIV_DISABLE_PREDICATED_REG_PRMT default: false; set 1/true/yes/on to suppress
+//!                         predicated register-control prmt.b32 generation
+//!   DIV_DISABLE_PRMT_MODES default: false; set 1/true/yes/on to suppress
+//!                         prmt.b32 mode variants such as .f4e and .rc8
 //!   DIV_DISABLE_NOT       default: false; set 1/true/yes/on to suppress
 //!                         PTX not.b32 generation and xor.b32-by-0xffffffff
 //!   DIV_DISABLE_CLZ       default: false; set 1/true/yes/on to suppress
@@ -351,6 +363,12 @@ struct Args {
     #[arg(long)]
     disable_sat_arith: bool,
     #[arg(long)]
+    disable_packed_add: bool,
+    #[arg(long)]
+    disable_signed_packed_add: bool,
+    #[arg(long)]
+    disable_predicated_packed_add: bool,
+    #[arg(long)]
     disable_mulhi: bool,
     #[arg(long)]
     disable_signed_mulhi: bool,
@@ -368,6 +386,12 @@ struct Args {
     disable_prmt: bool,
     #[arg(long)]
     disable_predicated_prmt: bool,
+    #[arg(long)]
+    disable_reg_prmt: bool,
+    #[arg(long)]
+    disable_predicated_reg_prmt: bool,
+    #[arg(long)]
+    disable_prmt_modes: bool,
     #[arg(long)]
     disable_not: bool,
     #[arg(long)]
@@ -607,6 +631,15 @@ impl Args {
         set_bool!(self.disable_mul_lo, "DIV_DISABLE_MUL_LO");
         set_bool!(self.disable_signed_lo_alu, "DIV_DISABLE_SIGNED_LO_ALU");
         set_bool!(self.disable_sat_arith, "DIV_DISABLE_SAT_ARITH");
+        set_bool!(self.disable_packed_add, "DIV_DISABLE_PACKED_ADD");
+        set_bool!(
+            self.disable_signed_packed_add,
+            "DIV_DISABLE_SIGNED_PACKED_ADD"
+        );
+        set_bool!(
+            self.disable_predicated_packed_add,
+            "DIV_DISABLE_PREDICATED_PACKED_ADD"
+        );
         set_bool!(self.disable_mulhi, "DIV_DISABLE_MULHI");
         set_bool!(self.disable_signed_mulhi, "DIV_DISABLE_SIGNED_MULHI");
         set_bool!(self.disable_mad_hi, "DIV_DISABLE_MAD_HI");
@@ -616,6 +649,12 @@ impl Args {
         set_bool!(self.disable_xor, "DIV_DISABLE_XOR");
         set_bool!(self.disable_prmt, "DIV_DISABLE_PRMT");
         set_bool!(self.disable_predicated_prmt, "DIV_DISABLE_PREDICATED_PRMT");
+        set_bool!(self.disable_reg_prmt, "DIV_DISABLE_REG_PRMT");
+        set_bool!(
+            self.disable_predicated_reg_prmt,
+            "DIV_DISABLE_PREDICATED_REG_PRMT"
+        );
+        set_bool!(self.disable_prmt_modes, "DIV_DISABLE_PRMT_MODES");
         set_bool!(self.disable_not, "DIV_DISABLE_NOT");
         set_bool!(self.disable_clz, "DIV_DISABLE_CLZ");
         set_bool!(self.disable_brev, "DIV_DISABLE_BREV");
@@ -867,6 +906,10 @@ impl Config {
         let disable_mul_lo = env_bool("DIV_DISABLE_MUL_LO")?.unwrap_or(false);
         let disable_signed_lo_alu = env_bool("DIV_DISABLE_SIGNED_LO_ALU")?.unwrap_or(false);
         let disable_sat_arith = env_bool("DIV_DISABLE_SAT_ARITH")?.unwrap_or(false);
+        let disable_packed_add = env_bool("DIV_DISABLE_PACKED_ADD")?.unwrap_or(false);
+        let disable_signed_packed_add = env_bool("DIV_DISABLE_SIGNED_PACKED_ADD")?.unwrap_or(false);
+        let disable_predicated_packed_add =
+            env_bool("DIV_DISABLE_PREDICATED_PACKED_ADD")?.unwrap_or(false);
         let disable_mulhi = env_bool("DIV_DISABLE_MULHI")?.unwrap_or(false);
         let disable_signed_mulhi = env_bool("DIV_DISABLE_SIGNED_MULHI")?.unwrap_or(false);
         let disable_mad_hi = env_bool("DIV_DISABLE_MAD_HI")?.unwrap_or(false);
@@ -876,6 +919,10 @@ impl Config {
         let disable_xor = env_bool("DIV_DISABLE_XOR")?.unwrap_or(false);
         let disable_prmt = env_bool("DIV_DISABLE_PRMT")?.unwrap_or(false);
         let disable_predicated_prmt = env_bool("DIV_DISABLE_PREDICATED_PRMT")?.unwrap_or(false);
+        let disable_reg_prmt = env_bool("DIV_DISABLE_REG_PRMT")?.unwrap_or(false);
+        let disable_predicated_reg_prmt =
+            env_bool("DIV_DISABLE_PREDICATED_REG_PRMT")?.unwrap_or(false);
+        let disable_prmt_modes = env_bool("DIV_DISABLE_PRMT_MODES")?.unwrap_or(false);
         let disable_not = env_bool("DIV_DISABLE_NOT")?.unwrap_or(false);
         let disable_clz = env_bool("DIV_DISABLE_CLZ")?.unwrap_or(false);
         let disable_brev = env_bool("DIV_DISABLE_BREV")?.unwrap_or(false);
@@ -1001,6 +1048,11 @@ impl Config {
             emit_mul_lo: !disable_mul_lo,
             emit_signed_lo_alu: !disable_signed_lo_alu,
             emit_sat_arith: !disable_sat_arith && !disable_signed_lo_alu,
+            emit_packed_add: !disable_packed_add,
+            emit_signed_packed_add: !disable_signed_packed_add,
+            emit_predicated_packed_add: !disable_predicated_packed_add
+                && !disable_packed_add
+                && !disable_predicated_alu,
             emit_mulhi: !disable_mulhi,
             emit_signed_mulhi: !disable_signed_mulhi,
             emit_mad_hi: !disable_mad_hi,
@@ -1010,6 +1062,13 @@ impl Config {
             emit_xor: !disable_xor,
             emit_prmt: !disable_prmt,
             emit_predicated_prmt: !disable_predicated_prmt && !disable_prmt,
+            emit_reg_prmt: !disable_reg_prmt && !disable_prmt && !disable_bitwise_binops,
+            emit_predicated_reg_prmt: !disable_predicated_reg_prmt
+                && !disable_reg_prmt
+                && !disable_predicated_prmt
+                && !disable_prmt
+                && !disable_bitwise_binops,
+            emit_prmt_modes: !disable_prmt_modes && !disable_prmt,
             emit_not: !disable_not,
             emit_clz: !disable_clz,
             emit_brev: !disable_brev,
@@ -1305,7 +1364,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_predicated_fns={} emit_bfi={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_packed_add={} emit_signed_packed_add={} emit_predicated_packed_add={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_reg_prmt={} emit_predicated_reg_prmt={} emit_prmt_modes={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_predicated_fns={} emit_bfi={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1332,6 +1391,9 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_mul_lo,
         cfg.gen_config.emit_signed_lo_alu,
         cfg.gen_config.emit_sat_arith,
+        cfg.gen_config.emit_packed_add,
+        cfg.gen_config.emit_signed_packed_add,
+        cfg.gen_config.emit_predicated_packed_add,
         cfg.gen_config.emit_mulhi,
         cfg.gen_config.emit_signed_mulhi,
         cfg.gen_config.emit_mad_hi,
@@ -1341,6 +1403,9 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_xor,
         cfg.gen_config.emit_prmt,
         cfg.gen_config.emit_predicated_prmt,
+        cfg.gen_config.emit_reg_prmt,
+        cfg.gen_config.emit_predicated_reg_prmt,
+        cfg.gen_config.emit_prmt_modes,
         cfg.gen_config.emit_not,
         cfg.gen_config.emit_clz,
         cfg.gen_config.emit_brev,

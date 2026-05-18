@@ -1,0 +1,89 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<41>;
+    .reg .b32   %r<34>;
+    .reg .b64   %rd<8>;
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r32, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r32, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r32;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r32;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r8, 8;
+    mov.u32         %r9, %r32;
+    mov.u32         %r10, %r2;
+    mov.u32         %r11, %r0;
+    mov.u32         %r12, 12;
+    mov.u32         %r13, %r32;
+    mov.u32         %r14, %r2;
+    mov.u32         %r15, %r0;
+    mov.u32         %r16, 16;
+    mov.u32         %r17, %r32;
+    mov.u32         %r18, %r2;
+    mov.u32         %r19, %r0;
+    mov.u32         %r20, 20;
+    mov.u32         %r21, %r32;
+    mov.u32         %r22, %r2;
+    mov.u32         %r23, %r0;
+    mov.u32         %r24, 24;
+    mov.u32         %r25, %r32;
+    mov.u32         %r26, %r2;
+    mov.u32         %r27, %r0;
+    mov.u32         %r28, 28;
+    mov.u32         %r29, %r32;
+    mov.u32         %r30, %r2;
+    mov.u32         %r31, %r0;
+
+    bra             block_0;
+
+block_0:
+    prmt.b32      %r5, %r2, %r6, 0xa589;
+    and.b32       %r33, %r5, 65535;
+    prmt.b32      %r19, %r28, 65535, %r33;
+    cvt.u64.u32   %rd6, %r2;
+    cvt.u64.u32   %rd7, %r20;
+    setp.eq.u64   %p1, %rd6, %rd7;
+    cvt.u64.u32  %rd6, 32;
+    cvt.u64.u32  %rd7, %r21;
+    selp.b64     %rd6, %rd6, %rd7, %p1;
+    mov.b64      {%r3, %r33}, %rd6;
+    and.b32       %r33, 15, 31;
+    shl.b32       %r8, %r6, %r33;
+    setp.ge.u32   %p4, %r24, %r30;
+    @!%p4 shl.b32  %r18, %r0, 31;
+    setp.eq.u32   %p18, %r19, %r18;
+    @%p18 not.b32  %r3, %r15;
+    and.b32       %r33, %r15, 65535;
+    setp.gt.u32   %p23, %r10, 268435456;
+    @%p23 prmt.b32 %r3, %r24, %r6, %r33;
+    setp.gt.u32   %p26, %r3, %r3;
+    and.b32       %r33, %r17, 31;
+    @!%p26 shl.b32  %r30, %r5, %r33;
+    and.b32       %r33, %r9, 65535;
+    prmt.b32      %r19, 131072, %r12, %r33;
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r32, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 12], %r3;
+    ret;
+}
