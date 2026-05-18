@@ -82,6 +82,8 @@
 //!                         masked register-count shift generation
 //!   DIV_DISABLE_PREDICATED_SHIFTS default: false; set 1/true/yes/on to suppress
 //!                         predicated immediate shift generation
+//!   DIV_DISABLE_PREDICATED_REG_SHIFTS default: false; set 1/true/yes/on to suppress
+//!                         predicated masked register-count shift generation
 //!   DIV_DISABLE_BFIND     default: false; set 1/true/yes/on to suppress
 //!                         PTX bfind.u32/bfind.shiftamt.u32 generation
 //!   DIV_DISABLE_PREDICATED_BFIND default: false; set 1/true/yes/on to suppress
@@ -110,6 +112,8 @@
 //!                         PTX add.cc.u32/addc.u32 pair generation
 //!   DIV_DISABLE_SUBC      default: false; set 1/true/yes/on to suppress
 //!                         PTX sub.cc.u32/subc.u32 pair generation
+//!   DIV_DISABLE_PREDICATED_CARRY default: false; set 1/true/yes/on to suppress
+//!                         predicated add/sub carry pair generation
 //!   DIV_DISABLE_I32_BOUNDARY_IMMS default: false; set 1/true/yes/on to
 //!                         suppress immediate 0x7fffffff/0x80000000 generation
 //!   DIV_DISABLE_DP2A      default: false; set 1/true/yes/on to suppress
@@ -299,6 +303,8 @@ struct Args {
     #[arg(long)]
     disable_predicated_shifts: bool,
     #[arg(long)]
+    disable_predicated_reg_shifts: bool,
+    #[arg(long)]
     disable_bfind: bool,
     #[arg(long)]
     disable_predicated_bfind: bool,
@@ -326,6 +332,8 @@ struct Args {
     disable_addc: bool,
     #[arg(long)]
     disable_subc: bool,
+    #[arg(long)]
+    disable_predicated_carry: bool,
     #[arg(long)]
     disable_i32_boundary_imms: bool,
     #[arg(long)]
@@ -443,6 +451,10 @@ impl Args {
             self.disable_predicated_shifts,
             "DIV_DISABLE_PREDICATED_SHIFTS"
         );
+        set_bool!(
+            self.disable_predicated_reg_shifts,
+            "DIV_DISABLE_PREDICATED_REG_SHIFTS"
+        );
         set_bool!(self.disable_bfind, "DIV_DISABLE_BFIND");
         set_bool!(
             self.disable_predicated_bfind,
@@ -472,6 +484,10 @@ impl Args {
         );
         set_bool!(self.disable_addc, "DIV_DISABLE_ADDC");
         set_bool!(self.disable_subc, "DIV_DISABLE_SUBC");
+        set_bool!(
+            self.disable_predicated_carry,
+            "DIV_DISABLE_PREDICATED_CARRY"
+        );
         set_bool!(
             self.disable_i32_boundary_imms,
             "DIV_DISABLE_I32_BOUNDARY_IMMS"
@@ -597,6 +613,8 @@ impl Config {
         let disable_signed_shr = env_bool("DIV_DISABLE_SIGNED_SHR")?.unwrap_or(false);
         let disable_reg_shifts = env_bool("DIV_DISABLE_REG_SHIFTS")?.unwrap_or(false);
         let disable_predicated_shifts = env_bool("DIV_DISABLE_PREDICATED_SHIFTS")?.unwrap_or(false);
+        let disable_predicated_reg_shifts =
+            env_bool("DIV_DISABLE_PREDICATED_REG_SHIFTS")?.unwrap_or(false);
         let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
         let disable_predicated_bfind = env_bool("DIV_DISABLE_PREDICATED_BFIND")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
@@ -614,6 +632,7 @@ impl Config {
             env_bool("DIV_DISABLE_PREDICATED_WIDE_INT")?.unwrap_or(false);
         let disable_addc = env_bool("DIV_DISABLE_ADDC")?.unwrap_or(false);
         let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
+        let disable_predicated_carry = env_bool("DIV_DISABLE_PREDICATED_CARRY")?.unwrap_or(false);
         let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
         let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
         let disable_negated_predicates =
@@ -671,6 +690,9 @@ impl Config {
             emit_signed_shr: !disable_signed_shr,
             emit_reg_shifts: !disable_reg_shifts && !disable_bitwise_binops,
             emit_predicated_shifts: !disable_predicated_shifts,
+            emit_predicated_reg_shifts: !disable_predicated_reg_shifts
+                && !disable_reg_shifts
+                && !disable_bitwise_binops,
             emit_bfind: !disable_bfind,
             emit_predicated_bfind: !disable_predicated_bfind && !disable_bfind,
             emit_bfi: !disable_bfi,
@@ -685,6 +707,7 @@ impl Config {
             emit_predicated_wide_int: !disable_predicated_wide_int && !disable_wide_int,
             emit_addc: !disable_addc,
             emit_subc: !disable_subc,
+            emit_predicated_carry: !disable_predicated_carry && (!disable_addc || !disable_subc),
             emit_i32_boundary_immediates: !disable_i32_boundary_imms,
             emit_dp2a: !disable_dp2a,
             emit_negated_predicates: !disable_negated_predicates,
@@ -886,7 +909,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_addc={} emit_subc={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_mulhi={} emit_signed_mulhi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_predicated_wide_int={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_predicated_mad={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -936,6 +959,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_signed_shr,
         cfg.gen_config.emit_reg_shifts,
         cfg.gen_config.emit_predicated_shifts,
+        cfg.gen_config.emit_predicated_reg_shifts,
         cfg.gen_config.emit_bfind,
         cfg.gen_config.emit_predicated_bfind,
         cfg.gen_config.emit_bfi,
@@ -950,6 +974,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_predicated_wide_int,
         cfg.gen_config.emit_addc,
         cfg.gen_config.emit_subc,
+        cfg.gen_config.emit_predicated_carry,
         cfg.gen_config.emit_i32_boundary_immediates,
         cfg.gen_config.emit_dp2a,
         cfg.gen_config.emit_negated_predicates,

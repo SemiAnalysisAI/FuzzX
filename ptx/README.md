@@ -245,6 +245,7 @@ that feature.
 | `DIV_DISABLE_SIGNED_SHR` | `shr.s32`. |
 | `DIV_DISABLE_REG_SHIFTS` | Masked register-count shifts. |
 | `DIV_DISABLE_PREDICATED_SHIFTS` | Predicated immediate-count shifts. |
+| `DIV_DISABLE_PREDICATED_REG_SHIFTS` | Predicated masked register-count shifts. |
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
@@ -259,6 +260,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_WIDE_INT` | Predicated 64-bit scratch-register ALU generation. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
+| `DIV_DISABLE_PREDICATED_CARRY` | Predicated `add.cc` / `addc` and `sub.cc` / `subc` pairs. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
 | `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |

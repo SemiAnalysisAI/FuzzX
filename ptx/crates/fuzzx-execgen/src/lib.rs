@@ -83,6 +83,7 @@ pub struct GenConfig {
     pub emit_signed_shr: bool,
     pub emit_reg_shifts: bool,
     pub emit_predicated_shifts: bool,
+    pub emit_predicated_reg_shifts: bool,
     pub emit_bfind: bool,
     pub emit_predicated_bfind: bool,
     pub emit_bfi: bool,
@@ -97,6 +98,7 @@ pub struct GenConfig {
     pub emit_predicated_wide_int: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
+    pub emit_predicated_carry: bool,
     pub emit_i32_boundary_immediates: bool,
     pub emit_dp2a: bool,
     pub emit_negated_predicates: bool,
@@ -170,6 +172,7 @@ impl Default for GenConfig {
             emit_signed_shr: true,
             emit_reg_shifts: true,
             emit_predicated_shifts: true,
+            emit_predicated_reg_shifts: true,
             emit_bfind: true,
             emit_predicated_bfind: true,
             emit_bfi: true,
@@ -184,6 +187,7 @@ impl Default for GenConfig {
             emit_predicated_wide_int: true,
             emit_addc: true,
             emit_subc: true,
+            emit_predicated_carry: true,
             emit_i32_boundary_immediates: true,
             emit_dp2a: true,
             emit_negated_predicates: true,
@@ -830,6 +834,17 @@ enum Inst {
         src: Operand,
         amount: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred <shift> dst, src, (amount & 31);`.
+    PredicatedRegShift {
+        op: ShiftOp,
+        dst: u32,
+        src: Operand,
+        amount: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `<op>.b32 dst, src;`
     Unary { op: UnaryOp, dst: u32, src: Operand },
     /// `setp.<cmp> pred, ca, cb; @pred <unary> dst, src;`.
@@ -967,6 +982,20 @@ enum Inst {
         b: Operand,
         c: Operand,
         d: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred add/sub.cc; @pred addc/subc`.
+    PredicatedAddCarry {
+        op: AddCarryOp,
+        dst_lo: u32,
+        dst_hi: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `sad.u32 dst, a, b, c;` — unsigned sum of absolute difference.
     Sad {
@@ -1612,12 +1641,25 @@ impl<'a> Generator<'a> {
                 && self.cfg.emit_bitwise_binops
                 && u.arbitrary::<bool>()?
             {
-                Ok(Inst::RegShift {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    src: self.pick_operand(u)?,
-                    amount: self.pick_operand(u)?,
-                })
+                if self.cfg.emit_predicated_reg_shifts && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedRegShift {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        amount: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::RegShift {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        amount: self.pick_operand(u)?,
+                    })
+                }
             } else {
                 Ok(Inst::Shift {
                     op,
@@ -1832,15 +1874,32 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 251 {
             if (self.cfg.emit_addc || self.cfg.emit_subc) && u.arbitrary::<bool>()? {
-                Ok(Inst::AddCarry {
-                    op: pick_add_carry(u, self.cfg.emit_addc, self.cfg.emit_subc)?,
-                    dst_lo: self.pick_dst(u)?,
-                    dst_hi: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                    d: self.pick_operand(u)?,
-                })
+                let op = pick_add_carry(u, self.cfg.emit_addc, self.cfg.emit_subc)?;
+                if self.cfg.emit_predicated_carry && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedAddCarry {
+                        op,
+                        dst_lo: self.pick_dst(u)?,
+                        dst_hi: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        d: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::AddCarry {
+                        op,
+                        dst_lo: self.pick_dst(u)?,
+                        dst_hi: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        d: self.pick_operand(u)?,
+                    })
+                }
             } else if self.cfg.emit_bfind {
                 if self.cfg.emit_predicated_bfind && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedBfind {
@@ -2125,7 +2184,8 @@ impl<'a> Generator<'a> {
             Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } => {
                 self.remember_prmt_write(*dst);
             }
-            Inst::AddCarry { dst_lo, dst_hi, .. } => {
+            Inst::AddCarry { dst_lo, dst_hi, .. }
+            | Inst::PredicatedAddCarry { dst_lo, dst_hi, .. } => {
                 self.forget_tracked_write(*dst_lo);
                 self.forget_tracked_write(*dst_hi);
             }
@@ -2136,6 +2196,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedShift { dst, .. }
             | Inst::Shift { dst, .. }
             | Inst::RegShift { dst, .. }
+            | Inst::PredicatedRegShift { dst, .. }
             | Inst::Unary { dst, .. }
             | Inst::PredicatedUnary { dst, .. }
             | Inst::Cvt { dst, .. }
@@ -2570,6 +2631,25 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ", %r{scratch};").unwrap();
             }
+            Inst::PredicatedRegShift {
+                op,
+                dst,
+                src,
+                amount,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                amount.emit(s);
+                writeln!(s, ", 31;").unwrap();
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ", %r{scratch};").unwrap();
+            }
             Inst::Unary { op, dst, src } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
@@ -2800,6 +2880,35 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
                 write!(s, "    {second:<13} %r{dst_hi}, ").unwrap();
+                c.emit(s);
+                write!(s, ", ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedAddCarry {
+                op,
+                dst_lo,
+                dst_hi,
+                a,
+                b,
+                c,
+                d,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let (first, second) = match op {
+                    AddCarryOp::Add => ("add.cc.u32", "addc.u32"),
+                    AddCarryOp::Sub => ("sub.cc.u32", "subc.u32"),
+                };
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {first:<8} %r{dst_lo}, ", pred_guard(pred)).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {} {second:<8} %r{dst_hi}, ", pred_guard(pred)).unwrap();
                 c.emit(s);
                 write!(s, ", ").unwrap();
                 d.emit(s);
@@ -3885,6 +3994,18 @@ mod tests {
         })
     }
 
+    fn has_predicated_register_shift(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            predicated_mnemonic(line).is_some_and(|op| SHIFT_MNEMONICS.contains(&op))
+                && line
+                    .trim_end_matches(';')
+                    .split(',')
+                    .next_back()
+                    .is_some_and(|amount| amount.trim_start().starts_with("%r"))
+        })
+    }
+
     fn has_predicated_alu(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -3967,6 +4088,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_INT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_carry(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| CARRY_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_sad(ptx: &str) -> bool {
@@ -4941,7 +5068,10 @@ mod tests {
 
     #[test]
     fn predicated_shift_generation_is_reachable() {
-        let cfg = coverage_heavy_config();
+        let cfg = GenConfig {
+            emit_predicated_reg_shifts: false,
+            ..coverage_heavy_config()
+        };
         let mut saw_predicated_shift = false;
 
         for seed in 0..1024 {
@@ -4963,6 +5093,7 @@ mod tests {
     fn predicated_shift_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_predicated_shifts: false,
+            emit_predicated_reg_shifts: false,
             ..GenConfig::default()
         };
 
@@ -5009,6 +5140,47 @@ mod tests {
             assert!(
                 !has_register_shift(&ptx),
                 "seed {seed:x} emitted a masked register-count shift"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_register_shift_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_predicated_shifts: false,
+            ..coverage_heavy_config()
+        };
+        let mut saw_predicated_register_shift = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_predicated_register_shift |= has_predicated_register_shift(&ptx);
+            if saw_predicated_register_shift {
+                break;
+            }
+        }
+
+        assert!(
+            saw_predicated_register_shift,
+            "no seed in sample emitted a predicated masked register-count shift"
+        );
+    }
+
+    #[test]
+    fn predicated_register_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_shifts: false,
+            emit_predicated_reg_shifts: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_register_shift(&ptx),
+                "seed {seed:x} emitted a predicated masked register-count shift"
             );
         }
     }
@@ -5668,6 +5840,60 @@ mod tests {
             for mnemonic in ["sub.cc.u32", "subc.u32"] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
+        }
+    }
+
+    #[test]
+    fn predicated_carry_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; CARRY_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in CARRY_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = CARRY_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_carry_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bfind: false,
+            emit_mad24: false,
+            emit_mul24: false,
+            emit_predicated_carry: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_carry(&ptx),
+                "seed {seed:x} emitted predicated carry pair"
+            );
         }
     }
 
