@@ -1082,7 +1082,13 @@ enum FloatInputDomain {
 #[derive(Clone, Copy)]
 enum F32SpecialMathOp {
     SqrtRn,
+    SqrtRz,
+    SqrtRm,
+    SqrtRp,
     RcpRn,
+    RcpRz,
+    RcpRm,
+    RcpRp,
     RcpApprox,
     RsqrtApprox,
     Ex2Approx,
@@ -1093,7 +1099,13 @@ impl F32SpecialMathOp {
     fn mnemonic(self) -> &'static str {
         match self {
             F32SpecialMathOp::SqrtRn => "sqrt.rn.f32",
+            F32SpecialMathOp::SqrtRz => "sqrt.rz.f32",
+            F32SpecialMathOp::SqrtRm => "sqrt.rm.f32",
+            F32SpecialMathOp::SqrtRp => "sqrt.rp.f32",
             F32SpecialMathOp::RcpRn => "rcp.rn.f32",
+            F32SpecialMathOp::RcpRz => "rcp.rz.f32",
+            F32SpecialMathOp::RcpRm => "rcp.rm.f32",
+            F32SpecialMathOp::RcpRp => "rcp.rp.f32",
             F32SpecialMathOp::RcpApprox => "rcp.approx.ftz.f32",
             F32SpecialMathOp::RsqrtApprox => "rsqrt.approx.ftz.f32",
             F32SpecialMathOp::Ex2Approx => "ex2.approx.ftz.f32",
@@ -1103,8 +1115,14 @@ impl F32SpecialMathOp {
 
     fn input_domain(self) -> FloatInputDomain {
         match self {
-            F32SpecialMathOp::SqrtRn => FloatInputDomain::NonNegative,
+            F32SpecialMathOp::SqrtRn
+            | F32SpecialMathOp::SqrtRz
+            | F32SpecialMathOp::SqrtRm
+            | F32SpecialMathOp::SqrtRp => FloatInputDomain::NonNegative,
             F32SpecialMathOp::RcpRn
+            | F32SpecialMathOp::RcpRz
+            | F32SpecialMathOp::RcpRm
+            | F32SpecialMathOp::RcpRp
             | F32SpecialMathOp::RcpApprox
             | F32SpecialMathOp::RsqrtApprox
             | F32SpecialMathOp::Lg2Approx => FloatInputDomain::Positive,
@@ -1242,21 +1260,39 @@ impl F64ToIntCvtOp {
 #[derive(Clone, Copy)]
 enum F64SpecialMathOp {
     SqrtRn,
+    SqrtRz,
+    SqrtRm,
+    SqrtRp,
     RcpRn,
+    RcpRz,
+    RcpRm,
+    RcpRp,
 }
 
 impl F64SpecialMathOp {
     fn mnemonic(self) -> &'static str {
         match self {
             F64SpecialMathOp::SqrtRn => "sqrt.rn.f64",
+            F64SpecialMathOp::SqrtRz => "sqrt.rz.f64",
+            F64SpecialMathOp::SqrtRm => "sqrt.rm.f64",
+            F64SpecialMathOp::SqrtRp => "sqrt.rp.f64",
             F64SpecialMathOp::RcpRn => "rcp.rn.f64",
+            F64SpecialMathOp::RcpRz => "rcp.rz.f64",
+            F64SpecialMathOp::RcpRm => "rcp.rm.f64",
+            F64SpecialMathOp::RcpRp => "rcp.rp.f64",
         }
     }
 
     fn input_domain(self) -> FloatInputDomain {
         match self {
-            F64SpecialMathOp::SqrtRn => FloatInputDomain::NonNegative,
-            F64SpecialMathOp::RcpRn => FloatInputDomain::Positive,
+            F64SpecialMathOp::SqrtRn
+            | F64SpecialMathOp::SqrtRz
+            | F64SpecialMathOp::SqrtRm
+            | F64SpecialMathOp::SqrtRp => FloatInputDomain::NonNegative,
+            F64SpecialMathOp::RcpRn
+            | F64SpecialMathOp::RcpRz
+            | F64SpecialMathOp::RcpRm
+            | F64SpecialMathOp::RcpRp => FloatInputDomain::Positive,
         }
     }
 }
@@ -5077,7 +5113,13 @@ impl<'a> Generator<'a> {
     fn pick_f32_special_math(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [
             F32SpecialMathOp::SqrtRn,
+            F32SpecialMathOp::SqrtRz,
+            F32SpecialMathOp::SqrtRm,
+            F32SpecialMathOp::SqrtRp,
             F32SpecialMathOp::RcpRn,
+            F32SpecialMathOp::RcpRz,
+            F32SpecialMathOp::RcpRm,
+            F32SpecialMathOp::RcpRp,
             F32SpecialMathOp::RcpApprox,
             F32SpecialMathOp::RsqrtApprox,
             F32SpecialMathOp::Ex2Approx,
@@ -5199,7 +5241,16 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_f64_special_math(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let ops = [F64SpecialMathOp::SqrtRn, F64SpecialMathOp::RcpRn];
+        let ops = [
+            F64SpecialMathOp::SqrtRn,
+            F64SpecialMathOp::SqrtRz,
+            F64SpecialMathOp::SqrtRm,
+            F64SpecialMathOp::SqrtRp,
+            F64SpecialMathOp::RcpRn,
+            F64SpecialMathOp::RcpRz,
+            F64SpecialMathOp::RcpRm,
+            F64SpecialMathOp::RcpRp,
+        ];
         Ok(Inst::F64SpecialMath {
             op: *u.choose(&ops)?,
             dst: self.pick_dst(u)?,
@@ -11203,7 +11254,13 @@ mod tests {
     ];
     const F32_SPECIAL_MATH_MNEMONICS: &[&str] = &[
         "sqrt.rn.f32",
+        "sqrt.rz.f32",
+        "sqrt.rm.f32",
+        "sqrt.rp.f32",
         "rcp.rn.f32",
+        "rcp.rz.f32",
+        "rcp.rm.f32",
+        "rcp.rp.f32",
         "rcp.approx.ftz.f32",
         "rsqrt.approx.ftz.f32",
         "ex2.approx.ftz.f32",
@@ -11281,7 +11338,16 @@ mod tests {
         "cvt.rmi.u32.f64",
         "cvt.rpi.u32.f64",
     ];
-    const F64_SPECIAL_MATH_MNEMONICS: &[&str] = &["sqrt.rn.f64", "rcp.rn.f64"];
+    const F64_SPECIAL_MATH_MNEMONICS: &[&str] = &[
+        "sqrt.rn.f64",
+        "sqrt.rz.f64",
+        "sqrt.rm.f64",
+        "sqrt.rp.f64",
+        "rcp.rn.f64",
+        "rcp.rz.f64",
+        "rcp.rm.f64",
+        "rcp.rp.f64",
+    ];
     const F64_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f64",
         "set.ne.u32.f64",
