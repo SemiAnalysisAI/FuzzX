@@ -275,14 +275,14 @@ that feature.
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |
-| `DIV_DISABLE_F32_CVT` | Sanitized signed/unsigned f32/int, saturating f32-to-int, f64-to-f32, and `.ftz` conversion chains. |
+| `DIV_DISABLE_F32_CVT` | Sanitized signed/unsigned 32/64-bit f32/int, saturating f32-to-int, f64-to-f32, and `.ftz` conversion chains. |
 | `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded and `.ftz` f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, `lg2`, `sin`, and `cos`. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized ordered/unordered `set.*.u32.f32` and `setp.*.f32` comparisons, including `.ftz` forms, plus `testp.*.f32` classification. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32`, including `.ftz` forms, feeding `selp.f32`. |
 | `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f64` arithmetic. |
 | `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F64_UNARY` | Sanitized `abs.f64` and `neg.f64`. |
-| `DIV_DISABLE_F64_CVT` | Sanitized signed/unsigned f64/int, saturating f64-to-int, and f32-to-f64 conversion chains. |
+| `DIV_DISABLE_F64_CVT` | Sanitized signed/unsigned 32/64-bit f64/int, saturating f64-to-int, and f32-to-f64 conversion chains. |
 | `DIV_DISABLE_F64_SPECIAL_MATH` | Sanitized rounded f64 `sqrt` and `rcp`. |
 | `DIV_DISABLE_F64_COMPARE` | Sanitized ordered/unordered `set.*.u32.f64` and `setp.*.f64` comparisons plus `testp.*.f64` classification. |
 | `DIV_DISABLE_F64_SELP` | Sanitized `setp.*.f64` feeding `selp.f64`. |

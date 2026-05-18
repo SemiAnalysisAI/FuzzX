@@ -128,8 +128,8 @@
 //!   DIV_DISABLE_F32_UNARY default: false; set 1/true/yes/on to suppress
 //!                         f32 abs/neg generation, including ftz forms
 //!   DIV_DISABLE_F32_CVT default: false; set 1/true/yes/on to suppress
-//!                         explicit signed/unsigned f32/int, saturating f32-to-int,
-//!                         f64-to-f32, and ftz conversion chains
+//!                         explicit signed/unsigned 32/64-bit f32/int,
+//!                         saturating f32-to-int, f64-to-f32, and ftz conversion chains
 //!   DIV_DISABLE_F32_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         f32 rounded and ftz sqrt/rcp plus approx rcp/rsqrt/ex2/lg2/sin/cos
 //!                         generation
@@ -145,8 +145,8 @@
 //!   DIV_DISABLE_F64_UNARY default: false; set 1/true/yes/on to suppress
 //!                         f64 abs/neg generation
 //!   DIV_DISABLE_F64_CVT default: false; set 1/true/yes/on to suppress
-//!                         explicit signed/unsigned f64/int, saturating f64-to-int,
-//!                         and f32-to-f64 conversion chains
+//!                         explicit signed/unsigned 32/64-bit f64/int,
+//!                         saturating f64-to-int, and f32-to-f64 conversion chains
 //!   DIV_DISABLE_F64_SPECIAL_MATH default: false; set 1/true/yes/on to suppress
 //!                         rounded f64 sqrt/rcp generation
 //!   DIV_DISABLE_F64_COMPARE default: false; set 1/true/yes/on to suppress

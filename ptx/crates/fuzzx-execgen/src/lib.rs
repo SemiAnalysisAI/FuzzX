@@ -1143,6 +1143,22 @@ enum F32FromIntCvtOp {
     S32RzFtz,
     S32RmFtz,
     S32RpFtz,
+    U64Rn,
+    U64Rz,
+    U64Rm,
+    U64Rp,
+    U64RnFtz,
+    U64RzFtz,
+    U64RmFtz,
+    U64RpFtz,
+    S64Rn,
+    S64Rz,
+    S64Rm,
+    S64Rp,
+    S64RnFtz,
+    S64RzFtz,
+    S64RmFtz,
+    S64RpFtz,
 }
 
 impl F32FromIntCvtOp {
@@ -1164,6 +1180,58 @@ impl F32FromIntCvtOp {
             F32FromIntCvtOp::S32RzFtz => "cvt.rz.ftz.f32.s32",
             F32FromIntCvtOp::S32RmFtz => "cvt.rm.ftz.f32.s32",
             F32FromIntCvtOp::S32RpFtz => "cvt.rp.ftz.f32.s32",
+            F32FromIntCvtOp::U64Rn => "cvt.rn.f32.u64",
+            F32FromIntCvtOp::U64Rz => "cvt.rz.f32.u64",
+            F32FromIntCvtOp::U64Rm => "cvt.rm.f32.u64",
+            F32FromIntCvtOp::U64Rp => "cvt.rp.f32.u64",
+            F32FromIntCvtOp::U64RnFtz => "cvt.rn.ftz.f32.u64",
+            F32FromIntCvtOp::U64RzFtz => "cvt.rz.ftz.f32.u64",
+            F32FromIntCvtOp::U64RmFtz => "cvt.rm.ftz.f32.u64",
+            F32FromIntCvtOp::U64RpFtz => "cvt.rp.ftz.f32.u64",
+            F32FromIntCvtOp::S64Rn => "cvt.rn.f32.s64",
+            F32FromIntCvtOp::S64Rz => "cvt.rz.f32.s64",
+            F32FromIntCvtOp::S64Rm => "cvt.rm.f32.s64",
+            F32FromIntCvtOp::S64Rp => "cvt.rp.f32.s64",
+            F32FromIntCvtOp::S64RnFtz => "cvt.rn.ftz.f32.s64",
+            F32FromIntCvtOp::S64RzFtz => "cvt.rz.ftz.f32.s64",
+            F32FromIntCvtOp::S64RmFtz => "cvt.rm.ftz.f32.s64",
+            F32FromIntCvtOp::S64RpFtz => "cvt.rp.ftz.f32.s64",
+        }
+    }
+
+    fn source_is_64(self) -> bool {
+        matches!(
+            self,
+            F32FromIntCvtOp::U64Rn
+                | F32FromIntCvtOp::U64Rz
+                | F32FromIntCvtOp::U64Rm
+                | F32FromIntCvtOp::U64Rp
+                | F32FromIntCvtOp::U64RnFtz
+                | F32FromIntCvtOp::U64RzFtz
+                | F32FromIntCvtOp::U64RmFtz
+                | F32FromIntCvtOp::U64RpFtz
+                | F32FromIntCvtOp::S64Rn
+                | F32FromIntCvtOp::S64Rz
+                | F32FromIntCvtOp::S64Rm
+                | F32FromIntCvtOp::S64Rp
+                | F32FromIntCvtOp::S64RnFtz
+                | F32FromIntCvtOp::S64RzFtz
+                | F32FromIntCvtOp::S64RmFtz
+                | F32FromIntCvtOp::S64RpFtz
+        )
+    }
+
+    fn source_extend_mnemonic(self) -> &'static str {
+        match self {
+            F32FromIntCvtOp::S64Rn
+            | F32FromIntCvtOp::S64Rz
+            | F32FromIntCvtOp::S64Rm
+            | F32FromIntCvtOp::S64Rp
+            | F32FromIntCvtOp::S64RnFtz
+            | F32FromIntCvtOp::S64RzFtz
+            | F32FromIntCvtOp::S64RmFtz
+            | F32FromIntCvtOp::S64RpFtz => "cvt.s64.s32",
+            _ => "cvt.u64.u32",
         }
     }
 }
@@ -1202,6 +1270,38 @@ enum F32ToIntCvtOp {
     U32RniFtzSat,
     U32RmiFtzSat,
     U32RpiFtzSat,
+    S64Rzi,
+    S64Rni,
+    S64Rmi,
+    S64Rpi,
+    S64RziFtz,
+    S64RniFtz,
+    S64RmiFtz,
+    S64RpiFtz,
+    U64Rzi,
+    U64Rni,
+    U64Rmi,
+    U64Rpi,
+    U64RziFtz,
+    U64RniFtz,
+    U64RmiFtz,
+    U64RpiFtz,
+    S64RziSat,
+    S64RniSat,
+    S64RmiSat,
+    S64RpiSat,
+    S64RziFtzSat,
+    S64RniFtzSat,
+    S64RmiFtzSat,
+    S64RpiFtzSat,
+    U64RziSat,
+    U64RniSat,
+    U64RmiSat,
+    U64RpiSat,
+    U64RziFtzSat,
+    U64RniFtzSat,
+    U64RmiFtzSat,
+    U64RpiFtzSat,
 }
 
 impl F32ToIntCvtOp {
@@ -1239,7 +1339,77 @@ impl F32ToIntCvtOp {
             F32ToIntCvtOp::U32RniFtzSat => "cvt.rni.ftz.sat.u32.f32",
             F32ToIntCvtOp::U32RmiFtzSat => "cvt.rmi.ftz.sat.u32.f32",
             F32ToIntCvtOp::U32RpiFtzSat => "cvt.rpi.ftz.sat.u32.f32",
+            F32ToIntCvtOp::S64Rzi => "cvt.rzi.s64.f32",
+            F32ToIntCvtOp::S64Rni => "cvt.rni.s64.f32",
+            F32ToIntCvtOp::S64Rmi => "cvt.rmi.s64.f32",
+            F32ToIntCvtOp::S64Rpi => "cvt.rpi.s64.f32",
+            F32ToIntCvtOp::S64RziFtz => "cvt.rzi.ftz.s64.f32",
+            F32ToIntCvtOp::S64RniFtz => "cvt.rni.ftz.s64.f32",
+            F32ToIntCvtOp::S64RmiFtz => "cvt.rmi.ftz.s64.f32",
+            F32ToIntCvtOp::S64RpiFtz => "cvt.rpi.ftz.s64.f32",
+            F32ToIntCvtOp::U64Rzi => "cvt.rzi.u64.f32",
+            F32ToIntCvtOp::U64Rni => "cvt.rni.u64.f32",
+            F32ToIntCvtOp::U64Rmi => "cvt.rmi.u64.f32",
+            F32ToIntCvtOp::U64Rpi => "cvt.rpi.u64.f32",
+            F32ToIntCvtOp::U64RziFtz => "cvt.rzi.ftz.u64.f32",
+            F32ToIntCvtOp::U64RniFtz => "cvt.rni.ftz.u64.f32",
+            F32ToIntCvtOp::U64RmiFtz => "cvt.rmi.ftz.u64.f32",
+            F32ToIntCvtOp::U64RpiFtz => "cvt.rpi.ftz.u64.f32",
+            F32ToIntCvtOp::S64RziSat => "cvt.rzi.sat.s64.f32",
+            F32ToIntCvtOp::S64RniSat => "cvt.rni.sat.s64.f32",
+            F32ToIntCvtOp::S64RmiSat => "cvt.rmi.sat.s64.f32",
+            F32ToIntCvtOp::S64RpiSat => "cvt.rpi.sat.s64.f32",
+            F32ToIntCvtOp::S64RziFtzSat => "cvt.rzi.ftz.sat.s64.f32",
+            F32ToIntCvtOp::S64RniFtzSat => "cvt.rni.ftz.sat.s64.f32",
+            F32ToIntCvtOp::S64RmiFtzSat => "cvt.rmi.ftz.sat.s64.f32",
+            F32ToIntCvtOp::S64RpiFtzSat => "cvt.rpi.ftz.sat.s64.f32",
+            F32ToIntCvtOp::U64RziSat => "cvt.rzi.sat.u64.f32",
+            F32ToIntCvtOp::U64RniSat => "cvt.rni.sat.u64.f32",
+            F32ToIntCvtOp::U64RmiSat => "cvt.rmi.sat.u64.f32",
+            F32ToIntCvtOp::U64RpiSat => "cvt.rpi.sat.u64.f32",
+            F32ToIntCvtOp::U64RziFtzSat => "cvt.rzi.ftz.sat.u64.f32",
+            F32ToIntCvtOp::U64RniFtzSat => "cvt.rni.ftz.sat.u64.f32",
+            F32ToIntCvtOp::U64RmiFtzSat => "cvt.rmi.ftz.sat.u64.f32",
+            F32ToIntCvtOp::U64RpiFtzSat => "cvt.rpi.ftz.sat.u64.f32",
         }
+    }
+
+    fn dest_is_64(self) -> bool {
+        matches!(
+            self,
+            F32ToIntCvtOp::S64Rzi
+                | F32ToIntCvtOp::S64Rni
+                | F32ToIntCvtOp::S64Rmi
+                | F32ToIntCvtOp::S64Rpi
+                | F32ToIntCvtOp::S64RziFtz
+                | F32ToIntCvtOp::S64RniFtz
+                | F32ToIntCvtOp::S64RmiFtz
+                | F32ToIntCvtOp::S64RpiFtz
+                | F32ToIntCvtOp::U64Rzi
+                | F32ToIntCvtOp::U64Rni
+                | F32ToIntCvtOp::U64Rmi
+                | F32ToIntCvtOp::U64Rpi
+                | F32ToIntCvtOp::U64RziFtz
+                | F32ToIntCvtOp::U64RniFtz
+                | F32ToIntCvtOp::U64RmiFtz
+                | F32ToIntCvtOp::U64RpiFtz
+                | F32ToIntCvtOp::S64RziSat
+                | F32ToIntCvtOp::S64RniSat
+                | F32ToIntCvtOp::S64RmiSat
+                | F32ToIntCvtOp::S64RpiSat
+                | F32ToIntCvtOp::S64RziFtzSat
+                | F32ToIntCvtOp::S64RniFtzSat
+                | F32ToIntCvtOp::S64RmiFtzSat
+                | F32ToIntCvtOp::S64RpiFtzSat
+                | F32ToIntCvtOp::U64RziSat
+                | F32ToIntCvtOp::U64RniSat
+                | F32ToIntCvtOp::U64RmiSat
+                | F32ToIntCvtOp::U64RpiSat
+                | F32ToIntCvtOp::U64RziFtzSat
+                | F32ToIntCvtOp::U64RniFtzSat
+                | F32ToIntCvtOp::U64RmiFtzSat
+                | F32ToIntCvtOp::U64RpiFtzSat
+        )
     }
 }
 
@@ -1478,6 +1648,14 @@ enum F64FromIntCvtOp {
     S32Rz,
     S32Rm,
     S32Rp,
+    U64Rn,
+    U64Rz,
+    U64Rm,
+    U64Rp,
+    S64Rn,
+    S64Rz,
+    S64Rm,
+    S64Rp,
 }
 
 impl F64FromIntCvtOp {
@@ -1491,6 +1669,38 @@ impl F64FromIntCvtOp {
             F64FromIntCvtOp::S32Rz => "cvt.rz.f64.s32",
             F64FromIntCvtOp::S32Rm => "cvt.rm.f64.s32",
             F64FromIntCvtOp::S32Rp => "cvt.rp.f64.s32",
+            F64FromIntCvtOp::U64Rn => "cvt.rn.f64.u64",
+            F64FromIntCvtOp::U64Rz => "cvt.rz.f64.u64",
+            F64FromIntCvtOp::U64Rm => "cvt.rm.f64.u64",
+            F64FromIntCvtOp::U64Rp => "cvt.rp.f64.u64",
+            F64FromIntCvtOp::S64Rn => "cvt.rn.f64.s64",
+            F64FromIntCvtOp::S64Rz => "cvt.rz.f64.s64",
+            F64FromIntCvtOp::S64Rm => "cvt.rm.f64.s64",
+            F64FromIntCvtOp::S64Rp => "cvt.rp.f64.s64",
+        }
+    }
+
+    fn source_is_64(self) -> bool {
+        matches!(
+            self,
+            F64FromIntCvtOp::U64Rn
+                | F64FromIntCvtOp::U64Rz
+                | F64FromIntCvtOp::U64Rm
+                | F64FromIntCvtOp::U64Rp
+                | F64FromIntCvtOp::S64Rn
+                | F64FromIntCvtOp::S64Rz
+                | F64FromIntCvtOp::S64Rm
+                | F64FromIntCvtOp::S64Rp
+        )
+    }
+
+    fn source_extend_mnemonic(self) -> &'static str {
+        match self {
+            F64FromIntCvtOp::S64Rn
+            | F64FromIntCvtOp::S64Rz
+            | F64FromIntCvtOp::S64Rm
+            | F64FromIntCvtOp::S64Rp => "cvt.s64.s32",
+            _ => "cvt.u64.u32",
         }
     }
 }
@@ -1513,6 +1723,22 @@ enum F64ToIntCvtOp {
     U32RniSat,
     U32RmiSat,
     U32RpiSat,
+    S64Rzi,
+    S64Rni,
+    S64Rmi,
+    S64Rpi,
+    U64Rzi,
+    U64Rni,
+    U64Rmi,
+    U64Rpi,
+    S64RziSat,
+    S64RniSat,
+    S64RmiSat,
+    S64RpiSat,
+    U64RziSat,
+    U64RniSat,
+    U64RmiSat,
+    U64RpiSat,
 }
 
 impl F64ToIntCvtOp {
@@ -1534,7 +1760,45 @@ impl F64ToIntCvtOp {
             F64ToIntCvtOp::U32RniSat => "cvt.rni.sat.u32.f64",
             F64ToIntCvtOp::U32RmiSat => "cvt.rmi.sat.u32.f64",
             F64ToIntCvtOp::U32RpiSat => "cvt.rpi.sat.u32.f64",
+            F64ToIntCvtOp::S64Rzi => "cvt.rzi.s64.f64",
+            F64ToIntCvtOp::S64Rni => "cvt.rni.s64.f64",
+            F64ToIntCvtOp::S64Rmi => "cvt.rmi.s64.f64",
+            F64ToIntCvtOp::S64Rpi => "cvt.rpi.s64.f64",
+            F64ToIntCvtOp::U64Rzi => "cvt.rzi.u64.f64",
+            F64ToIntCvtOp::U64Rni => "cvt.rni.u64.f64",
+            F64ToIntCvtOp::U64Rmi => "cvt.rmi.u64.f64",
+            F64ToIntCvtOp::U64Rpi => "cvt.rpi.u64.f64",
+            F64ToIntCvtOp::S64RziSat => "cvt.rzi.sat.s64.f64",
+            F64ToIntCvtOp::S64RniSat => "cvt.rni.sat.s64.f64",
+            F64ToIntCvtOp::S64RmiSat => "cvt.rmi.sat.s64.f64",
+            F64ToIntCvtOp::S64RpiSat => "cvt.rpi.sat.s64.f64",
+            F64ToIntCvtOp::U64RziSat => "cvt.rzi.sat.u64.f64",
+            F64ToIntCvtOp::U64RniSat => "cvt.rni.sat.u64.f64",
+            F64ToIntCvtOp::U64RmiSat => "cvt.rmi.sat.u64.f64",
+            F64ToIntCvtOp::U64RpiSat => "cvt.rpi.sat.u64.f64",
         }
+    }
+
+    fn dest_is_64(self) -> bool {
+        matches!(
+            self,
+            F64ToIntCvtOp::S64Rzi
+                | F64ToIntCvtOp::S64Rni
+                | F64ToIntCvtOp::S64Rmi
+                | F64ToIntCvtOp::S64Rpi
+                | F64ToIntCvtOp::U64Rzi
+                | F64ToIntCvtOp::U64Rni
+                | F64ToIntCvtOp::U64Rmi
+                | F64ToIntCvtOp::U64Rpi
+                | F64ToIntCvtOp::S64RziSat
+                | F64ToIntCvtOp::S64RniSat
+                | F64ToIntCvtOp::S64RmiSat
+                | F64ToIntCvtOp::S64RpiSat
+                | F64ToIntCvtOp::U64RziSat
+                | F64ToIntCvtOp::U64RniSat
+                | F64ToIntCvtOp::U64RmiSat
+                | F64ToIntCvtOp::U64RpiSat
+        )
     }
 }
 
@@ -5805,6 +6069,22 @@ impl<'a> Generator<'a> {
             F32FromIntCvtOp::S32RzFtz,
             F32FromIntCvtOp::S32RmFtz,
             F32FromIntCvtOp::S32RpFtz,
+            F32FromIntCvtOp::U64Rn,
+            F32FromIntCvtOp::U64Rz,
+            F32FromIntCvtOp::U64Rm,
+            F32FromIntCvtOp::U64Rp,
+            F32FromIntCvtOp::U64RnFtz,
+            F32FromIntCvtOp::U64RzFtz,
+            F32FromIntCvtOp::U64RmFtz,
+            F32FromIntCvtOp::U64RpFtz,
+            F32FromIntCvtOp::S64Rn,
+            F32FromIntCvtOp::S64Rz,
+            F32FromIntCvtOp::S64Rm,
+            F32FromIntCvtOp::S64Rp,
+            F32FromIntCvtOp::S64RnFtz,
+            F32FromIntCvtOp::S64RzFtz,
+            F32FromIntCvtOp::S64RmFtz,
+            F32FromIntCvtOp::S64RpFtz,
         ];
         let to_ops = [
             F32ToIntCvtOp::S32Rzi,
@@ -5839,6 +6119,38 @@ impl<'a> Generator<'a> {
             F32ToIntCvtOp::U32RniFtzSat,
             F32ToIntCvtOp::U32RmiFtzSat,
             F32ToIntCvtOp::U32RpiFtzSat,
+            F32ToIntCvtOp::S64Rzi,
+            F32ToIntCvtOp::S64Rni,
+            F32ToIntCvtOp::S64Rmi,
+            F32ToIntCvtOp::S64Rpi,
+            F32ToIntCvtOp::S64RziFtz,
+            F32ToIntCvtOp::S64RniFtz,
+            F32ToIntCvtOp::S64RmiFtz,
+            F32ToIntCvtOp::S64RpiFtz,
+            F32ToIntCvtOp::U64Rzi,
+            F32ToIntCvtOp::U64Rni,
+            F32ToIntCvtOp::U64Rmi,
+            F32ToIntCvtOp::U64Rpi,
+            F32ToIntCvtOp::U64RziFtz,
+            F32ToIntCvtOp::U64RniFtz,
+            F32ToIntCvtOp::U64RmiFtz,
+            F32ToIntCvtOp::U64RpiFtz,
+            F32ToIntCvtOp::S64RziSat,
+            F32ToIntCvtOp::S64RniSat,
+            F32ToIntCvtOp::S64RmiSat,
+            F32ToIntCvtOp::S64RpiSat,
+            F32ToIntCvtOp::S64RziFtzSat,
+            F32ToIntCvtOp::S64RniFtzSat,
+            F32ToIntCvtOp::S64RmiFtzSat,
+            F32ToIntCvtOp::S64RpiFtzSat,
+            F32ToIntCvtOp::U64RziSat,
+            F32ToIntCvtOp::U64RniSat,
+            F32ToIntCvtOp::U64RmiSat,
+            F32ToIntCvtOp::U64RpiSat,
+            F32ToIntCvtOp::U64RziFtzSat,
+            F32ToIntCvtOp::U64RniFtzSat,
+            F32ToIntCvtOp::U64RmiFtzSat,
+            F32ToIntCvtOp::U64RpiFtzSat,
         ];
         let from_int = *u.choose(&from_ops)?;
         let to_int = *u.choose(&to_ops)?;
@@ -6150,6 +6462,14 @@ impl<'a> Generator<'a> {
             F64FromIntCvtOp::S32Rz,
             F64FromIntCvtOp::S32Rm,
             F64FromIntCvtOp::S32Rp,
+            F64FromIntCvtOp::U64Rn,
+            F64FromIntCvtOp::U64Rz,
+            F64FromIntCvtOp::U64Rm,
+            F64FromIntCvtOp::U64Rp,
+            F64FromIntCvtOp::S64Rn,
+            F64FromIntCvtOp::S64Rz,
+            F64FromIntCvtOp::S64Rm,
+            F64FromIntCvtOp::S64Rp,
         ];
         let to_ops = [
             F64ToIntCvtOp::S32Rzi,
@@ -6168,6 +6488,22 @@ impl<'a> Generator<'a> {
             F64ToIntCvtOp::U32RniSat,
             F64ToIntCvtOp::U32RmiSat,
             F64ToIntCvtOp::U32RpiSat,
+            F64ToIntCvtOp::S64Rzi,
+            F64ToIntCvtOp::S64Rni,
+            F64ToIntCvtOp::S64Rmi,
+            F64ToIntCvtOp::S64Rpi,
+            F64ToIntCvtOp::U64Rzi,
+            F64ToIntCvtOp::U64Rni,
+            F64ToIntCvtOp::U64Rmi,
+            F64ToIntCvtOp::U64Rpi,
+            F64ToIntCvtOp::S64RziSat,
+            F64ToIntCvtOp::S64RniSat,
+            F64ToIntCvtOp::S64RmiSat,
+            F64ToIntCvtOp::S64RpiSat,
+            F64ToIntCvtOp::U64RziSat,
+            F64ToIntCvtOp::U64RniSat,
+            F64ToIntCvtOp::U64RmiSat,
+            F64ToIntCvtOp::U64RpiSat,
         ];
         let from_int = *u.choose(&from_ops)?;
         let to_int = *u.choose(&to_ops)?;
@@ -8777,8 +9113,24 @@ impl<'a> Generator<'a> {
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 src.emit(s);
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
-                writeln!(s, "    {:<13} %f0, %r{scratch};", from_int.mnemonic()).unwrap();
-                writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
+                let from_src = if from_int.source_is_64() {
+                    writeln!(
+                        s,
+                        "    {:<13} %rd7, %r{scratch};",
+                        from_int.source_extend_mnemonic()
+                    )
+                    .unwrap();
+                    "%rd7".to_string()
+                } else {
+                    format!("%r{scratch}")
+                };
+                writeln!(s, "    {:<13} %f0, {from_src};", from_int.mnemonic()).unwrap();
+                if to_int.dest_is_64() {
+                    writeln!(s, "    {:<13} %rd7, %f0;", to_int.mnemonic()).unwrap();
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
+                }
             }
             Inst::PredicatedF32Cvt {
                 from_int,
@@ -8795,22 +9147,45 @@ impl<'a> Generator<'a> {
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 src.emit(s);
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
+                let from_src = if from_int.source_is_64() {
+                    writeln!(
+                        s,
+                        "    {:<13} %rd7, %r{scratch};",
+                        from_int.source_extend_mnemonic()
+                    )
+                    .unwrap();
+                    "%rd7".to_string()
+                } else {
+                    format!("%r{scratch}")
+                };
                 writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
                 writeln!(s, "    cvt.rn.f32.u32 %f0, %r{dst};").unwrap();
                 writeln!(
                     s,
-                    "    {} {:<8} %f0, %r{scratch};",
+                    "    {} {:<8} %f0, {from_src};",
                     pred_guard(pred),
                     from_int.mnemonic()
                 )
                 .unwrap();
-                writeln!(
-                    s,
-                    "    {} {:<8} %r{dst}, %f0;",
-                    pred_guard(pred),
-                    to_int.mnemonic()
-                )
-                .unwrap();
+                if to_int.dest_is_64() {
+                    writeln!(s, "    mov.u64       %rd7, 0;").unwrap();
+                    writeln!(
+                        s,
+                        "    {} {:<8} %rd7, %f0;",
+                        pred_guard(pred),
+                        to_int.mnemonic()
+                    )
+                    .unwrap();
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %f0;",
+                        pred_guard(pred),
+                        to_int.mnemonic()
+                    )
+                    .unwrap();
+                }
             }
             Inst::F32FloatCvt { op, dst, src } => {
                 self.emit_sanitized_f64_operand(s, 0, src);
@@ -9172,8 +9547,24 @@ impl<'a> Generator<'a> {
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 src.emit(s);
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
-                writeln!(s, "    {:<13} %fd0, %r{scratch};", from_int.mnemonic()).unwrap();
-                writeln!(s, "    {:<13} %r{dst}, %fd0;", to_int.mnemonic()).unwrap();
+                let from_src = if from_int.source_is_64() {
+                    writeln!(
+                        s,
+                        "    {:<13} %rd7, %r{scratch};",
+                        from_int.source_extend_mnemonic()
+                    )
+                    .unwrap();
+                    "%rd7".to_string()
+                } else {
+                    format!("%r{scratch}")
+                };
+                writeln!(s, "    {:<13} %fd0, {from_src};", from_int.mnemonic()).unwrap();
+                if to_int.dest_is_64() {
+                    writeln!(s, "    {:<13} %rd7, %fd0;", to_int.mnemonic()).unwrap();
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %r{dst}, %fd0;", to_int.mnemonic()).unwrap();
+                }
             }
             Inst::PredicatedF64Cvt {
                 from_int,
@@ -9190,22 +9581,45 @@ impl<'a> Generator<'a> {
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 src.emit(s);
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
+                let from_src = if from_int.source_is_64() {
+                    writeln!(
+                        s,
+                        "    {:<13} %rd7, %r{scratch};",
+                        from_int.source_extend_mnemonic()
+                    )
+                    .unwrap();
+                    "%rd7".to_string()
+                } else {
+                    format!("%r{scratch}")
+                };
                 writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
                 writeln!(s, "    cvt.rn.f64.u32 %fd0, %r{dst};").unwrap();
                 writeln!(
                     s,
-                    "    {} {:<8} %fd0, %r{scratch};",
+                    "    {} {:<8} %fd0, {from_src};",
                     pred_guard(pred),
                     from_int.mnemonic()
                 )
                 .unwrap();
-                writeln!(
-                    s,
-                    "    {} {:<8} %r{dst}, %fd0;",
-                    pred_guard(pred),
-                    to_int.mnemonic()
-                )
-                .unwrap();
+                if to_int.dest_is_64() {
+                    writeln!(s, "    mov.u64       %rd7, 0;").unwrap();
+                    writeln!(
+                        s,
+                        "    {} {:<8} %rd7, %fd0;",
+                        pred_guard(pred),
+                        to_int.mnemonic()
+                    )
+                    .unwrap();
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch}}}, %rd7;").unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %fd0;",
+                        pred_guard(pred),
+                        to_int.mnemonic()
+                    )
+                    .unwrap();
+                }
             }
             Inst::F64FloatCvt { op, dst, src } => {
                 self.emit_sanitized_f32_operand(s, 0, src);
@@ -13009,6 +13423,22 @@ mod tests {
         "cvt.rz.ftz.f32.s32",
         "cvt.rm.ftz.f32.s32",
         "cvt.rp.ftz.f32.s32",
+        "cvt.rn.f32.u64",
+        "cvt.rz.f32.u64",
+        "cvt.rm.f32.u64",
+        "cvt.rp.f32.u64",
+        "cvt.rn.ftz.f32.u64",
+        "cvt.rz.ftz.f32.u64",
+        "cvt.rm.ftz.f32.u64",
+        "cvt.rp.ftz.f32.u64",
+        "cvt.rn.f32.s64",
+        "cvt.rz.f32.s64",
+        "cvt.rm.f32.s64",
+        "cvt.rp.f32.s64",
+        "cvt.rn.ftz.f32.s64",
+        "cvt.rz.ftz.f32.s64",
+        "cvt.rm.ftz.f32.s64",
+        "cvt.rp.ftz.f32.s64",
         "cvt.rzi.s32.f32",
         "cvt.rni.s32.f32",
         "cvt.rmi.s32.f32",
@@ -13041,6 +13471,38 @@ mod tests {
         "cvt.rni.ftz.sat.u32.f32",
         "cvt.rmi.ftz.sat.u32.f32",
         "cvt.rpi.ftz.sat.u32.f32",
+        "cvt.rzi.s64.f32",
+        "cvt.rni.s64.f32",
+        "cvt.rmi.s64.f32",
+        "cvt.rpi.s64.f32",
+        "cvt.rzi.ftz.s64.f32",
+        "cvt.rni.ftz.s64.f32",
+        "cvt.rmi.ftz.s64.f32",
+        "cvt.rpi.ftz.s64.f32",
+        "cvt.rzi.u64.f32",
+        "cvt.rni.u64.f32",
+        "cvt.rmi.u64.f32",
+        "cvt.rpi.u64.f32",
+        "cvt.rzi.ftz.u64.f32",
+        "cvt.rni.ftz.u64.f32",
+        "cvt.rmi.ftz.u64.f32",
+        "cvt.rpi.ftz.u64.f32",
+        "cvt.rzi.sat.s64.f32",
+        "cvt.rni.sat.s64.f32",
+        "cvt.rmi.sat.s64.f32",
+        "cvt.rpi.sat.s64.f32",
+        "cvt.rzi.ftz.sat.s64.f32",
+        "cvt.rni.ftz.sat.s64.f32",
+        "cvt.rmi.ftz.sat.s64.f32",
+        "cvt.rpi.ftz.sat.s64.f32",
+        "cvt.rzi.sat.u64.f32",
+        "cvt.rni.sat.u64.f32",
+        "cvt.rmi.sat.u64.f32",
+        "cvt.rpi.sat.u64.f32",
+        "cvt.rzi.ftz.sat.u64.f32",
+        "cvt.rni.ftz.sat.u64.f32",
+        "cvt.rmi.ftz.sat.u64.f32",
+        "cvt.rpi.ftz.sat.u64.f32",
         "cvt.rn.f32.f64",
         "cvt.rz.f32.f64",
         "cvt.rm.f32.f64",
@@ -13066,6 +13528,22 @@ mod tests {
         "cvt.rz.ftz.f32.s32",
         "cvt.rm.ftz.f32.s32",
         "cvt.rp.ftz.f32.s32",
+        "cvt.rn.f32.u64",
+        "cvt.rz.f32.u64",
+        "cvt.rm.f32.u64",
+        "cvt.rp.f32.u64",
+        "cvt.rn.ftz.f32.u64",
+        "cvt.rz.ftz.f32.u64",
+        "cvt.rm.ftz.f32.u64",
+        "cvt.rp.ftz.f32.u64",
+        "cvt.rn.f32.s64",
+        "cvt.rz.f32.s64",
+        "cvt.rm.f32.s64",
+        "cvt.rp.f32.s64",
+        "cvt.rn.ftz.f32.s64",
+        "cvt.rz.ftz.f32.s64",
+        "cvt.rm.ftz.f32.s64",
+        "cvt.rp.ftz.f32.s64",
         "cvt.rni.s32.f32",
         "cvt.rmi.s32.f32",
         "cvt.rpi.s32.f32",
@@ -13097,6 +13575,38 @@ mod tests {
         "cvt.rni.ftz.sat.u32.f32",
         "cvt.rmi.ftz.sat.u32.f32",
         "cvt.rpi.ftz.sat.u32.f32",
+        "cvt.rzi.s64.f32",
+        "cvt.rni.s64.f32",
+        "cvt.rmi.s64.f32",
+        "cvt.rpi.s64.f32",
+        "cvt.rzi.ftz.s64.f32",
+        "cvt.rni.ftz.s64.f32",
+        "cvt.rmi.ftz.s64.f32",
+        "cvt.rpi.ftz.s64.f32",
+        "cvt.rzi.u64.f32",
+        "cvt.rni.u64.f32",
+        "cvt.rmi.u64.f32",
+        "cvt.rpi.u64.f32",
+        "cvt.rzi.ftz.u64.f32",
+        "cvt.rni.ftz.u64.f32",
+        "cvt.rmi.ftz.u64.f32",
+        "cvt.rpi.ftz.u64.f32",
+        "cvt.rzi.sat.s64.f32",
+        "cvt.rni.sat.s64.f32",
+        "cvt.rmi.sat.s64.f32",
+        "cvt.rpi.sat.s64.f32",
+        "cvt.rzi.ftz.sat.s64.f32",
+        "cvt.rni.ftz.sat.s64.f32",
+        "cvt.rmi.ftz.sat.s64.f32",
+        "cvt.rpi.ftz.sat.s64.f32",
+        "cvt.rzi.sat.u64.f32",
+        "cvt.rni.sat.u64.f32",
+        "cvt.rmi.sat.u64.f32",
+        "cvt.rpi.sat.u64.f32",
+        "cvt.rzi.ftz.sat.u64.f32",
+        "cvt.rni.ftz.sat.u64.f32",
+        "cvt.rmi.ftz.sat.u64.f32",
+        "cvt.rpi.ftz.sat.u64.f32",
         "cvt.rn.f32.f64",
         "cvt.rz.f32.f64",
         "cvt.rm.f32.f64",
@@ -13322,6 +13832,14 @@ mod tests {
         "cvt.rz.f64.s32",
         "cvt.rm.f64.s32",
         "cvt.rp.f64.s32",
+        "cvt.rn.f64.u64",
+        "cvt.rz.f64.u64",
+        "cvt.rm.f64.u64",
+        "cvt.rp.f64.u64",
+        "cvt.rn.f64.s64",
+        "cvt.rz.f64.s64",
+        "cvt.rm.f64.s64",
+        "cvt.rp.f64.s64",
         "cvt.rzi.s32.f64",
         "cvt.rni.s32.f64",
         "cvt.rmi.s32.f64",
@@ -13338,6 +13856,22 @@ mod tests {
         "cvt.rni.sat.u32.f64",
         "cvt.rmi.sat.u32.f64",
         "cvt.rpi.sat.u32.f64",
+        "cvt.rzi.s64.f64",
+        "cvt.rni.s64.f64",
+        "cvt.rmi.s64.f64",
+        "cvt.rpi.s64.f64",
+        "cvt.rzi.u64.f64",
+        "cvt.rni.u64.f64",
+        "cvt.rmi.u64.f64",
+        "cvt.rpi.u64.f64",
+        "cvt.rzi.sat.s64.f64",
+        "cvt.rni.sat.s64.f64",
+        "cvt.rmi.sat.s64.f64",
+        "cvt.rpi.sat.s64.f64",
+        "cvt.rzi.sat.u64.f64",
+        "cvt.rni.sat.u64.f64",
+        "cvt.rmi.sat.u64.f64",
+        "cvt.rpi.sat.u64.f64",
         "cvt.f64.f32",
     ];
     const F64_CVT_DISABLE_MNEMONICS: &[&str] = &[
@@ -13348,6 +13882,14 @@ mod tests {
         "cvt.rz.f64.s32",
         "cvt.rm.f64.s32",
         "cvt.rp.f64.s32",
+        "cvt.rn.f64.u64",
+        "cvt.rz.f64.u64",
+        "cvt.rm.f64.u64",
+        "cvt.rp.f64.u64",
+        "cvt.rn.f64.s64",
+        "cvt.rz.f64.s64",
+        "cvt.rm.f64.s64",
+        "cvt.rp.f64.s64",
         "cvt.rni.s32.f64",
         "cvt.rmi.s32.f64",
         "cvt.rpi.s32.f64",
@@ -13363,6 +13905,22 @@ mod tests {
         "cvt.rni.sat.u32.f64",
         "cvt.rmi.sat.u32.f64",
         "cvt.rpi.sat.u32.f64",
+        "cvt.rzi.s64.f64",
+        "cvt.rni.s64.f64",
+        "cvt.rmi.s64.f64",
+        "cvt.rpi.s64.f64",
+        "cvt.rzi.u64.f64",
+        "cvt.rni.u64.f64",
+        "cvt.rmi.u64.f64",
+        "cvt.rpi.u64.f64",
+        "cvt.rzi.sat.s64.f64",
+        "cvt.rni.sat.s64.f64",
+        "cvt.rmi.sat.s64.f64",
+        "cvt.rpi.sat.s64.f64",
+        "cvt.rzi.sat.u64.f64",
+        "cvt.rni.sat.u64.f64",
+        "cvt.rmi.sat.u64.f64",
+        "cvt.rpi.sat.u64.f64",
         "cvt.f64.f32",
     ];
     const F64_SPECIAL_MATH_MNEMONICS: &[&str] = &[
@@ -17067,7 +17625,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 32768, 16384, F32_CVT_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 65536, 32768, F32_CVT_MNEMONICS);
     }
 
     #[test]
@@ -17088,7 +17646,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 65536, 32768, F32_CVT_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 131072, 65536, F32_CVT_MNEMONICS);
     }
 
     #[test]
@@ -17391,7 +17949,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_mnemonic_coverage(&cfg, 8192, 4096, F64_CVT_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 32768, 16384, F64_CVT_MNEMONICS);
     }
 
     #[test]
@@ -17412,7 +17970,7 @@ mod tests {
             emit_f64_selp: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 32768, 8192, F64_CVT_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 65536, 32768, F64_CVT_MNEMONICS);
     }
 
     #[test]
