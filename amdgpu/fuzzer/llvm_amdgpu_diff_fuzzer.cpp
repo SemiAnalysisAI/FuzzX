@@ -4322,6 +4322,160 @@ Value *emitRandomAverageDiffIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *unsignedClampI32(IRBuilder<NoFolder> &B, Value *V, uint32_t Lo,
+                        uint32_t Hi, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Value *LoC = ci32(Ctx, Lo);
+  Value *HiC = ci32(Ctx, Hi);
+  Value *Below = B.CreateICmpULT(V, LoC, Name + ".below");
+  Value *AtLeastLo = B.CreateSelect(Below, LoC, V, Name + ".atleast");
+  Value *Above = B.CreateICmpUGT(AtLeastLo, HiC, Name + ".above");
+  return B.CreateSelect(Above, HiC, AtLeastLo, Name + ".clamp");
+}
+
+Value *signedClampI32(IRBuilder<NoFolder> &B, Value *V, int32_t Lo,
+                      int32_t Hi, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *LoC = ConstantInt::get(I32, Lo, true);
+  Value *HiC = ConstantInt::get(I32, Hi, true);
+  Value *Below = B.CreateICmpSLT(V, LoC, Name + ".below");
+  Value *AtLeastLo = B.CreateSelect(Below, LoC, V, Name + ".atleast");
+  Value *Above = B.CreateICmpSGT(AtLeastLo, HiC, Name + ".above");
+  return B.CreateSelect(Above, HiC, AtLeastLo, Name + ".clamp");
+}
+
+Value *packTwoHalvesAsI32(IRBuilder<NoFolder> &B, Value *Lo, Value *Hi,
+                          bool UseAdd, const Twine &Name) {
+  LLVMContext &Ctx = Lo->getContext();
+  Value *LoPart = B.CreateAnd(Lo, ci32(Ctx, 0xffff), Name + ".lo.mask");
+  Value *HiPart = B.CreateAnd(Hi, ci32(Ctx, 0xffff), Name + ".hi.mask");
+  HiPart = B.CreateShl(HiPart, ci32(Ctx, 16), Name + ".hi.shift");
+  return UseAdd ? B.CreateAdd(LoPart, HiPart, Name + ".add")
+                : B.CreateOr(LoPart, HiPart, Name + ".or");
+}
+
+Value *emitRandomClampPackIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                std::minstd_rand &Gen,
+                                StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  switch (Gen() % 8) {
+  case 0: {
+    static constexpr std::array<uint32_t, 4> Highs = {15, 31, 127, 255};
+    SmallVector<Value *, 4> Bytes;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *Src = (Gen() & 1u) ? A : Bv;
+      Value *Byte =
+          extractByteAsI32(B, Src, I, Twine(NamePrefix) + ".u8.src");
+      Bytes.push_back(unsignedClampI32(B, Byte, 0, Highs[(I + Gen()) & 3],
+                                       Twine(NamePrefix) + ".u8.clamp"));
+    }
+    return packFourBytesAsI32(B, Bytes, (Gen() & 1u) != 0,
+                              Twine(NamePrefix) + ".u8.pack");
+  }
+  case 1: {
+    SmallVector<Value *, 4> Bytes;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *Src = (I & 1u) ? Bv : A;
+      Value *Half =
+          extractHalfAsI32(B, Src, I & 1u, true,
+                           Twine(NamePrefix) + ".s16.src");
+      Bytes.push_back(signedClampI32(B, Half, -128, 127,
+                                     Twine(NamePrefix) + ".s8.clamp"));
+    }
+    return packFourBytesAsI32(B, Bytes, false,
+                              Twine(NamePrefix) + ".s8.pack");
+  }
+  case 2: {
+    SmallVector<Value *, 4> Bytes;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *AB = extractByteAsI32(B, A, I, Twine(NamePrefix) + ".add.a");
+      Value *BB = extractByteAsI32(B, Bv, I, Twine(NamePrefix) + ".add.b");
+      Value *Sum = B.CreateAdd(AB, BB, Twine(NamePrefix) + ".u8.add");
+      Bytes.push_back(unsignedClampI32(B, Sum, 0, 255,
+                                       Twine(NamePrefix) + ".u8.add.sat"));
+    }
+    return packFourBytesAsI32(B, Bytes, true,
+                              Twine(NamePrefix) + ".u8.add.pack");
+  }
+  case 3: {
+    SmallVector<Value *, 4> Bytes;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *AB = extractByteAsI32(B, A, I, Twine(NamePrefix) + ".sub.a");
+      Value *BB = extractByteAsI32(B, Bv, I, Twine(NamePrefix) + ".sub.b");
+      Value *Diff = B.CreateSub(AB, BB, Twine(NamePrefix) + ".u8.sub");
+      Value *Keep = B.CreateICmpUGE(AB, BB, Twine(NamePrefix) + ".u8.sub.ok");
+      Bytes.push_back(B.CreateSelect(Keep, Diff, ci32(Ctx, 0),
+                                     Twine(NamePrefix) + ".u8.sub.sat"));
+    }
+    return packFourBytesAsI32(B, Bytes, false,
+                              Twine(NamePrefix) + ".u8.sub.pack");
+  }
+  case 4: {
+    Value *LoA = extractHalfAsI32(B, A, 0, false, Twine(NamePrefix) + ".lo.a");
+    Value *LoB =
+        extractHalfAsI32(B, Bv, 0, false, Twine(NamePrefix) + ".lo.b");
+    Value *HiA = extractHalfAsI32(B, A, 1, false, Twine(NamePrefix) + ".hi.a");
+    Value *HiB =
+        extractHalfAsI32(B, Bv, 1, false, Twine(NamePrefix) + ".hi.b");
+    Value *Lo = unsignedClampI32(
+        B, B.CreateAdd(LoA, LoB, Twine(NamePrefix) + ".lo.add"), 0, 0xffff,
+        Twine(NamePrefix) + ".lo.add.sat");
+    Value *Hi = unsignedClampI32(
+        B, B.CreateAdd(HiA, HiB, Twine(NamePrefix) + ".hi.add"), 0, 0xffff,
+        Twine(NamePrefix) + ".hi.add.sat");
+    return packTwoHalvesAsI32(B, Lo, Hi, (Gen() & 1u) != 0,
+                              Twine(NamePrefix) + ".u16.add.pack");
+  }
+  case 5: {
+    Value *LoA = extractHalfAsI32(B, A, 0, true, Twine(NamePrefix) + ".lo.a");
+    Value *LoB =
+        extractHalfAsI32(B, Bv, 0, true, Twine(NamePrefix) + ".lo.b");
+    Value *HiA = extractHalfAsI32(B, A, 1, true, Twine(NamePrefix) + ".hi.a");
+    Value *HiB =
+        extractHalfAsI32(B, Bv, 1, true, Twine(NamePrefix) + ".hi.b");
+    Value *Lo = signedClampI32(
+        B, B.CreateAdd(LoA, LoB, Twine(NamePrefix) + ".lo.sadd"), -2048, 2047,
+        Twine(NamePrefix) + ".lo.sclamp");
+    Value *Hi = signedClampI32(
+        B, B.CreateSub(HiA, HiB, Twine(NamePrefix) + ".hi.ssub"), -2048, 2047,
+        Twine(NamePrefix) + ".hi.sclamp");
+    return packTwoHalvesAsI32(B, Lo, Hi, false,
+                              Twine(NamePrefix) + ".s16.pack");
+  }
+  case 6: {
+    SmallVector<Value *, 4> Bytes;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *AB = extractByteAsI32(B, A, I, Twine(NamePrefix) + ".minmax.a");
+      Value *BB = extractByteAsI32(B, Bv, I, Twine(NamePrefix) + ".minmax.b");
+      Bytes.push_back(unsignedMinMaxSelect(
+          B, AB, BB, (I & 1u) != 0, Twine(NamePrefix) + ".u8.minmax"));
+    }
+    return packFourBytesAsI32(B, Bytes, (Gen() & 1u) != 0,
+                              Twine(NamePrefix) + ".u8.minmax.pack");
+  }
+  default: {
+    SmallVector<Value *, 4> Bytes;
+    uint32_t Threshold = (Gen() & 1u) ? 127 : 63;
+    for (unsigned I = 0; I != 4; ++I) {
+      Value *Byte =
+          extractByteAsI32(B, (I & 1u) ? A : Bv, I,
+                           Twine(NamePrefix) + ".threshold.src");
+      Value *Large = B.CreateICmpUGT(Byte, ci32(Ctx, Threshold),
+                                     Twine(NamePrefix) + ".threshold.cmp");
+      Value *Clamped = unsignedClampI32(
+          B, B.CreateXor(Byte, ci32(Ctx, (I + 1) * 17),
+                         Twine(NamePrefix) + ".threshold.xor"),
+          0, 255, Twine(NamePrefix) + ".threshold.clamp");
+      Bytes.push_back(B.CreateSelect(Large, Clamped, Byte,
+                                     Twine(NamePrefix) + ".threshold.select"));
+    }
+    return packFourBytesAsI32(B, Bytes, true,
+                              Twine(NamePrefix) + ".threshold.pack");
+  }
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -4331,7 +4485,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 162) {
+  switch (Gen() % 170) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4585,6 +4739,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 145:
     return emitRandomAverageDiffIdiom(B, A, Bv, Gen,
                                       "fuzz.avgdiff.idiom");
+  case 146:
+  case 147:
+  case 148:
+  case 149:
+  case 150:
+  case 151:
+  case 152:
+  case 153:
+    return emitRandomClampPackIdiom(B, A, Bv, Gen,
+                                    "fuzz.clamppack.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4619,7 +4783,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 146) {
+  switch (Gen() % 154) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4866,6 +5030,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 137:
     return emitRandomAverageDiffIdiom(B, A, Bv, Gen,
                                       "fuzz.cfg.avgdiff.idiom");
+  case 138:
+  case 139:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 144:
+  case 145:
+    return emitRandomClampPackIdiom(B, A, Bv, Gen,
+                                    "fuzz.cfg.clamppack.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
