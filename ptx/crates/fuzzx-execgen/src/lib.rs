@@ -73,6 +73,8 @@ pub struct GenConfig {
     pub emit_scalar_16bit_signed_unary: bool,
     pub emit_scalar_16bit_bitwise: bool,
     pub emit_scalar_16bit_shifts: bool,
+    pub emit_scalar_16bit_compare: bool,
+    pub emit_scalar_16bit_selp: bool,
     pub emit_predicated_scalar_16bit: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
@@ -260,6 +262,8 @@ impl Default for GenConfig {
             emit_scalar_16bit_signed_unary: true,
             emit_scalar_16bit_bitwise: true,
             emit_scalar_16bit_shifts: true,
+            emit_scalar_16bit_compare: true,
+            emit_scalar_16bit_selp: true,
             emit_predicated_scalar_16bit: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
@@ -1532,6 +1536,57 @@ impl CmpOp {
         }
     }
 
+    fn scalar16_input_cvt_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "cvt.s16.s32",
+            CmpOp::Eq | CmpOp::Ne | CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => "cvt.u16.u32",
+        }
+    }
+
+    fn scalar16_output_cvt_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "cvt.s32.s16",
+            CmpOp::Eq | CmpOp::Ne | CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => "cvt.u32.u16",
+        }
+    }
+
+    fn scalar16_setp_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "setp.eq.u16",
+            CmpOp::Ne => "setp.ne.u16",
+            CmpOp::Lt => "setp.lt.u16",
+            CmpOp::Le => "setp.le.u16",
+            CmpOp::Gt => "setp.gt.u16",
+            CmpOp::Ge => "setp.ge.u16",
+            CmpOp::LtS => "setp.lt.s16",
+            CmpOp::LeS => "setp.le.s16",
+            CmpOp::GtS => "setp.gt.s16",
+            CmpOp::GeS => "setp.ge.s16",
+        }
+    }
+
+    fn scalar16_set_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "set.eq.u32.u16",
+            CmpOp::Ne => "set.ne.u32.u16",
+            CmpOp::Lt => "set.lt.u32.u16",
+            CmpOp::Le => "set.le.u32.u16",
+            CmpOp::Gt => "set.gt.u32.u16",
+            CmpOp::Ge => "set.ge.u32.u16",
+            CmpOp::LtS => "set.lt.u32.s16",
+            CmpOp::LeS => "set.le.u32.s16",
+            CmpOp::GtS => "set.gt.u32.s16",
+            CmpOp::GeS => "set.ge.u32.s16",
+        }
+    }
+
+    fn scalar16_selp_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "selp.s16",
+            CmpOp::Eq | CmpOp::Ne | CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge => "selp.u16",
+        }
+    }
+
     fn wide_setp_mnemonic(self) -> &'static str {
         match self {
             CmpOp::Eq => "setp.eq.u64",
@@ -1739,6 +1794,29 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+    },
+    /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
+    Scalar16Setp {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+    },
+    /// Scalar 16-bit `set` through `.b16` scratch registers.
+    Scalar16Set {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Scalar 16-bit `setp` feeding `selp.{u16,s16}` through `.b16` scratch registers.
+    Scalar16Selp {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
     },
     Sel {
         dst: u32,
@@ -3858,7 +3936,44 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_pred_logic && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            if self.cfg.emit_scalar_16bit
+                && self.cfg.emit_scalar_16bit_compare
+                && (self.cfg.emit_set || self.cfg.emit_selp || self.cfg.emit_scalar_16bit_selp)
+                && u.int_in_range(0..=3)? == 0
+            {
+                let cmp = pick_cmp(
+                    u,
+                    self.cfg.emit_signed_cmp && self.cfg.emit_signed_scalar_16bit,
+                )?;
+                let use_selp = self.cfg.emit_scalar_16bit_selp && u.arbitrary::<bool>()?;
+                if use_selp {
+                    Ok(Inst::Scalar16Selp {
+                        cmp,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_cvt_operand(u)?,
+                        b: self.pick_cvt_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else if self.cfg.emit_selp && (!self.cfg.emit_set || u.arbitrary::<bool>()?) {
+                    Ok(Inst::Scalar16Setp {
+                        cmp,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_cvt_operand(u)?,
+                        b: self.pick_cvt_operand(u)?,
+                        pred: self.alloc_pred(),
+                    })
+                } else {
+                    Ok(Inst::Scalar16Set {
+                        cmp,
+                        dst: self.pick_non_output_dst(u)?,
+                        a: self.pick_cvt_operand(u)?,
+                        b: self.pick_cvt_operand(u)?,
+                    })
+                }
+            } else if self.cfg.emit_pred_logic
+                && self.cfg.emit_predicated_alu
+                && u.arbitrary::<bool>()?
+            {
                 self.pick_pred_logic_bin(u)
             } else if self.cfg.emit_setp_dual
                 && self.cfg.emit_predicated_alu
@@ -4891,6 +5006,7 @@ impl<'a> Generator<'a> {
     fn note_inst(&mut self, inst: &Inst) {
         match inst {
             Inst::Set { dst, .. }
+            | Inst::Scalar16Set { dst, .. }
             | Inst::PredicatedSet { dst, .. }
             | Inst::WideSet { dst, .. }
             | Inst::PredicatedWideSet { dst, .. } => {
@@ -4932,6 +5048,8 @@ impl<'a> Generator<'a> {
             | Inst::PackedAdd { dst, .. }
             | Inst::PackedMinMax { dst, .. }
             | Inst::Scalar16 { dst, .. }
+            | Inst::Scalar16Setp { dst, .. }
+            | Inst::Scalar16Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
@@ -5338,6 +5456,77 @@ impl<'a> Generator<'a> {
                     writeln!(s, "    {:<13} %h2, %h0, %h1;", op.mnemonic()).unwrap();
                 }
                 writeln!(s, "    {:<13} %r{dst}, %h2;", op.output_cvt_mnemonic()).unwrap();
+            }
+            Inst::Scalar16Setp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                write!(s, "    {:<13} %h0, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %h1, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %h0, %h1;",
+                    cmp.scalar16_setp_mnemonic()
+                )
+                .unwrap();
+                write!(s, "    selp.b32      %r{dst}, ").unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ", %p{pred};").unwrap();
+            }
+            Inst::Scalar16Set { cmp, dst, a, b } => {
+                write!(s, "    {:<13} %h0, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %h1, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, %h0, %h1;",
+                    cmp.scalar16_set_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::Scalar16Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                write!(s, "    {:<13} %h0, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %h1, ", cmp.scalar16_input_cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %h0, %h1;",
+                    cmp.scalar16_setp_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %h2, %h0, %h1, %p{pred};",
+                    cmp.scalar16_selp_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, %h2;",
+                    cmp.scalar16_output_cvt_mnemonic()
+                )
+                .unwrap();
             }
             Inst::Sel {
                 dst,
@@ -8678,6 +8867,29 @@ mod tests {
     ];
     const SCALAR_16BIT_BITWISE_MNEMONICS: &[&str] = &["and.b16", "or.b16", "xor.b16", "not.b16"];
     const SCALAR_16BIT_SHIFT_MNEMONICS: &[&str] = &["shl.b16", "shr.u16", "shr.s16"];
+    const SCALAR_16BIT_COMPARE_MNEMONICS: &[&str] = &[
+        "setp.eq.u16",
+        "setp.ne.u16",
+        "setp.lt.u16",
+        "setp.le.u16",
+        "setp.gt.u16",
+        "setp.ge.u16",
+        "setp.lt.s16",
+        "setp.le.s16",
+        "setp.gt.s16",
+        "setp.ge.s16",
+        "set.eq.u32.u16",
+        "set.ne.u32.u16",
+        "set.lt.u32.u16",
+        "set.le.u32.u16",
+        "set.gt.u32.u16",
+        "set.ge.u32.u16",
+        "set.lt.u32.s16",
+        "set.le.u32.s16",
+        "set.gt.u32.s16",
+        "set.ge.u32.s16",
+    ];
+    const SCALAR_16BIT_SELP_MNEMONICS: &[&str] = &["selp.u16", "selp.s16"];
     const SCALAR_16BIT_POST_KNOWN_MNEMONICS: &[&str] = &[
         "add.u16",
         "sub.u16",
@@ -8696,6 +8908,19 @@ mod tests {
         "shl.b16",
         "shr.u16",
         "shr.s16",
+        "setp.eq.u16",
+        "setp.ne.u16",
+        "setp.lt.u16",
+        "setp.le.u16",
+        "setp.gt.u16",
+        "setp.ge.u16",
+        "set.eq.u32.u16",
+        "set.ne.u32.u16",
+        "set.lt.u32.u16",
+        "set.le.u32.u16",
+        "set.gt.u32.u16",
+        "set.ge.u32.u16",
+        "selp.u16",
     ];
     const SIGNED_SCALAR_16BIT_MNEMONICS: &[&str] = &[
         "add.s16",
@@ -8707,6 +8932,15 @@ mod tests {
         "abs.s16",
         "neg.s16",
         "shr.s16",
+        "setp.lt.s16",
+        "setp.le.s16",
+        "setp.gt.s16",
+        "setp.ge.s16",
+        "set.lt.u32.s16",
+        "set.le.u32.s16",
+        "set.gt.u32.s16",
+        "set.ge.u32.s16",
+        "selp.s16",
     ];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
@@ -9030,6 +9264,8 @@ mod tests {
             PACKED_ADD_MNEMONICS,
             PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_MNEMONICS,
+            SCALAR_16BIT_COMPARE_MNEMONICS,
+            SCALAR_16BIT_SELP_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -10459,9 +10695,13 @@ mod tests {
         for seed in 0..1024 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in SCALAR_16BIT_MNEMONICS {
+            for mnemonic in SCALAR_16BIT_MNEMONICS
+                .iter()
+                .chain(SCALAR_16BIT_COMPARE_MNEMONICS)
+                .chain(SCALAR_16BIT_SELP_MNEMONICS)
+            {
                 assert!(
-                    !has_mnemonic(&ptx, mnemonic),
+                    !has_mnemonic(&ptx, *mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
@@ -10487,7 +10727,9 @@ mod tests {
             }
             saw_unsigned |= has_mnemonic(&ptx, "add.u16")
                 || has_mnemonic(&ptx, "sub.u16")
-                || has_mnemonic(&ptx, "mul.lo.u16");
+                || has_mnemonic(&ptx, "mul.lo.u16")
+                || has_mnemonic(&ptx, "setp.lt.u16")
+                || has_mnemonic(&ptx, "selp.u16");
         }
         assert!(
             saw_unsigned,
@@ -10593,6 +10835,72 @@ mod tests {
         assert!(
             saw_arithmetic,
             "sample did not retain scalar 16-bit arithmetic coverage"
+        );
+    }
+
+    #[test]
+    fn scalar_16bit_compare_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 8192, SCALAR_16BIT_COMPARE_MNEMONICS);
+    }
+
+    #[test]
+    fn scalar_16bit_compare_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_compare: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_arithmetic = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SCALAR_16BIT_COMPARE_MNEMONICS
+                .iter()
+                .chain(SCALAR_16BIT_SELP_MNEMONICS)
+            {
+                assert!(
+                    !has_mnemonic(&ptx, *mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_arithmetic |= has_mnemonic(&ptx, "add.u16") || has_mnemonic(&ptx, "mul.lo.s16");
+        }
+        assert!(
+            saw_arithmetic,
+            "sample did not retain scalar 16-bit arithmetic coverage"
+        );
+    }
+
+    #[test]
+    fn scalar_16bit_selp_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, SCALAR_16BIT_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn scalar_16bit_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_selp: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_compare = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SCALAR_16BIT_SELP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_compare |=
+                has_mnemonic(&ptx, "setp.lt.u16") || has_mnemonic(&ptx, "set.lt.u32.s16");
+        }
+        assert!(
+            saw_compare,
+            "sample did not retain scalar 16-bit compare coverage"
         );
     }
 
@@ -14039,6 +14347,15 @@ mod tests {
                 "set.le.u32.s32",
                 "set.gt.u32.s32",
                 "set.ge.u32.s32",
+                "setp.lt.s16",
+                "setp.le.s16",
+                "setp.gt.s16",
+                "setp.ge.s16",
+                "set.lt.u32.s16",
+                "set.le.u32.s16",
+                "set.gt.u32.s16",
+                "set.ge.u32.s16",
+                "selp.s16",
             ] {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }

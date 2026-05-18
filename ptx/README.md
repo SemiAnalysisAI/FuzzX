@@ -242,6 +242,8 @@ that feature.
 | `DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY` | `abs.s16` and `neg.s16` while retaining other scalar 16-bit ALU instructions. |
 | `DIV_DISABLE_SCALAR_16BIT_BITWISE` | `and.b16`, `or.b16`, `xor.b16`, and `not.b16`. |
 | `DIV_DISABLE_SCALAR_16BIT_SHIFTS` | `shl.b16`, `shr.u16`, and `shr.s16` with immediate counts in `0..15`. |
+| `DIV_DISABLE_SCALAR_16BIT_COMPARE` | Scalar 16-bit `setp` and `set` through `.b16` scratch registers. |
+| `DIV_DISABLE_SCALAR_16BIT_SELP` | Scalar 16-bit `selp.u16` and `selp.s16`; also disabled by `DIV_DISABLE_SCALAR_16BIT_COMPARE`. |
 | `DIV_DISABLE_PREDICATED_SCALAR_16BIT` | Predicated scalar 16-bit ALU instructions. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
