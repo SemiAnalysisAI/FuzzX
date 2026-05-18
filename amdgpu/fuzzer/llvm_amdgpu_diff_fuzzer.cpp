@@ -5227,6 +5227,15 @@ int getDevice() {
   return Device && *Device ? std::atoi(Device) : 0;
 }
 
+bool useInterpreterOracle() {
+  return envFlag("FUZZX_USE_LLVM_INTERPRETER_ORACLE", false) ||
+         envFlag("FUZZX_REQUIRE_LLVM_INTERPRETER_ORACLE", false);
+}
+
+bool requireInterpreterOracle() {
+  return envFlag("FUZZX_REQUIRE_LLVM_INTERPRETER_ORACLE", false);
+}
+
 } // namespace
 
 extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
@@ -5237,6 +5246,8 @@ extern "C" size_t LLVMFuzzerCustomMutator(uint8_t *Data, size_t Size,
   std::minstd_rand Gen(Seed);
   mutateIRModule(*M, Gen);
   if (!validateIRCorpusModule(*M))
+    return 0;
+  if (requireInterpreterOracle() && !moduleSupportedByInterpreterOracle(*M))
     return 0;
 
   std::vector<uint8_t> Out = moduleToBitcode(*M);
@@ -5261,6 +5272,8 @@ extern "C" size_t LLVMFuzzerCustomCrossOver(const uint8_t *Data1,
     mutateIRModule(*Base, Gen);
   if (!validateIRCorpusModule(*Base))
     return 0;
+  if (requireInterpreterOracle() && !moduleSupportedByInterpreterOracle(*Base))
+    return 0;
   std::vector<uint8_t> Buffer = moduleToBitcode(*Base);
   if (Buffer.empty() || Buffer.size() > MaxOutSize)
     return 0;
@@ -5283,8 +5296,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
     return 0;
   auto Inputs = makeInputs(Data, Size);
   std::optional<std::array<uint32_t, InputCount>> ExpectedOutputs;
-  if (envFlag("FUZZX_USE_LLVM_INTERPRETER_ORACLE", false))
+  if (useInterpreterOracle())
     ExpectedOutputs = computeInterpreterOracleOutputs(*M, Inputs);
+  if (requireInterpreterOracle() && !ExpectedOutputs)
+    return 0;
 
   std::string O0IR;
   auto O0Obj =

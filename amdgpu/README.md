@@ -41,6 +41,8 @@ both kernels through HIP, and compares device output. Set
 `FUZZX_USE_LLVM_INTERPRETER_ORACLE=1` to also run an LLVM-interpreter oracle
 for modules that do not use AMDGPU-specific intrinsics beyond workgroup and
 workitem IDs; oracle findings include the expected value in `mismatch.txt`.
+Set `FUZZX_REQUIRE_LLVM_INTERPRETER_ORACLE=1` for an oracle-focused campaign
+where mutation and crossover keep only interpreter-compatible modules.
 
 The custom mutator and crossover operate on LLVM IR rather than on raw bytes.
 They currently build a conservative, defined subset of integer IR: no `undef`,
