@@ -4206,6 +4206,122 @@ Value *emitRandomNarrowScalarInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *unsignedMinMaxSelect(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                            bool WantMax, const Twine &Name) {
+  Value *Cmp = B.CreateICmpUGT(A, Bv, Name + ".cmp");
+  return WantMax ? B.CreateSelect(Cmp, A, Bv, Name + ".umax")
+                 : B.CreateSelect(Cmp, Bv, A, Name + ".umin");
+}
+
+Value *signedMinMaxSelect(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                          bool WantMax, const Twine &Name) {
+  Value *Cmp = B.CreateICmpSGT(A, Bv, Name + ".cmp");
+  return WantMax ? B.CreateSelect(Cmp, A, Bv, Name + ".smax")
+                 : B.CreateSelect(Cmp, Bv, A, Name + ".smin");
+}
+
+Value *unsignedAbsDiffI32(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                          const Twine &Name) {
+  Value *Hi = unsignedMinMaxSelect(B, A, Bv, true, Name + ".hi");
+  Value *Lo = unsignedMinMaxSelect(B, A, Bv, false, Name + ".lo");
+  return B.CreateSub(Hi, Lo, Name + ".absdiff");
+}
+
+Value *emitRandomAverageDiffIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                  std::minstd_rand &Gen,
+                                  StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+
+  switch (Gen() % 8) {
+  case 0: {
+    Value *Shared = B.CreateAnd(A, Bv, Twine(NamePrefix) + ".avg.and");
+    Value *Diff = B.CreateXor(A, Bv, Twine(NamePrefix) + ".avg.xor");
+    Value *Half = B.CreateLShr(Diff, ci32(Ctx, 1),
+                               Twine(NamePrefix) + ".avg.half");
+    return B.CreateAdd(Shared, Half, Twine(NamePrefix) + ".avg.floor");
+  }
+  case 1: {
+    Value *Either = B.CreateOr(A, Bv, Twine(NamePrefix) + ".avg.or");
+    Value *Diff = B.CreateXor(A, Bv, Twine(NamePrefix) + ".avg.xor");
+    Value *Half = B.CreateLShr(Diff, ci32(Ctx, 1),
+                               Twine(NamePrefix) + ".avg.half");
+    return B.CreateSub(Either, Half, Twine(NamePrefix) + ".avg.ceil");
+  }
+  case 2: {
+    Value *Sum = B.CreateAdd(B.CreateZExt(A, I64, Twine(NamePrefix) + ".a64"),
+                             B.CreateZExt(Bv, I64, Twine(NamePrefix) + ".b64"),
+                             Twine(NamePrefix) + ".sum64");
+    Sum = B.CreateAdd(Sum, ConstantInt::get(I64, 1),
+                      Twine(NamePrefix) + ".sum64.round");
+    Value *Avg = B.CreateLShr(Sum, ConstantInt::get(I64, 1),
+                              Twine(NamePrefix) + ".avg64");
+    return B.CreateTrunc(Avg, I32, Twine(NamePrefix) + ".avg.round");
+  }
+  case 3:
+    return unsignedAbsDiffI32(B, A, Bv, Twine(NamePrefix) + ".u32");
+  case 4: {
+    Value *Lo = unsignedMinMaxSelect(B, A, Bv, false,
+                                     Twine(NamePrefix) + ".u32.lo");
+    Value *Hi = unsignedMinMaxSelect(B, A, Bv, true,
+                                     Twine(NamePrefix) + ".u32.hi");
+    Value *Distance = B.CreateSub(Hi, Lo, Twine(NamePrefix) + ".u32.dist");
+    Value *Mid = B.CreateAdd(
+        Lo, B.CreateLShr(Distance, ci32(Ctx, 1),
+                         Twine(NamePrefix) + ".u32.dist.half"),
+        Twine(NamePrefix) + ".u32.mid");
+    return B.CreateXor(Mid, Distance, Twine(NamePrefix) + ".u32.mid.mix");
+  }
+  case 5: {
+    Value *Sum = ci32(Ctx, 0);
+    for (unsigned Byte = 0; Byte != 4; ++Byte) {
+      Value *AB = extractByteAsI32(B, A, Byte,
+                                   Twine(NamePrefix) + ".byte.a");
+      Value *BB = extractByteAsI32(B, Bv, Byte,
+                                   Twine(NamePrefix) + ".byte.b");
+      Value *Delta =
+          unsignedAbsDiffI32(B, AB, BB, Twine(NamePrefix) + ".byte.delta");
+      Sum = B.CreateAdd(Sum, Delta, Twine(NamePrefix) + ".byte.sum");
+    }
+    return Sum;
+  }
+  case 6: {
+    Value *LoA = extractHalfAsI32(B, A, 0, false, Twine(NamePrefix) + ".lo.a");
+    Value *LoB =
+        extractHalfAsI32(B, Bv, 0, false, Twine(NamePrefix) + ".lo.b");
+    Value *HiA = extractHalfAsI32(B, A, 1, false, Twine(NamePrefix) + ".hi.a");
+    Value *HiB =
+        extractHalfAsI32(B, Bv, 1, false, Twine(NamePrefix) + ".hi.b");
+    Value *LoDelta =
+        unsignedAbsDiffI32(B, LoA, LoB, Twine(NamePrefix) + ".half.lo");
+    Value *HiDelta =
+        unsignedAbsDiffI32(B, HiA, HiB, Twine(NamePrefix) + ".half.hi");
+    return B.CreateAdd(LoDelta, HiDelta, Twine(NamePrefix) + ".half.sum");
+  }
+  default: {
+    Value *ASmall = B.CreateSExt(B.CreateTrunc(A, I16,
+                                               Twine(NamePrefix) + ".a16"),
+                                 I64, Twine(NamePrefix) + ".a64.s");
+    Value *BSmall = B.CreateSExt(B.CreateTrunc(Bv, I16,
+                                               Twine(NamePrefix) + ".b16"),
+                                 I64, Twine(NamePrefix) + ".b64.s");
+    Value *Lo = signedMinMaxSelect(B, ASmall, BSmall, false,
+                                   Twine(NamePrefix) + ".s16.lo");
+    Value *Hi = signedMinMaxSelect(B, ASmall, BSmall, true,
+                                   Twine(NamePrefix) + ".s16.hi");
+    Value *Distance = B.CreateSub(Hi, Lo, Twine(NamePrefix) + ".s16.dist");
+    Value *Mid =
+        B.CreateAdd(Lo,
+                    B.CreateAShr(Distance, ConstantInt::get(I64, 1),
+                                 Twine(NamePrefix) + ".s16.dist.half"),
+                    Twine(NamePrefix) + ".s16.mid");
+    return B.CreateTrunc(Mid, I32, Twine(NamePrefix) + ".s16.mid.i32");
+  }
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -4215,7 +4331,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 154) {
+  switch (Gen() % 162) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4459,6 +4575,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 137:
     return emitRandomBitCountIdiom(B, M, A, Bv, Gen,
                                    "fuzz.bitcount.idiom");
+  case 138:
+  case 139:
+  case 140:
+  case 141:
+  case 142:
+  case 143:
+  case 144:
+  case 145:
+    return emitRandomAverageDiffIdiom(B, A, Bv, Gen,
+                                      "fuzz.avgdiff.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4493,7 +4619,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 138) {
+  switch (Gen() % 146) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4730,6 +4856,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 129:
     return emitRandomBitCountIdiom(B, M, A, Bv, Gen,
                                    "fuzz.cfg.bitcount.idiom");
+  case 130:
+  case 131:
+  case 132:
+  case 133:
+  case 134:
+  case 135:
+  case 136:
+  case 137:
+    return emitRandomAverageDiffIdiom(B, A, Bv, Gen,
+                                      "fuzz.cfg.avgdiff.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
