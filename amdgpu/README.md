@@ -52,9 +52,10 @@ reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
 `i32`, and LLVM bit, min/max, saturation, absolute-value, funnel-shift, and
 integer overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
-`perm`, explicit `bitop3`, and integer dot-product operations, with known
-`sudot*` instruction-selection crashes gated off by default. It also emits a
-finite scalar FP subset by masking
+packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
+explicit `bitop3`, and integer dot-product operations, with known `sudot*`
+instruction-selection crashes gated off by default. It also emits a finite
+scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
 `fptoui`; a signed variant uses small sign-extended integers, `sitofp`,

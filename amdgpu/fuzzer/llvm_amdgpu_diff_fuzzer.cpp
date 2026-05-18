@@ -426,10 +426,17 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::amdgcn_msad_u8:
   case Intrinsic::amdgcn_sad_hi_u8:
   case Intrinsic::amdgcn_sad_u16:
+  case Intrinsic::amdgcn_qsad_pk_u16_u8:
+  case Intrinsic::amdgcn_mqsad_pk_u16_u8:
+  case Intrinsic::amdgcn_mqsad_u32_u8:
   case Intrinsic::amdgcn_mul_i24:
   case Intrinsic::amdgcn_mul_u24:
   case Intrinsic::amdgcn_mulhi_i24:
   case Intrinsic::amdgcn_mulhi_u24:
+  case Intrinsic::amdgcn_alignbyte:
+  case Intrinsic::amdgcn_sffbh:
+  case Intrinsic::amdgcn_mbcnt_lo:
+  case Intrinsic::amdgcn_mbcnt_hi:
   case Intrinsic::amdgcn_perm:
   case Intrinsic::amdgcn_bitop3:
   case Intrinsic::amdgcn_sdot2:
@@ -2543,17 +2550,60 @@ Value *packI32ToV2I16(IRBuilder<NoFolder> &B, Value *V, const Twine &Name) {
                                Twine(Name) + ".ins1");
 }
 
+Value *packI32PairToI64(IRBuilder<NoFolder> &B, Value *Lo, Value *Hi,
+                        const Twine &Name) {
+  LLVMContext &Ctx = Lo->getContext();
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *Lo64 = B.CreateZExt(Lo, I64, Twine(Name) + ".lo64");
+  Value *Hi64 = B.CreateZExt(Hi, I64, Twine(Name) + ".hi64");
+  Hi64 = B.CreateShl(Hi64, ConstantInt::get(I64, 32),
+                     Twine(Name) + ".hi.shift");
+  return B.CreateOr(Lo64, Hi64, Twine(Name) + ".pack");
+}
+
+Value *foldI64ToI32(IRBuilder<NoFolder> &B, Value *V, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *Lo = B.CreateTrunc(V, I32, Twine(Name) + ".lo");
+  Value *Hi = B.CreateLShr(V, ConstantInt::get(I64, 32),
+                           Twine(Name) + ".hi64");
+  Hi = B.CreateTrunc(Hi, I32, Twine(Name) + ".hi");
+  return B.CreateXor(Lo, Hi, Twine(Name) + ".xor");
+}
+
+Value *reduceV4I32ToI32(IRBuilder<NoFolder> &B, Value *V,
+                        std::minstd_rand &Gen, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Value *A = B.CreateExtractElement(V, ci32(Ctx, Gen() & 3u),
+                                    Twine(Name) + ".a");
+  Value *Bv = B.CreateExtractElement(V, ci32(Ctx, Gen() & 3u),
+                                     Twine(Name) + ".b");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(A, Bv, Twine(Name) + ".xor");
+  case 1:
+    return B.CreateAdd(A, Bv, Twine(Name) + ".add");
+  case 2:
+    return B.CreateOr(A, Bv, Twine(Name) + ".or");
+  default:
+    return B.CreateSub(A, Bv, Twine(Name) + ".sub");
+  }
+}
+
 Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
                                             Value *A, Value *Bv,
                                             std::minstd_rand &Gen,
                                             StringRef NamePrefix) {
   LLVMContext &Ctx = M.getContext();
   Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
   Type *I1 = Type::getInt1Ty(Ctx);
+  auto *V4I32 = FixedVectorType::get(I32, 4);
   Value *C = interestingI32(Ctx, Gen);
   Value *Clamp = ConstantInt::getFalse(Ctx);
   bool AllowSUDot = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
-  switch (Gen() % (AllowSUDot ? 21 : 19)) {
+  switch (Gen() % (AllowSUDot ? 30 : 28)) {
   case 0: {
     unsigned Offset = Gen() % 32;
     unsigned Width = Gen() % (33 - Offset);
@@ -2591,51 +2641,113 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sad_u16),
         {A, Bv, C}, Twine(NamePrefix) + ".sad.u16");
   case 7:
+    return foldI64ToI32(
+        B,
+        B.CreateCall(Intrinsic::getOrInsertDeclaration(
+                         &M, Intrinsic::amdgcn_qsad_pk_u16_u8),
+                     {packI32PairToI64(B, A, Bv,
+                                       Twine(NamePrefix) + ".qsad.a"),
+                      C,
+                      packI32PairToI64(B, Bv, A,
+                                       Twine(NamePrefix) + ".qsad.c")},
+                     Twine(NamePrefix) + ".qsad"),
+        Twine(NamePrefix) + ".qsad.fold");
+  case 8:
+    return foldI64ToI32(
+        B,
+        B.CreateCall(Intrinsic::getOrInsertDeclaration(
+                         &M, Intrinsic::amdgcn_mqsad_pk_u16_u8),
+                     {packI32PairToI64(B, A, C,
+                                       Twine(NamePrefix) + ".mqsad.pk.a"),
+                      Bv,
+                      packI32PairToI64(B, C, A,
+                                       Twine(NamePrefix) + ".mqsad.pk.c")},
+                     Twine(NamePrefix) + ".mqsad.pk"),
+        Twine(NamePrefix) + ".mqsad.pk.fold");
+  case 9: {
+    Value *Accum = emitVectorBuild(B, V4I32, {A, Bv, C, B.CreateXor(A, Bv)});
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mqsad_u32_u8),
+        {packI32PairToI64(B, A, Bv, Twine(NamePrefix) + ".mqsad.a"), C,
+         Accum},
+        Twine(NamePrefix) + ".mqsad");
+    return reduceV4I32ToI32(B, R, Gen, Twine(NamePrefix) + ".mqsad.reduce");
+  }
+  case 10:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mul_i24, {I32}),
         {A, Bv}, Twine(NamePrefix) + ".mul.i24");
-  case 8:
+  case 11:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mul_u24, {I32}),
         {A, Bv}, Twine(NamePrefix) + ".mul.u24");
-  case 9:
+  case 12:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mulhi_i24),
         {A, Bv}, Twine(NamePrefix) + ".mulhi.i24");
-  case 10:
+  case 13:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mulhi_u24),
         {A, Bv}, Twine(NamePrefix) + ".mulhi.u24");
-  case 11:
+  case 14:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_alignbyte),
+        {A, Bv, B.CreateAnd(C, ci32(Ctx, 3), Twine(NamePrefix) + ".byte")},
+        Twine(NamePrefix) + ".alignbyte");
+  case 15:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sffbh, {I32}),
+        {A}, Twine(NamePrefix) + ".sffbh");
+  case 16:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mbcnt_lo),
+        {A, Bv}, Twine(NamePrefix) + ".mbcnt.lo");
+  case 17:
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_mbcnt_hi),
+        {A, Bv}, Twine(NamePrefix) + ".mbcnt.hi");
+  case 18:
+    return B.CreateTrunc(B.CreateCall(Intrinsic::getOrInsertDeclaration(
+                                          &M, Intrinsic::amdgcn_mul_i24, {I64}),
+                                      {A, Bv},
+                                      Twine(NamePrefix) + ".mul.i24.i64"),
+                         I32, Twine(NamePrefix) + ".mul.i24.i64.trunc");
+  case 19:
+    return B.CreateTrunc(B.CreateCall(Intrinsic::getOrInsertDeclaration(
+                                          &M, Intrinsic::amdgcn_mul_u24, {I64}),
+                                      {A, Bv},
+                                      Twine(NamePrefix) + ".mul.u24.i64"),
+                         I32, Twine(NamePrefix) + ".mul.u24.i64.trunc");
+  case 20:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_perm),
         {A, Bv, C}, Twine(NamePrefix) + ".perm");
-  case 12:
+  case 21:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_bitop3, {I32}),
         {A, Bv, C, ci32(Ctx, Gen() & 255u)},
         Twine(NamePrefix) + ".bitop3");
-  case 13:
+  case 22:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot2),
         {packI32ToV2I16(B, A, Twine(NamePrefix) + ".sdot2.a"),
          packI32ToV2I16(B, Bv, Twine(NamePrefix) + ".sdot2.b"), C, Clamp},
         Twine(NamePrefix) + ".sdot2");
-  case 14:
+  case 23:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot2),
         {packI32ToV2I16(B, A, Twine(NamePrefix) + ".udot2.a"),
          packI32ToV2I16(B, Bv, Twine(NamePrefix) + ".udot2.b"), C, Clamp},
         Twine(NamePrefix) + ".udot2");
-  case 15:
+  case 24:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot4),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot4");
-  case 16:
+  case 25:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot4),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot4");
-  case 17:
+  case 26:
     if (AllowSUDot)
       return B.CreateCall(
           Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot4),
@@ -2645,7 +2757,7 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot8),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot8");
-  case 18:
+  case 27:
     if (!AllowSUDot)
       return B.CreateCall(
           Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot8),
@@ -2653,7 +2765,7 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sdot8),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".sdot8");
-  case 19:
+  case 28:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_udot8),
         {A, Bv, C, Clamp}, Twine(NamePrefix) + ".udot8");
