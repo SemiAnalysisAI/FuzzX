@@ -49,8 +49,9 @@ compares/selects, rare signed division/remainder by proven-positive divisors,
 standalone `i8` / `i16` scalar subexpressions, `i64` subexpressions truncated
 to `i32`, `<2 x i32>` / `<4 x i32>` vector subexpressions and narrow
 `<4/8 x i8>` / `<4/8 x i16>` vector subexpressions reduced back to `i32`,
-vector forms of LLVM bit/min/max/saturation/absolute intrinsics, explicit `i1`
-boolean subexpressions reduced back to `i32`, and
+scalar and vector forms of LLVM bit/min/max/saturation/absolute intrinsics,
+narrow scalar funnel shifts and unsigned division/remainder by proven-nonzero
+denominators, explicit `i1` boolean subexpressions reduced back to `i32`, and
 LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,

@@ -474,12 +474,12 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   }
 }
 
-bool isKnownNonZeroI32(const Value *V) {
+bool isKnownNonZeroInteger(const Value *V) {
   if (const auto *C = dyn_cast<ConstantInt>(V))
-    return C->getType()->isIntegerTy(32) && !C->isZero();
+    return C->getType()->isIntegerTy() && !C->isZero();
   const auto *BO = dyn_cast<BinaryOperator>(V);
   if (!BO || BO->getOpcode() != Instruction::Or ||
-      !BO->getType()->isIntegerTy(32))
+      !BO->getType()->isIntegerTy())
     return false;
   if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0)))
     return !C->isZero();
@@ -754,7 +754,7 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::URem:
       if (BO->hasName() && BO->getName().starts_with("fuzz.load.idx"))
         return true;
-      return isKnownNonZeroI32(BO->getOperand(1));
+      return isKnownNonZeroInteger(BO->getOperand(1));
     case Instruction::SDiv:
     case Instruction::SRem:
       return isKnownPositiveI32(BO->getOperand(1));
@@ -3234,7 +3234,7 @@ Value *emitRandomNarrowScalarInstruction(IRBuilder<NoFolder> &B, Module &M,
     NBSeed = B.CreateTrunc(Bv, NarrowTy, Twine(NamePrefix) + ".trunc.b");
 
   Value *Result = nullptr;
-  switch (Gen() % 22) {
+  switch (Gen() % 29) {
   case 0:
     Result = B.CreateAdd(NA, NBSeed, Twine(NamePrefix) + ".add");
     break;
@@ -3326,11 +3326,54 @@ Value *emitRandomNarrowScalarInstruction(IRBuilder<NoFolder> &B, Module &M,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sadd_sat, {NarrowTy}),
         {NA, NBSeed}, Twine(NamePrefix) + ".sadd_sat");
     break;
-  default:
+  case 21:
     Result = B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ssub_sat, {NarrowTy}),
         {NA, NBSeed}, Twine(NamePrefix) + ".ssub_sat");
     break;
+  case 22:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {NarrowTy}),
+        {NA, NBSeed, ConstantInt::get(NarrowTy, Gen() % Width)},
+        Twine(NamePrefix) + ".fshl");
+    break;
+  case 23:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {NarrowTy}),
+        {NA, NBSeed, ConstantInt::get(NarrowTy, Gen() % Width)},
+        Twine(NamePrefix) + ".fshr");
+    break;
+  case 24:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshl, {NarrowTy}),
+        {NA, NBSeed, NBSeed}, Twine(NamePrefix) + ".fshl.dyn");
+    break;
+  case 25:
+    Result = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fshr, {NarrowTy}),
+        {NA, NBSeed, NA}, Twine(NamePrefix) + ".fshr.dyn");
+    break;
+  case 26: {
+    Value *Cmp =
+        B.CreateICmp(randomICmpPredicate(Gen), NA, NBSeed,
+                     Twine(NamePrefix) + ".cmp");
+    Result = B.CreateSelect(Cmp, NA, NBSeed, Twine(NamePrefix) + ".select");
+    break;
+  }
+  case 27: {
+    Value *Den =
+        B.CreateOr(NBSeed, ConstantInt::get(NarrowTy, 1),
+                   Twine(NamePrefix) + ".nz");
+    Result = B.CreateUDiv(NA, Den, Twine(NamePrefix) + ".udiv");
+    break;
+  }
+  default: {
+    Value *Den =
+        B.CreateOr(NBSeed, ConstantInt::get(NarrowTy, 1),
+                   Twine(NamePrefix) + ".nz");
+    Result = B.CreateURem(NA, Den, Twine(NamePrefix) + ".urem");
+    break;
+  }
   }
 
   Value *Ext = (Gen() % 2) == 0
