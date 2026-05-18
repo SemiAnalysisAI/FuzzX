@@ -49,6 +49,8 @@ else()
         Analysis
         CodeGen
         Core
+        ExecutionEngine
+        Interpreter
         MC
         Passes
         Support

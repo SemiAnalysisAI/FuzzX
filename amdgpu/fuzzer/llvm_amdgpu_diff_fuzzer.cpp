@@ -5,6 +5,9 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Bitcode/BitcodeWriter.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/GenericValue.h"
+#include "llvm/ExecutionEngine/Interpreter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -4926,6 +4929,155 @@ bool crossOverIRModules(Module &Base, const Module &Other,
   return true;
 }
 
+bool typeUnsupportedByInterpreterOracle(Type *Ty) {
+  if (!Ty)
+    return false;
+  if (Ty->isHalfTy())
+    return true;
+  if (auto *VecTy = dyn_cast<VectorType>(Ty)) {
+    Type *EltTy = VecTy->getElementType();
+    return EltTy->isHalfTy() || EltTy->isFloatTy() || EltTy->isDoubleTy();
+  }
+  if (auto *StructTy = dyn_cast<StructType>(Ty))
+    for (Type *EltTy : StructTy->elements())
+      if (typeUnsupportedByInterpreterOracle(EltTy))
+        return true;
+  return false;
+}
+
+bool intrinsicUnsupportedByInterpreterOracle(Intrinsic::ID ID) {
+  switch (ID) {
+  case Intrinsic::amdgcn_workgroup_id_x:
+  case Intrinsic::amdgcn_workitem_id_x:
+    return false;
+  default:
+    return true;
+  }
+}
+
+bool moduleSupportedByInterpreterOracle(const Module &M) {
+  const Function *Kernel = nullptr;
+  for (const Function &F : M) {
+    if ((F.getName() == "fuzz_kernel" || F.getName() == "fuzz_kernel_o0" ||
+         F.getName() == "fuzz_kernel_o2") &&
+        !F.isDeclaration() && hasIRKernelSignature(F)) {
+      Kernel = &F;
+      break;
+    }
+  }
+  if (!Kernel)
+    return false;
+
+  for (const BasicBlock &BB : *Kernel) {
+    for (const Instruction &I : BB) {
+      if (typeUnsupportedByInterpreterOracle(I.getType()))
+        return false;
+      for (const Value *Op : I.operands())
+        if (typeUnsupportedByInterpreterOracle(Op->getType()))
+          return false;
+      if (const auto *Call = dyn_cast<CallInst>(&I)) {
+        const Function *Callee = Call->getCalledFunction();
+        if (!Callee || !Callee->isIntrinsic())
+          return false;
+        if (intrinsicUnsupportedByInterpreterOracle(Callee->getIntrinsicID()))
+          return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool lowerOracleThreadIntrinsics(Module &M, GlobalVariable *OracleWI) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  SmallVector<Instruction *, 8> ToErase;
+
+  for (Function &F : M) {
+    if (F.isDeclaration())
+      continue;
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        auto *Call = dyn_cast<CallInst>(&I);
+        if (!Call)
+          continue;
+        Function *Callee = Call->getCalledFunction();
+        if (!Callee || !Callee->isIntrinsic())
+          continue;
+
+        Intrinsic::ID ID = Callee->getIntrinsicID();
+        if (ID == Intrinsic::amdgcn_workgroup_id_x) {
+          Call->replaceAllUsesWith(ci32(Ctx, 0));
+          ToErase.push_back(Call);
+        } else if (ID == Intrinsic::amdgcn_workitem_id_x) {
+          IRBuilder<NoFolder> B(Call);
+          Value *WI = B.CreateLoad(I32, OracleWI, "fuzzx.oracle.wi.load");
+          Call->replaceAllUsesWith(WI);
+          ToErase.push_back(Call);
+        }
+      }
+    }
+  }
+
+  for (Instruction *I : ToErase)
+    I->eraseFromParent();
+  return true;
+}
+
+std::optional<std::array<uint32_t, InputCount>>
+computeInterpreterOracleOutputs(const Module &Input,
+                                ArrayRef<uint32_t> Inputs) {
+  if (!moduleSupportedByInterpreterOracle(Input))
+    return std::nullopt;
+
+  std::unique_ptr<Module> OracleM = CloneModule(Input);
+  Function *Kernel = findIRKernel(*OracleM);
+  if (!Kernel)
+    return std::nullopt;
+
+  LLVMContext &Ctx = OracleM->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  auto *OracleWI = new GlobalVariable(*OracleM, I32, false,
+                                      GlobalValue::InternalLinkage, ci32(Ctx, 0),
+                                      "fuzzx.oracle.wi");
+  lowerOracleThreadIntrinsics(*OracleM, OracleWI);
+  Kernel->setCallingConv(CallingConv::C);
+  Kernel->setVisibility(GlobalValue::DefaultVisibility);
+
+  std::string Error;
+  std::unique_ptr<ExecutionEngine> EE(
+      EngineBuilder(std::move(OracleM))
+          .setEngineKind(EngineKind::Interpreter)
+          .setErrorStr(&Error)
+          .create());
+  if (!EE)
+    return std::nullopt;
+
+  auto *LanePtr = reinterpret_cast<uint32_t *>(EE->getPointerToGlobal(OracleWI));
+  if (!LanePtr)
+    return std::nullopt;
+
+  std::array<uint32_t, InputCount> Outputs{};
+  std::vector<GenericValue> Args(3);
+  Args[0].PointerVal = const_cast<uint32_t *>(Inputs.data());
+  Args[1].PointerVal = Outputs.data();
+  Args[2].IntVal = APInt(32, Inputs.size());
+
+  for (unsigned I = 0; I < Inputs.size(); ++I) {
+    *LanePtr = I;
+    bool Ran = false;
+    CrashRecoveryContext CRC;
+    if (!CRC.RunSafely([&] {
+          EE->runFunction(Kernel, Args);
+          Ran = true;
+        }))
+      return std::nullopt;
+    if (!Ran)
+      return std::nullopt;
+  }
+
+  return Outputs;
+}
+
 struct HipBuffers {
   uint32_t *In = nullptr;
   uint32_t *O0Out = nullptr;
@@ -5130,6 +5282,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   if (!validateIRCorpusModule(*M))
     return 0;
   auto Inputs = makeInputs(Data, Size);
+  std::optional<std::array<uint32_t, InputCount>> ExpectedOutputs;
+  if (envFlag("FUZZX_USE_LLVM_INTERPRETER_ORACLE", false))
+    ExpectedOutputs = computeInterpreterOracleOutputs(*M, Inputs);
 
   std::string O0IR;
   auto O0Obj =
@@ -5185,9 +5340,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   }
 
   for (unsigned I = 0; I < InputCount; ++I) {
-    if (O0Outputs[I] != O2Outputs[I]) {
-      saveFinding(Data, Size, O0IR, *HsacoPath, "differential", I, Inputs[I],
-                  O0Outputs[I], O2Outputs[I]);
+    std::optional<uint32_t> Expected;
+    bool O0O2Mismatch = O0Outputs[I] != O2Outputs[I];
+    bool OracleMismatch = false;
+    if (ExpectedOutputs) {
+      Expected = (*ExpectedOutputs)[I];
+      OracleMismatch = O0Outputs[I] != *Expected || O2Outputs[I] != *Expected;
+    }
+    if (O0O2Mismatch || OracleMismatch) {
+      StringRef Kind = OracleMismatch ? "oracle" : "differential";
+      saveFinding(Data, Size, O0IR, *HsacoPath, Kind, I, Inputs[I],
+                  O0Outputs[I], O2Outputs[I], Expected);
       std::abort();
     }
   }

@@ -37,7 +37,10 @@ The AMDGPU fuzzer is the directed C++ libFuzzer target in `fuzzer/`. Its only
 input format is an LLVM bitcode module containing an AMDGPU kernel named
 `fuzz_kernel`. For each input module, the fuzzer compiles the kernel through
 `-O0` and `-O2` LLVM pipelines, links both code objects into one HSACO, runs
-both kernels through HIP, and compares device output.
+both kernels through HIP, and compares device output. Set
+`FUZZX_USE_LLVM_INTERPRETER_ORACLE=1` to also run an LLVM-interpreter oracle
+for modules that do not use AMDGPU-specific intrinsics beyond workgroup and
+workitem IDs; oracle findings include the expected value in `mismatch.txt`.
 
 The custom mutator and crossover operate on LLVM IR rather than on raw bytes.
 They currently build a conservative, defined subset of integer IR: no `undef`,

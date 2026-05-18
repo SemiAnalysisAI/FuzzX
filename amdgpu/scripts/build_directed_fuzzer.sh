@@ -34,6 +34,15 @@ if [[ ! -f "$LLD_DIR/LLDConfig.cmake" ]]; then
     exit 2
 fi
 
+if [[ -f "$LLVM_BUILD_DIR/CMakeCache.txt" ]]; then
+    if [[ ! -f "$LLVM_BUILD_DIR/lib/libLLVMExecutionEngine.a" || \
+          ! -f "$LLVM_BUILD_DIR/lib/libLLVMInterpreter.a" ]]; then
+        cmake --build "$LLVM_BUILD_DIR" \
+            --target LLVMExecutionEngine LLVMInterpreter \
+            --parallel "${NINJAJOBS:-$(nproc)}"
+    fi
+fi
+
 cmake -S "$ROOT/fuzzer" -B "$FUZZER_BUILD_DIR" -G Ninja \
     -DLLVM_DIR="$LLVM_DIR" \
     -DLLD_DIR="$LLD_DIR" \
