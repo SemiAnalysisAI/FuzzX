@@ -248,6 +248,8 @@ pub struct GenConfig {
     pub emit_set: bool,
     pub emit_s32_slct: bool,
     pub emit_video: bool,
+    pub emit_signed_video: bool,
+    pub emit_video_sat: bool,
     pub emit_vsub4: bool,
 }
 
@@ -462,6 +464,8 @@ impl Default for GenConfig {
             emit_set: true,
             emit_s32_slct: true,
             emit_video: true,
+            emit_signed_video: true,
+            emit_video_sat: true,
             emit_vsub4: true,
         }
     }
@@ -2994,49 +2998,91 @@ impl SlctOp {
 }
 
 #[derive(Clone, Copy)]
-enum VideoOp {
+enum VideoKind {
     Add2,
     Sub2,
     Avrg2,
-    Avrg2Add,
-    AbsDiff2Add,
+    AbsDiff2,
     Min2,
-    Min2Add,
     Max2,
-    Max2Add,
     Add4,
     Sub4,
     Avrg4,
-    Avrg4Add,
-    AbsDiff4Add,
+    AbsDiff4,
     Min4,
-    Min4Add,
     Max4,
-    Max4Add,
+}
+
+impl VideoKind {
+    fn base(self) -> &'static str {
+        match self {
+            VideoKind::Add2 => "vadd2",
+            VideoKind::Sub2 => "vsub2",
+            VideoKind::Avrg2 => "vavrg2",
+            VideoKind::AbsDiff2 => "vabsdiff2",
+            VideoKind::Min2 => "vmin2",
+            VideoKind::Max2 => "vmax2",
+            VideoKind::Add4 => "vadd4",
+            VideoKind::Sub4 => "vsub4",
+            VideoKind::Avrg4 => "vavrg4",
+            VideoKind::AbsDiff4 => "vabsdiff4",
+            VideoKind::Min4 => "vmin4",
+            VideoKind::Max4 => "vmax4",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VideoType {
+    U32,
+    S32,
+}
+
+impl VideoType {
+    fn suffix(self) -> &'static str {
+        match self {
+            VideoType::U32 => "u32",
+            VideoType::S32 => "s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VideoMode {
+    Plain,
+    Add,
+    Sat,
+}
+
+impl VideoMode {
+    fn suffix(self) -> &'static str {
+        match self {
+            VideoMode::Plain => "",
+            VideoMode::Add => ".add",
+            VideoMode::Sat => ".sat",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct VideoOp {
+    kind: VideoKind,
+    dst_type: VideoType,
+    a_type: VideoType,
+    b_type: VideoType,
+    mode: VideoMode,
 }
 
 impl VideoOp {
-    fn mnemonic(self) -> &'static str {
-        match self {
-            VideoOp::Add2 => "vadd2.u32.u32.u32",
-            VideoOp::Sub2 => "vsub2.u32.u32.u32",
-            VideoOp::Avrg2 => "vavrg2.u32.u32.u32",
-            VideoOp::Avrg2Add => "vavrg2.u32.u32.u32.add",
-            VideoOp::AbsDiff2Add => "vabsdiff2.u32.u32.u32.add",
-            VideoOp::Min2 => "vmin2.u32.u32.u32",
-            VideoOp::Min2Add => "vmin2.u32.u32.u32.add",
-            VideoOp::Max2 => "vmax2.u32.u32.u32",
-            VideoOp::Max2Add => "vmax2.u32.u32.u32.add",
-            VideoOp::Add4 => "vadd4.u32.u32.u32",
-            VideoOp::Sub4 => "vsub4.u32.u32.u32",
-            VideoOp::Avrg4 => "vavrg4.u32.u32.u32",
-            VideoOp::Avrg4Add => "vavrg4.u32.u32.u32.add",
-            VideoOp::AbsDiff4Add => "vabsdiff4.u32.u32.u32.add",
-            VideoOp::Min4 => "vmin4.u32.u32.u32",
-            VideoOp::Min4Add => "vmin4.u32.u32.u32.add",
-            VideoOp::Max4 => "vmax4.u32.u32.u32",
-            VideoOp::Max4Add => "vmax4.u32.u32.u32.add",
-        }
+    fn mnemonic(self) -> String {
+        format!(
+            "{}.{}.{}.{}{}",
+            self.kind.base(),
+            self.dst_type.suffix(),
+            self.a_type.suffix(),
+            self.b_type.suffix(),
+            self.mode.suffix()
+        )
     }
 }
 
@@ -8757,7 +8803,12 @@ impl<'a> Generator<'a> {
             }
         } else if pick < 254 {
             if self.cfg.emit_video && u.arbitrary::<bool>()? {
-                let op = pick_video(u, self.cfg.emit_vsub4)?;
+                let op = pick_video(
+                    u,
+                    self.cfg.emit_vsub4,
+                    self.cfg.emit_signed_video,
+                    self.cfg.emit_video_sat,
+                )?;
                 if self.cfg.emit_predicated_video && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedVideo {
                         op,
@@ -14323,52 +14374,75 @@ fn pick_slct(u: &mut Unstructured, emit_s32_slct: bool) -> Result<SlctOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_video(u: &mut Unstructured, emit_vsub4: bool) -> Result<VideoOp> {
-    const OPS_WITH_VSUB4: &[VideoOp] = &[
-        VideoOp::Add2,
-        VideoOp::Sub2,
-        VideoOp::Avrg2,
-        VideoOp::Avrg2Add,
-        VideoOp::AbsDiff2Add,
-        VideoOp::Min2,
-        VideoOp::Min2Add,
-        VideoOp::Max2,
-        VideoOp::Max2Add,
-        VideoOp::Add4,
-        VideoOp::Sub4,
-        VideoOp::Avrg4,
-        VideoOp::Avrg4Add,
-        VideoOp::AbsDiff4Add,
-        VideoOp::Min4,
-        VideoOp::Min4Add,
-        VideoOp::Max4,
-        VideoOp::Max4Add,
+fn pick_video(
+    u: &mut Unstructured,
+    emit_vsub4: bool,
+    emit_signed_video: bool,
+    emit_video_sat: bool,
+) -> Result<VideoOp> {
+    const OPS_WITH_VSUB4: &[VideoKind] = &[
+        VideoKind::Add2,
+        VideoKind::Sub2,
+        VideoKind::Avrg2,
+        VideoKind::AbsDiff2,
+        VideoKind::Min2,
+        VideoKind::Max2,
+        VideoKind::Add4,
+        VideoKind::Sub4,
+        VideoKind::Avrg4,
+        VideoKind::AbsDiff4,
+        VideoKind::Min4,
+        VideoKind::Max4,
     ];
-    const OPS_WITHOUT_VSUB4: &[VideoOp] = &[
-        VideoOp::Add2,
-        VideoOp::Sub2,
-        VideoOp::Avrg2,
-        VideoOp::Avrg2Add,
-        VideoOp::AbsDiff2Add,
-        VideoOp::Min2,
-        VideoOp::Min2Add,
-        VideoOp::Max2,
-        VideoOp::Max2Add,
-        VideoOp::Add4,
-        VideoOp::Avrg4,
-        VideoOp::Avrg4Add,
-        VideoOp::AbsDiff4Add,
-        VideoOp::Min4,
-        VideoOp::Min4Add,
-        VideoOp::Max4,
-        VideoOp::Max4Add,
+    const OPS_WITHOUT_VSUB4: &[VideoKind] = &[
+        VideoKind::Add2,
+        VideoKind::Sub2,
+        VideoKind::Avrg2,
+        VideoKind::AbsDiff2,
+        VideoKind::Min2,
+        VideoKind::Max2,
+        VideoKind::Add4,
+        VideoKind::Avrg4,
+        VideoKind::AbsDiff4,
+        VideoKind::Min4,
+        VideoKind::Max4,
     ];
-    let ops = if emit_vsub4 {
+    const U32_TYPES: &[(VideoType, VideoType, VideoType)] =
+        &[(VideoType::U32, VideoType::U32, VideoType::U32)];
+    const ALL_TYPES: &[(VideoType, VideoType, VideoType)] = &[
+        (VideoType::U32, VideoType::U32, VideoType::U32),
+        (VideoType::U32, VideoType::U32, VideoType::S32),
+        (VideoType::U32, VideoType::S32, VideoType::U32),
+        (VideoType::U32, VideoType::S32, VideoType::S32),
+        (VideoType::S32, VideoType::U32, VideoType::U32),
+        (VideoType::S32, VideoType::U32, VideoType::S32),
+        (VideoType::S32, VideoType::S32, VideoType::U32),
+        (VideoType::S32, VideoType::S32, VideoType::S32),
+    ];
+    const BASE_MODES: &[VideoMode] = &[VideoMode::Plain, VideoMode::Add];
+    const SAT_MODES: &[VideoMode] = &[VideoMode::Plain, VideoMode::Add, VideoMode::Sat];
+
+    let kinds = if emit_vsub4 {
         OPS_WITH_VSUB4
     } else {
         OPS_WITHOUT_VSUB4
     };
-    Ok(*u.choose(ops)?)
+    let (dst_type, a_type, b_type) = *u.choose(if emit_signed_video {
+        ALL_TYPES
+    } else {
+        U32_TYPES
+    })?;
+    Ok(VideoOp {
+        kind: *u.choose(kinds)?,
+        dst_type,
+        a_type,
+        b_type,
+        mode: *u.choose(if emit_video_sat {
+            SAT_MODES
+        } else {
+            BASE_MODES
+        })?,
+    })
 }
 
 fn pick_divrem(u: &mut Unstructured, emit_signed_divrem: bool) -> Result<DivRemOp> {
@@ -15989,6 +16063,58 @@ mod tests {
         }
     }
 
+    fn is_video_mnemonic(mnemonic: &str) -> bool {
+        matches!(
+            mnemonic.split('.').next(),
+            Some(
+                "vadd2"
+                    | "vsub2"
+                    | "vavrg2"
+                    | "vabsdiff2"
+                    | "vmin2"
+                    | "vmax2"
+                    | "vadd4"
+                    | "vsub4"
+                    | "vavrg4"
+                    | "vabsdiff4"
+                    | "vmin4"
+                    | "vmax4"
+            )
+        )
+    }
+
+    fn is_signed_video_mnemonic(mnemonic: &str) -> bool {
+        is_video_mnemonic(mnemonic) && mnemonic.split('.').any(|part| part == "s32")
+    }
+
+    fn is_video_sat_mnemonic(mnemonic: &str) -> bool {
+        is_video_mnemonic(mnemonic) && mnemonic.ends_with(".sat")
+    }
+
+    fn is_vsub4_mnemonic(mnemonic: &str) -> bool {
+        mnemonic.starts_with("vsub4.")
+    }
+
+    fn has_video_mnemonic(ptx: &str) -> bool {
+        ptx.lines().filter_map(body_mnemonic).any(is_video_mnemonic)
+    }
+
+    fn has_signed_video_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(is_signed_video_mnemonic)
+    }
+
+    fn has_video_sat_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(is_video_sat_mnemonic)
+    }
+
+    fn has_vsub4_mnemonic(ptx: &str) -> bool {
+        ptx.lines().filter_map(body_mnemonic).any(is_vsub4_mnemonic)
+    }
+
     fn scalar_global_load_width(type_suffix: &str) -> Option<u32> {
         match type_suffix {
             "u8" | "s8" | "b8" => Some(1),
@@ -16829,7 +16955,7 @@ mod tests {
     fn has_predicated_video(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
-            .any(|op| VIDEO_MNEMONICS.contains(&op))
+            .any(is_video_mnemonic)
     }
 
     fn has_predicated_funnel(ptx: &str) -> bool {
@@ -17121,6 +17247,8 @@ mod tests {
             max_insts_per_block: 24,
             n_working_regs: 24,
             max_immediate: 65536,
+            emit_signed_video: false,
+            emit_video_sat: false,
             ..GenConfig::default()
         }
     }
@@ -17222,6 +17350,8 @@ mod tests {
             emit_set: false,
             emit_s32_slct: false,
             emit_video: true,
+            emit_signed_video: false,
+            emit_video_sat: false,
             emit_vsub4: false,
             ..GenConfig::default()
         }
@@ -24031,6 +24161,11 @@ mod tests {
 
     #[test]
     fn video_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_signed_video: false,
+            emit_video_sat: false,
+            ..GenConfig::default()
+        };
         let mnemonics = [
             "vadd2.u32.u32.u32",
             "vsub2.u32.u32.u32",
@@ -24055,7 +24190,7 @@ mod tests {
 
         for seed in 0..32768 {
             let bytes = bytes_from_seed(seed, 4096);
-            let ptx = generate_from_bytes(&bytes).unwrap();
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for (i, mnemonic) in mnemonics.iter().enumerate() {
                 found[i] |= has_mnemonic(&ptx, mnemonic);
             }
@@ -24082,28 +24217,90 @@ mod tests {
         for seed in 0..512 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in [
-                "vadd4.u32.u32.u32",
-                "vsub4.u32.u32.u32",
-                "vabsdiff4.u32.u32.u32.add",
-                "vadd2.u32.u32.u32",
-                "vsub2.u32.u32.u32",
-                "vavrg2.u32.u32.u32",
-                "vavrg2.u32.u32.u32.add",
-                "vabsdiff2.u32.u32.u32.add",
-                "vmin2.u32.u32.u32",
-                "vmin2.u32.u32.u32.add",
-                "vmax2.u32.u32.u32",
-                "vmax2.u32.u32.u32.add",
-                "vavrg4.u32.u32.u32",
-                "vavrg4.u32.u32.u32.add",
-                "vmin4.u32.u32.u32",
-                "vmin4.u32.u32.u32.add",
-                "vmax4.u32.u32.u32",
-                "vmax4.u32.u32.u32.add",
-            ] {
-                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            assert!(
+                !has_video_mnemonic(&ptx),
+                "seed {seed:x} emitted video instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_video_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_video: true,
+            emit_signed_video: true,
+            emit_video_sat: false,
+            emit_vsub4: false,
+            ..dot_video_focused_config()
+        };
+        let mut saw_signed_video = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_signed_video |= has_signed_video_mnemonic(&ptx);
+            if saw_signed_video {
+                break;
             }
+        }
+
+        assert!(saw_signed_video, "no seed in sample emitted signed video");
+    }
+
+    #[test]
+    fn signed_video_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_video: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_signed_video_mnemonic(&ptx),
+                "seed {seed:x} emitted signed video"
+            );
+        }
+    }
+
+    #[test]
+    fn video_sat_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_video: true,
+            emit_signed_video: false,
+            emit_video_sat: true,
+            emit_vsub4: false,
+            ..dot_video_focused_config()
+        };
+        let mut saw_video_sat = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_video_sat |= has_video_sat_mnemonic(&ptx);
+            if saw_video_sat {
+                break;
+            }
+        }
+
+        assert!(saw_video_sat, "no seed in sample emitted video .sat");
+    }
+
+    #[test]
+    fn video_sat_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_video_sat: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_video_sat_mnemonic(&ptx),
+                "seed {seed:x} emitted video .sat"
+            );
         }
     }
 
@@ -24154,10 +24351,7 @@ mod tests {
         for seed in 0..2048 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            assert!(
-                !has_mnemonic(&ptx, "vsub4.u32.u32.u32"),
-                "seed {seed:x} emitted vsub4"
-            );
+            assert!(!has_vsub4_mnemonic(&ptx), "seed {seed:x} emitted vsub4");
         }
     }
 

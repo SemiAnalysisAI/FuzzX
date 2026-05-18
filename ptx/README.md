@@ -410,7 +410,9 @@ that feature.
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |
-| `DIV_DISABLE_VSUB4` | `vsub4.u32.u32.u32`. |
+| `DIV_DISABLE_SIGNED_VIDEO` | Signed/mixed `s32` PTX video type suffixes. |
+| `DIV_DISABLE_VIDEO_SAT` | PTX video `.sat` forms. |
+| `DIV_DISABLE_VSUB4` | `vsub4.*` video forms. |
 
 ### Reduction And Sweeping
 
