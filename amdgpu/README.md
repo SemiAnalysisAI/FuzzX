@@ -24,8 +24,8 @@ I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
 compared to the release.)  Seeing this, I figured I should be fuzzing the
 release instead.  After m038, AMD asked us to switch active fuzzing back to
 HEAD builds; the current upstream LLVM and ROCm HEAD columns both have
-llvm/llvm-project#198373 applied locally.  In any case, the table of results
-below shows which versions reproduce which bugs.
+llvm/llvm-project#198373 and llvm/llvm-project#196418 applied locally.  In any
+case, the table of results below shows which versions reproduce which bugs.
 
 Everything below this line is AI-generated.  You probably only care about the
 "bugs generated" table.  Good luck.
@@ -200,8 +200,6 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M021_OR_XOR=1` | unset | Re-enable the generalized dynamic `(a \| b) ^ a` shape for [m021](known-miscompiles/m021-fshl-or-xor/NOTES.md). |
 | `FUZZX_ALLOW_M022_AND_XOR_CONSTANT=1` | unset | Re-enable the `((x ^ C) & x)` shape for [m022](known-miscompiles/m022-and-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_M023_AND_XOR_IDENTITY=1` | unset | Re-enable the `(x & y) ^ x` shape for [m023](known-miscompiles/m023-and-xor-identity/NOTES.md). |
-| `FUZZX_ALLOW_M024_UDIV_SEXT_OR=1` | unset | Re-enable unsigned division by odd `or` denominators for [m024](known-miscompiles/m024-udiv-or-one/NOTES.md). |
-| `FUZZX_ALLOW_M025_UREM_SEXT_OR=1` | unset | Re-enable unsigned remainder by odd `or` denominators for [m025](known-miscompiles/m025-urem-or-one/NOTES.md). |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
 | `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) \| base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
 | `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
@@ -225,6 +223,7 @@ rediscovering the same issue.
 | --- | --- |
 | `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
 | `patches/llvm-pr-198373.diff` | Local patch for the current HEAD campaigns; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
+| `patches/llvm-pr-196418.diff` | Local patch for unsigned `LowerDIVREM24`; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/seed_ir_corpus.sh` | Writes the initial LLVM bitcode corpus seed. |
@@ -249,8 +248,8 @@ Tested toolchains as of 2026-05-18:
 | Column | Toolchain |
 | --- | --- |
 | ROCm release | [ROCm 7.2.3 source tag](https://github.com/ROCm/llvm-project/releases/tag/rocm-7.2.3), commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`; also checked against the matching [ROCm 7.2.3 `rocm-llvm` package](https://repo.radeon.com/rocm/apt/7.2.3/pool/main/r/rocm-llvm/rocm-llvm_22.0.0.26084.70203-90~22.04_amd64.deb), package SHA256 `4c406e184f88949cea60869949454e5392e1cbd9480c4c87274f7b59e9f810e5`. |
-| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), built `Release` with sanitizer coverage, no ASan. |
-| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), built with assertions, ASan, and sanitizer coverage. |
+| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373) and [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), built `Release` with sanitizer coverage, no ASan. |
+| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373) and [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), built with assertions, ASan, and sanitizer coverage. |
 
 | Bug | ROCm 7.2.3 | LLVM HEAD | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
@@ -277,8 +276,8 @@ Tested toolchains as of 2026-05-18:
 | [m021-fshl-or-xor](known-miscompiles/m021-fshl-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines a dynamic `(a \| b) ^ a` expression after `fshl` into `v_bitop3_b32` with the wrong result. |
 | [m022-and-xor-constant](known-miscompiles/m022-and-xor-constant/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `((x ^ C) & x)` after a dynamic `and` into `v_bitop3_b32` with the wrong low bit. |
 | [m023-and-xor-identity](known-miscompiles/m023-and-xor-identity/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(x & y) ^ x` into `v_bitop3_b32` with the wrong identity result. |
-| [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x \| 1` through an imprecise float reciprocal path. |
-| [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x \| 1` through the same imprecise reciprocal path. |
+| [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ✅ | ✅ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x \| 1` through an imprecise float reciprocal path; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#196418. |
+| [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ✅ | ✅ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x \| 1` through the same imprecise reciprocal path; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#196418. |
 | [m026-shl-umax-xor-and](known-miscompiles/m026-shl-umax-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O2` combines a shifted `umax` high-bit extraction into `v_bitop3_b32` using the input and salt instead of their xor. |
 | [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(((y ^ x) & x) \| base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`. |
 | [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately. |
@@ -301,10 +300,13 @@ Tested toolchains as of 2026-05-18:
 *Human-written note:* After m038, AMD asked us to switch active fuzzing back to
 HEAD builds.  The current LLVM HEAD column uses upstream main at
 `0dd29960cd6102b37651cc3f58f872652099b83b` with llvm/llvm-project#198373
-applied.  After m039, the ROCm HEAD column was refreshed to ROCm `amd-staging`
-at `a5de13684ba84db953b28e632ea304080a4318d0` with the same PR applied.  That
-PR fixes m002, m004, m006, m007, m008, m009, m010, and m011 in both HEAD
-builds.
+and llvm/llvm-project#196418 applied.  After m039, the ROCm HEAD column was
+refreshed to ROCm `amd-staging` at
+`a5de13684ba84db953b28e632ea304080a4318d0` with the same PRs applied.
+llvm/llvm-project#198373 fixes m002, m004, m006, m007, m008, m009, m010, and
+m011 in both HEAD builds.  llvm/llvm-project#196418 fixes m024 and m025 in
+both HEAD builds, so the fuzzer no longer suppresses unsigned division or
+remainder by odd `or` denominators in HEAD campaigns.
 
 ## LLVM Source Builds
 

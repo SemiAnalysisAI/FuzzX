@@ -1067,32 +1067,6 @@ bool triggersM027XorAndOr(const Instruction &I) {
          isM027AndOfXorWithMaskedBase(BO->getOperand(1), BO->getOperand(0));
 }
 
-bool isOrWithNonZeroI32Constant(const Value *V) {
-  const auto *BO = dyn_cast<BinaryOperator>(V);
-  if (!BO || BO->getOpcode() != Instruction::Or ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0)))
-    return !C->isZero();
-  if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1)))
-    return !C->isZero();
-  return false;
-}
-
-bool triggersM024UDivSExtOr(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  return BO && BO->getOpcode() == Instruction::UDiv &&
-         BO->getType()->isIntegerTy(32) &&
-         isOrWithNonZeroI32Constant(BO->getOperand(1));
-}
-
-bool triggersM025URemSExtOr(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  return BO && BO->getOpcode() == Instruction::URem &&
-         BO->getType()->isIntegerTy(32) &&
-         isOrWithNonZeroI32Constant(BO->getOperand(1));
-}
-
 bool isUnsignedMaxWithOperand(const Value *MaybeMax, const Value *Operand) {
   if (const auto *Call = dyn_cast<CallInst>(MaybeMax)) {
     const Function *Callee = Call->getCalledFunction();
@@ -1786,8 +1760,6 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM021 = envFlag("FUZZX_ALLOW_M021_OR_XOR", false);
   bool AllowM022 = envFlag("FUZZX_ALLOW_M022_AND_XOR_CONSTANT", false);
   bool AllowM023 = envFlag("FUZZX_ALLOW_M023_AND_XOR_IDENTITY", false);
-  bool AllowM024 = envFlag("FUZZX_ALLOW_M024_UDIV_SEXT_OR", false);
-  bool AllowM025 = envFlag("FUZZX_ALLOW_M025_UREM_SEXT_OR", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
@@ -1829,8 +1801,6 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM021 && triggersM021OrXor(I)) ||
               (!AllowM022 && triggersM022AndXorConstant(I)) ||
               (!AllowM023 && triggersM023AndXorIdentity(I)) ||
-              (!AllowM024 && triggersM024UDivSExtOr(I)) ||
-              (!AllowM025 && triggersM025URemSExtOr(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
               (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||

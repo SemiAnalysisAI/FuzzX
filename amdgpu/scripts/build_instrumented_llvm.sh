@@ -10,6 +10,7 @@
 #   LLVM_USE_SANITIZER=OFF
 #   LLVM_USE_SANITIZE_COVERAGE=ON
 #   LLVM_APPLY_PR_198373=ON
+#   LLVM_APPLY_PR_196418=ON
 #   CMAKE_BUILD_TYPE=Release
 
 set -euo pipefail
@@ -27,6 +28,7 @@ fi
 
 LLVM_PROJECT_DIR="$(cd "$LLVM_PROJECT_DIR" && pwd)"
 LLVM_APPLY_PR_198373="${LLVM_APPLY_PR_198373:-ON}"
+LLVM_APPLY_PR_196418="${LLVM_APPLY_PR_196418:-ON}"
 LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$ROOT/build/llvm-fuzzer}"
 LLVM_INSTALL_DIR="${LLVM_INSTALL_DIR:-$ROOT/build/llvm-fuzzer-install}"
 LLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD:-AMDGPU;X86}"
@@ -38,23 +40,34 @@ CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 HOST_CLANG="${HOST_CLANG:-/opt/rocm-7.1.1/lib/llvm/bin/clang}"
 HOST_CLANGXX="${HOST_CLANGXX:-/opt/rocm-7.1.1/lib/llvm/bin/clang++}"
 
-if [[ "$LLVM_APPLY_PR_198373" =~ ^(1|ON|on|true|TRUE|yes|YES)$ ]]; then
-    patch_file="$ROOT/patches/llvm-pr-198373.diff"
+apply_optional_patch() {
+    local label="$1"
+    local enabled="$2"
+    local patch_file="$3"
+
+    if [[ ! "$enabled" =~ ^(1|ON|on|true|TRUE|yes|YES)$ ]]; then
+        return
+    fi
     if [[ ! -f "$patch_file" ]]; then
-        echo "LLVM PR 198373 patch not found: $patch_file" >&2
+        echo "$label patch not found: $patch_file" >&2
         exit 2
     fi
     if git -C "$LLVM_PROJECT_DIR" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
-        echo "LLVM PR 198373 patch already applied in $LLVM_PROJECT_DIR"
+        echo "$label patch already applied in $LLVM_PROJECT_DIR"
     elif git -C "$LLVM_PROJECT_DIR" apply --check "$patch_file" >/dev/null 2>&1; then
         git -C "$LLVM_PROJECT_DIR" apply "$patch_file"
-        echo "Applied LLVM PR 198373 patch in $LLVM_PROJECT_DIR"
+        echo "Applied $label patch in $LLVM_PROJECT_DIR"
     else
-        echo "Cannot apply LLVM PR 198373 patch to LLVM_PROJECT_DIR=$LLVM_PROJECT_DIR" >&2
-        echo "Set LLVM_APPLY_PR_198373=OFF if this checkout already contains an incompatible equivalent fix." >&2
+        echo "Cannot apply $label patch to LLVM_PROJECT_DIR=$LLVM_PROJECT_DIR" >&2
+        echo "Set the corresponding LLVM_APPLY_PR_* variable to OFF if this checkout already contains an incompatible equivalent fix." >&2
         exit 2
     fi
-fi
+}
+
+apply_optional_patch "LLVM PR 198373" "$LLVM_APPLY_PR_198373" \
+    "$ROOT/patches/llvm-pr-198373.diff"
+apply_optional_patch "LLVM PR 196418" "$LLVM_APPLY_PR_196418" \
+    "$ROOT/patches/llvm-pr-196418.diff"
 
 cmake_args=(
     -S "$LLVM_PROJECT_DIR/llvm"

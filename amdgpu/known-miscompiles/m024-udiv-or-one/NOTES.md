@@ -57,11 +57,10 @@ The `-O2` lowering uses a refined unsigned division sequence and returns zero.
 | Toolchain | Result |
 | --- | --- |
 | ROCm 7.2.3 source build from tag `rocm-7.2.3`, commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`, `Release`, sanitizer coverage, no ASan | Reproduces: `O0=0x00000001`, `O2=0x00000000`. |
-| LLVM HEAD, commit `10756d32f96154f0889eda159ea9a26bc4188bda` | Reproduces: `O0=0x00000001`, `O2=0x00000000`. |
-| ROCm HEAD, commit `9115c466b3577830455f70c4f492429bf6c64b25` | Reproduces: `O0=0x00000001`, `O2=0x00000000`. |
+| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373 and llvm/llvm-project#196418 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
+| ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373 and llvm/llvm-project#196418 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
 
 ## Fuzzer Follow-Up
 
-The IR-bitcode fuzzer now suppresses unsigned division when the denominator is
-an `or` with a nonzero constant. Set `FUZZX_ALLOW_M024_UDIV_SEXT_OR=1` to
-re-enable this shape.
+The old suppression for unsigned division by odd `or` denominators was removed
+after llvm/llvm-project#196418 fixed this case in the active HEAD campaigns.
