@@ -1505,6 +1505,15 @@ bool triggersM035WaveReduceXor(const Instruction &I) {
          Callee->getIntrinsicID() == Intrinsic::amdgcn_wave_reduce_xor;
 }
 
+bool triggersM036WaveReduceAdd(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::amdgcn_wave_reduce_add;
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1621,6 +1630,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
   bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
+  bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1659,6 +1669,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM033 && triggersM033SubZExtBool(I)) ||
               (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
               (!AllowM035 && triggersM035WaveReduceXor(I)) ||
+              (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -2883,14 +2894,14 @@ Value *emitRandomAMDGPUFPIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
 }
 
 Intrinsic::ID randomWaveReduceIntrinsic(std::minstd_rand &Gen) {
-  static constexpr std::array<Intrinsic::ID, 7> IDs = {
+  SmallVector<Intrinsic::ID, 8> IDs = {
       Intrinsic::amdgcn_wave_reduce_umin, Intrinsic::amdgcn_wave_reduce_min,
       Intrinsic::amdgcn_wave_reduce_umax, Intrinsic::amdgcn_wave_reduce_max,
-      Intrinsic::amdgcn_wave_reduce_add,  Intrinsic::amdgcn_wave_reduce_and,
-      Intrinsic::amdgcn_wave_reduce_or};
-  if (envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false) &&
-      (Gen() % (IDs.size() + 1)) == IDs.size())
-    return Intrinsic::amdgcn_wave_reduce_xor;
+      Intrinsic::amdgcn_wave_reduce_and,  Intrinsic::amdgcn_wave_reduce_or};
+  if (envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false))
+    IDs.push_back(Intrinsic::amdgcn_wave_reduce_xor);
+  if (envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false))
+    IDs.push_back(Intrinsic::amdgcn_wave_reduce_add);
   return IDs[Gen() % IDs.size()];
 }
 
