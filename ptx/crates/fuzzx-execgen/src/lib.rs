@@ -102,7 +102,10 @@ pub struct GenConfig {
     pub emit_predicated_fns: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
+    pub emit_bmsk_wrap: bool,
     pub emit_predicated_bitfield: bool,
+    pub emit_reg_bitfield: bool,
+    pub emit_predicated_reg_bitfield: bool,
     pub emit_wide_bfe: bool,
     pub emit_signed_wide_bfe: bool,
     pub emit_wide_bfi: bool,
@@ -235,7 +238,10 @@ impl Default for GenConfig {
             emit_predicated_fns: true,
             emit_bfi: true,
             emit_bmsk: true,
+            emit_bmsk_wrap: true,
             emit_predicated_bitfield: true,
+            emit_reg_bitfield: true,
+            emit_predicated_reg_bitfield: true,
             emit_wide_bfe: true,
             emit_signed_wide_bfe: true,
             emit_wide_bfi: true,
@@ -557,6 +563,21 @@ impl BfeOp {
         match self {
             BfeOp::U32 => "bfe.u32",
             BfeOp::S32 => "bfe.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BmskMode {
+    Clamp,
+    Wrap,
+}
+
+impl BmskMode {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            BmskMode::Clamp => "bmsk.clamp.b32",
+            BmskMode::Wrap => "bmsk.wrap.b32",
         }
     }
 }
@@ -1878,21 +1899,21 @@ enum Inst {
         pred: u32,
     },
     /// `bfe.u32 dst, src, pos, len;` — extract `len` bits from `src` at
-    /// position `pos`. PTX masks pos/len mod 32 → safe.
+    /// position `pos`. PTX uses the low 8 bits of pos/len → safe.
     Bfe {
         op: BfeOp,
         dst: u32,
         src: Operand,
-        pos: u32,
-        len: u32,
+        pos: Operand,
+        len: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred bfe.{u32,s32} dst, src, pos, len;`.
     PredicatedBfe {
         op: BfeOp,
         dst: u32,
         src: Operand,
-        pos: u32,
-        len: u32,
+        pos: Operand,
+        len: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -1919,21 +1940,21 @@ enum Inst {
         pred: u32,
     },
     /// `bfi.b32 dst, src, base, pos, len;` — insert low `len` bits of `src`
-    /// into `base` starting at `pos`. PTX masks pos/len mod 32 → safe.
+    /// into `base` starting at `pos`. PTX uses the low 8 bits of pos/len → safe.
     Bfi {
         dst: u32,
         src: Operand,
         base: Operand,
-        pos: u32,
-        len: u32,
+        pos: Operand,
+        len: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred bfi.b32 dst, src, base, pos, len;`.
     PredicatedBfi {
         dst: u32,
         src: Operand,
         base: Operand,
-        pos: u32,
-        len: u32,
+        pos: Operand,
+        len: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -1959,13 +1980,19 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
-    /// `bmsk.clamp.b32 dst, pos, len;` — create a clamped bit mask.
-    Bmsk { dst: u32, pos: u32, len: u32 },
-    /// `setp.<cmp> pred, ca, cb; @pred bmsk.clamp.b32 dst, pos, len;`.
-    PredicatedBmsk {
+    /// `bmsk.{clamp,wrap}.b32 dst, pos, len;` — create a bit mask.
+    Bmsk {
+        mode: BmskMode,
         dst: u32,
-        pos: u32,
-        len: u32,
+        pos: Operand,
+        len: Operand,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred bmsk.{clamp,wrap}.b32 dst, pos, len;`.
+    PredicatedBmsk {
+        mode: BmskMode,
+        dst: u32,
+        pos: Operand,
+        len: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2187,6 +2214,14 @@ impl<'a> Generator<'a> {
             Operand::Reg(reg) if self.prmt_result_regs.contains(&reg) => Operand::Imm(0),
             operand => operand,
         })
+    }
+
+    fn pick_bitfield_param(&mut self, u: &mut Unstructured, allow_reg: bool) -> Result<Operand> {
+        if allow_reg && u.arbitrary::<bool>()? {
+            self.pick_reg_operand(u)
+        } else {
+            Ok(Operand::Imm(u.int_in_range(0..=31)?))
+        }
     }
 
     fn pick_divisor(&mut self, u: &mut Unstructured, op: DivRemOp) -> Result<u32> {
@@ -2840,9 +2875,16 @@ impl<'a> Generator<'a> {
             } else if self.cfg.emit_predicated_bitfield && u.arbitrary::<bool>()? {
                 if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedBmsk {
+                        mode: pick_bmsk_mode(u, self.cfg.emit_bmsk_wrap)?,
                         dst: self.pick_dst(u)?,
-                        pos: u.int_in_range(0..=31)?,
-                        len: u.int_in_range(0..=31)?,
+                        pos: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
+                        len: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2853,8 +2895,14 @@ impl<'a> Generator<'a> {
                         op: pick_bfe(u)?,
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
-                        pos: u.int_in_range(0..=31)?,
-                        len: u.int_in_range(0..=31)?,
+                        pos: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
+                        len: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2863,17 +2911,18 @@ impl<'a> Generator<'a> {
                 }
             } else if self.cfg.emit_bmsk && u.arbitrary::<bool>()? {
                 Ok(Inst::Bmsk {
+                    mode: pick_bmsk_mode(u, self.cfg.emit_bmsk_wrap)?,
                     dst: self.pick_dst(u)?,
-                    pos: u.int_in_range(0..=31)?,
-                    len: u.int_in_range(0..=31)?,
+                    pos: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
+                    len: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                 })
             } else {
                 Ok(Inst::Bfe {
                     op: pick_bfe(u)?,
                     dst: self.pick_dst(u)?,
                     src: self.pick_operand(u)?,
-                    pos: u.int_in_range(0..=31)?,
-                    len: u.int_in_range(0..=31)?,
+                    pos: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
+                    len: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                 })
             }
         } else if pick < 245 {
@@ -2907,8 +2956,14 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
                         base: self.pick_operand(u)?,
-                        pos: u.int_in_range(0..=31)?,
-                        len: u.int_in_range(0..=31)?,
+                        pos: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
+                        len: self.pick_bitfield_param(
+                            u,
+                            self.cfg.emit_reg_bitfield && self.cfg.emit_predicated_reg_bitfield,
+                        )?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2919,8 +2974,8 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
                         base: self.pick_operand(u)?,
-                        pos: u.int_in_range(0..=31)?,
-                        len: u.int_in_range(0..=31)?,
+                        pos: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
+                        len: self.pick_bitfield_param(u, self.cfg.emit_reg_bitfield)?,
                     })
                 }
             } else {
@@ -5150,7 +5205,11 @@ impl<'a> Generator<'a> {
             } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
-                writeln!(s, ", {pos}, {len};").unwrap();
+                write!(s, ", ").unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
             Inst::PredicatedBfe {
                 op,
@@ -5166,7 +5225,11 @@ impl<'a> Generator<'a> {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
-                writeln!(s, ", {pos}, {len};").unwrap();
+                write!(s, ", ").unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
             Inst::WideBfe {
                 op,
@@ -5223,7 +5286,11 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 write!(s, ", ").unwrap();
                 base.emit(s);
-                writeln!(s, ", {pos}, {len};").unwrap();
+                write!(s, ", ").unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
             Inst::PredicatedBfi {
                 dst,
@@ -5241,7 +5308,11 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 write!(s, ", ").unwrap();
                 base.emit(s);
-                writeln!(s, ", {pos}, {len};").unwrap();
+                write!(s, ", ").unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
             Inst::WideBfi {
                 dst,
@@ -5292,10 +5363,20 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
-            Inst::Bmsk { dst, pos, len } => {
-                writeln!(s, "    bmsk.clamp.b32 %r{dst}, {pos}, {len};").unwrap();
+            Inst::Bmsk {
+                mode,
+                dst,
+                pos,
+                len,
+            } => {
+                write!(s, "    {:<15} %r{dst}, ", mode.mnemonic()).unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
             Inst::PredicatedBmsk {
+                mode,
                 dst,
                 pos,
                 len,
@@ -5305,12 +5386,17 @@ impl<'a> Generator<'a> {
                 pred,
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
-                writeln!(
+                write!(
                     s,
-                    "    {} bmsk.clamp.b32 %r{dst}, {pos}, {len};",
-                    pred_guard(pred)
+                    "    {} {:<10} %r{dst}, ",
+                    pred_guard(pred),
+                    mode.mnemonic()
                 )
                 .unwrap();
+                pos.emit(s);
+                write!(s, ", ").unwrap();
+                len.emit(s);
+                writeln!(s, ";").unwrap();
             }
         }
     }
@@ -5623,6 +5709,15 @@ fn pick_bfind(
 fn pick_bfe(u: &mut Unstructured) -> Result<BfeOp> {
     let ops = [BfeOp::U32, BfeOp::S32];
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_bmsk_mode(u: &mut Unstructured, emit_wrap: bool) -> Result<BmskMode> {
+    if emit_wrap {
+        let ops = [BmskMode::Clamp, BmskMode::Wrap];
+        Ok(*u.choose(&ops)?)
+    } else {
+        Ok(BmskMode::Clamp)
+    }
 }
 
 fn pick_wide_bfe(u: &mut Unstructured, emit_signed_wide_bfe: bool) -> Result<WideBfeOp> {
@@ -6051,7 +6146,14 @@ mod tests {
     ];
     const SIGNED_WIDE_BFIND_MNEMONICS: &[&str] = &["bfind.s64", "bfind.shiftamt.s64"];
     const BFE_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32"];
-    const BITFIELD_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32", "bfi.b32", "bmsk.clamp.b32"];
+    const BMSK_MNEMONICS: &[&str] = &["bmsk.clamp.b32", "bmsk.wrap.b32"];
+    const BITFIELD_MNEMONICS: &[&str] = &[
+        "bfe.u32",
+        "bfe.s32",
+        "bfi.b32",
+        "bmsk.clamp.b32",
+        "bmsk.wrap.b32",
+    ];
     const WIDE_BFE_MNEMONICS: &[&str] = &["bfe.u64", "bfe.s64"];
     const SIGNED_WIDE_BFE_MNEMONICS: &[&str] = &["bfe.s64"];
     const WIDE_BFI_MNEMONICS: &[&str] = &["bfi.b64"];
@@ -6241,6 +6343,7 @@ mod tests {
             FNS_MNEMONICS,
             BFIND_MNEMONICS,
             BFE_MNEMONICS,
+            BMSK_MNEMONICS,
             WIDE_BITFIELD_MNEMONICS,
             DIVREM_MNEMONICS,
             MUL_WIDE_MNEMONICS,
@@ -6265,13 +6368,7 @@ mod tests {
         ] {
             mnemonics.extend_from_slice(group);
         }
-        mnemonics.extend_from_slice(&[
-            "selp.b32",
-            "lop3.b32",
-            "prmt.b32",
-            "bmsk.clamp.b32",
-            "bfi.b32",
-        ]);
+        mnemonics.extend_from_slice(&["selp.b32", "lop3.b32", "prmt.b32", "bfi.b32"]);
         mnemonics
     }
 
@@ -6284,6 +6381,7 @@ mod tests {
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
             BFE_MNEMONICS,
+            BMSK_MNEMONICS,
             WIDE_BITFIELD_MNEMONICS,
             DIVREM_MNEMONICS,
             MAD_HI_MNEMONICS,
@@ -6303,7 +6401,6 @@ mod tests {
         ] {
             mnemonics.extend_from_slice(group);
         }
-        mnemonics.push("bmsk.clamp.b32");
         mnemonics
     }
 
@@ -6667,6 +6764,46 @@ mod tests {
             .any(|op| WIDE_BITFIELD_MNEMONICS.contains(&op))
     }
 
+    fn bitfield_param_registers(line: &str) -> Option<(bool, bool, bool)> {
+        let line = line.trim_start();
+        let predicated = line.starts_with('@');
+        let inst = if predicated {
+            line.split_once(char::is_whitespace)?.1.trim_start()
+        } else {
+            line
+        };
+        let op = inst.split_whitespace().next()?;
+        if !BITFIELD_MNEMONICS.contains(&op) {
+            return None;
+        }
+        let args: Vec<_> = inst
+            .strip_prefix(op)?
+            .trim()
+            .trim_end_matches(';')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let (pos, len) = match op {
+            "bfe.u32" | "bfe.s32" => (args.get(2)?, args.get(3)?),
+            "bfi.b32" => (args.get(3)?, args.get(4)?),
+            "bmsk.clamp.b32" | "bmsk.wrap.b32" => (args.get(1)?, args.get(2)?),
+            _ => return None,
+        };
+        Some((predicated, pos.starts_with("%r"), len.starts_with("%r")))
+    }
+
+    fn has_register_bitfield_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(bitfield_param_registers)
+            .any(|(_, pos_reg, len_reg)| pos_reg || len_reg)
+    }
+
+    fn has_predicated_register_bitfield_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(bitfield_param_registers)
+            .any(|(predicated, pos_reg, len_reg)| predicated && (pos_reg || len_reg))
+    }
+
     fn has_register_funnel(ptx: &str) -> bool {
         ptx.lines().any(|line| {
             let line = line.trim_start();
@@ -6799,6 +6936,7 @@ mod tests {
             emit_signed_shr: false,
             emit_bfind: false,
             emit_bfi: false,
+            emit_reg_bitfield: false,
             emit_addc: false,
             emit_subc: false,
             emit_i32_boundary_immediates: false,
@@ -7974,16 +8112,11 @@ mod tests {
 
     #[test]
     fn bmsk_generation_is_reachable() {
-        let mut saw_bmsk = false;
-        for seed in 0..2048 {
-            let bytes = bytes_from_seed(seed, 4096);
-            let ptx = generate_from_bytes(&bytes).unwrap();
-            if ptx.contains("bmsk.clamp.b32") {
-                saw_bmsk = true;
-                break;
-            }
-        }
-        assert!(saw_bmsk, "no seed in sample emitted bmsk.clamp.b32");
+        let cfg = GenConfig {
+            emit_predicated_bitfield: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 4096, BMSK_MNEMONICS);
     }
 
     #[test]
@@ -7996,9 +8129,25 @@ mod tests {
         for seed in 0..256 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in BMSK_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn bmsk_wrap_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_bmsk_wrap: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(
-                !ptx.contains("bmsk.clamp.b32"),
-                "seed {seed:x} emitted bmsk.clamp.b32"
+                !ptx.contains("bmsk.wrap.b32"),
+                "seed {seed:x} emitted bmsk.wrap.b32"
             );
         }
     }
@@ -8053,6 +8202,43 @@ mod tests {
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn register_bitfield_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_predicated_bitfield: false,
+            emit_wide_bfe: false,
+            emit_wide_bfi: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_register_bitfield_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit a register bitfield pos/len operand");
+    }
+
+    #[test]
+    fn register_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_bitfield: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_register_bitfield_param(&ptx),
+                "seed {seed:x} emitted a register bitfield pos/len operand"
+            );
+        }
     }
 
     #[test]
@@ -8177,6 +8363,42 @@ mod tests {
             assert!(
                 !has_predicated_bitfield(&ptx),
                 "seed {seed:x} emitted predicated bitfield instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_register_bitfield_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_bfe: false,
+            emit_wide_bfi: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_register_bitfield_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit a predicated register bitfield pos/len operand");
+    }
+
+    #[test]
+    fn predicated_register_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_reg_bitfield: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_register_bitfield_param(&ptx),
+                "seed {seed:x} emitted a predicated register bitfield pos/len operand"
             );
         }
     }

@@ -129,6 +129,8 @@ Version | Description |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
 | 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
 | 13.2.78 | [m050-reg-shl-mask-fold](known-miscompiles/m050-reg-shl-mask-fold/NOTES.md): Masked register-count `shl.b32` chains fold to the wrong shifted value. |
+| 13.0.88 | [m052-bfe-reg-pos-fold](known-miscompiles/m052-bfe-reg-pos-fold/NOTES.md): Register-position `bfe.s32` with an out-of-range start folds to the wrong sign-filled value. |
+| 13.0.88 | [m053-bfi-reg-len-fold](known-miscompiles/m053-bfi-reg-len-fold/NOTES.md): Likely related to m052; register-length `bfi.b32` preserves high base bits that should be overwritten. |
 | 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
 
 ## Running
@@ -264,8 +266,11 @@ that feature.
 | `DIV_DISABLE_FNS` | `fns.b32`. |
 | `DIV_DISABLE_PREDICATED_FNS` | Predicated `fns.b32` instructions. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
-| `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
+| `DIV_DISABLE_BMSK` | `bmsk.{clamp,wrap}.b32`. |
+| `DIV_DISABLE_BMSK_WRAP` | `bmsk.wrap.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |
+| `DIV_DISABLE_REG_BITFIELD` | Register pos/len operands for `bfe`, `bfi`, and `bmsk`. |
+| `DIV_DISABLE_PREDICATED_REG_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions with register pos/len operands. |
 | `DIV_DISABLE_WIDE_BFE` | 64-bit scratch-register `bfe.{u64,s64}` instructions. |
 | `DIV_DISABLE_SIGNED_WIDE_BFE` | 64-bit scratch-register `bfe.s64` instructions. |
 | `DIV_DISABLE_WIDE_BFI` | 64-bit scratch-register `bfi.b64` instructions. |
