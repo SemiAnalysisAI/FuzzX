@@ -130,6 +130,8 @@ pub struct GenConfig {
     pub emit_wide_minmax: bool,
     pub emit_wide_mulhi: bool,
     pub emit_predicated_wide_int: bool,
+    pub emit_wide_set: bool,
+    pub emit_predicated_wide_set: bool,
     pub emit_wide_setp: bool,
     pub emit_wide_setp_bool: bool,
     pub emit_wide_selp: bool,
@@ -275,6 +277,8 @@ impl Default for GenConfig {
             emit_wide_minmax: true,
             emit_wide_mulhi: true,
             emit_predicated_wide_int: true,
+            emit_wide_set: true,
+            emit_predicated_wide_set: true,
             emit_wide_setp: true,
             emit_wide_setp_bool: true,
             emit_wide_selp: true,
@@ -487,6 +491,7 @@ enum SpecialRegOp {
     NctaidY,
     NctaidZ,
     LaneId,
+    NWarpId,
     LaneMaskEq,
     LaneMaskLt,
     LaneMaskLe,
@@ -510,6 +515,7 @@ impl SpecialRegOp {
             SpecialRegOp::NctaidY => "%nctaid.y",
             SpecialRegOp::NctaidZ => "%nctaid.z",
             SpecialRegOp::LaneId => "%laneid",
+            SpecialRegOp::NWarpId => "%nwarpid",
             SpecialRegOp::LaneMaskEq => "%lanemask_eq",
             SpecialRegOp::LaneMaskLt => "%lanemask_lt",
             SpecialRegOp::LaneMaskLe => "%lanemask_le",
@@ -1146,6 +1152,21 @@ impl CmpOp {
         }
     }
 
+    fn wide_set_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "set.eq.u32.u64",
+            CmpOp::Ne => "set.ne.u32.u64",
+            CmpOp::Lt => "set.lt.u32.u64",
+            CmpOp::Le => "set.le.u32.u64",
+            CmpOp::Gt => "set.gt.u32.u64",
+            CmpOp::Ge => "set.ge.u32.u64",
+            CmpOp::LtS => "set.lt.u32.s64",
+            CmpOp::LeS => "set.le.u32.s64",
+            CmpOp::GtS => "set.gt.u32.s64",
+            CmpOp::GeS => "set.ge.u32.s64",
+        }
+    }
+
     fn wide_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
         let suffix = op.suffix();
         match self {
@@ -1701,6 +1722,24 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+    },
+    /// 64-bit `set` materialization through scratch b64 registers.
+    WideSet {
+        dst: u32,
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+    },
+    /// Predicated 64-bit `set` materialization.
+    PredicatedWideSet {
+        dst: u32,
+        cmp: CmpOp,
+        a: Operand,
+        b: Operand,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
     },
     /// 64-bit compare plus `selp.b64`, keeping the selected low 32 bits.
     WideSelp {
@@ -2602,6 +2641,31 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_wide_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_wide_set
+            && self.cfg.emit_predicated_set
+            && u.arbitrary::<bool>()?;
+        if predicated {
+            Ok(Inst::PredicatedWideSet {
+                dst: self.pick_non_output_dst(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                guard_ca: self.pick_guard_operand(u)?,
+                guard_cb: self.pick_guard_operand(u)?,
+                guard_pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideSet {
+                dst: self.pick_non_output_dst(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+            })
+        }
+    }
+
     fn pick_wide_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::WideSelp {
             cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
@@ -3346,7 +3410,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=10)?;
+            let wide_pick: u8 = u.int_in_range(0..=11)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -3469,6 +3533,8 @@ impl<'a> Generator<'a> {
             } else if self.cfg.emit_wide_setp_bool && self.cfg.emit_predicated_alu && wide_pick == 5
             {
                 self.pick_wide_setp_bool_bin(u)
+            } else if self.cfg.emit_wide_set && self.cfg.emit_set && wide_pick == 9 {
+                self.pick_wide_set(u)
             } else if self.cfg.emit_wide_unary && wide_pick == 6 {
                 self.pick_wide_unary(u)
             } else if self.cfg.emit_wide_divrem && wide_pick == 7 {
@@ -3674,7 +3740,10 @@ impl<'a> Generator<'a> {
 
     fn note_inst(&mut self, inst: &Inst) {
         match inst {
-            Inst::Set { dst, .. } | Inst::PredicatedSet { dst, .. } => {
+            Inst::Set { dst, .. }
+            | Inst::PredicatedSet { dst, .. }
+            | Inst::WideSet { dst, .. }
+            | Inst::PredicatedWideSet { dst, .. } => {
                 self.remember_set_write(*dst);
             }
             Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } => {
@@ -4852,6 +4921,45 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::WideSet { dst, cmp, a, b } => {
+                write!(s, "    {:<13} %rd6, ", cmp.wide_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", cmp.wide_cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, %rd6, %rd7;",
+                    cmp.wide_set_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::PredicatedWideSet {
+                dst,
+                cmp,
+                a,
+                b,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                write!(s, "    {:<13} %rd6, ", cmp.wide_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", cmp.wide_cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, %rd6, %rd7;",
+                    pred_guard(guard_pred),
+                    cmp.wide_set_mnemonic()
+                )
+                .unwrap();
+            }
             Inst::WideSelp {
                 cmp,
                 ca,
@@ -5922,6 +6030,7 @@ fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
         SpecialRegOp::NctaidY,
         SpecialRegOp::NctaidZ,
         SpecialRegOp::LaneId,
+        SpecialRegOp::NWarpId,
         SpecialRegOp::LaneMaskEq,
         SpecialRegOp::LaneMaskLt,
         SpecialRegOp::LaneMaskLe,
@@ -6443,6 +6552,7 @@ mod tests {
         "%nctaid.y",
         "%nctaid.z",
         "%laneid",
+        "%nwarpid",
         "%lanemask_eq",
         "%lanemask_lt",
         "%lanemask_le",
@@ -6541,6 +6651,18 @@ mod tests {
     ];
     const WIDE_MINMAX_MNEMONICS: &[&str] = &["min.u64", "max.u64", "min.s64", "max.s64"];
     const WIDE_MULHI_MNEMONICS: &[&str] = &["mul.hi.u64", "mul.hi.s64"];
+    const WIDE_SET_MNEMONICS: &[&str] = &[
+        "set.eq.u32.u64",
+        "set.ne.u32.u64",
+        "set.lt.u32.u64",
+        "set.le.u32.u64",
+        "set.gt.u32.u64",
+        "set.ge.u32.u64",
+        "set.lt.u32.s64",
+        "set.le.u32.s64",
+        "set.gt.u32.s64",
+        "set.ge.u32.s64",
+    ];
     const WIDE_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.u64",
         "setp.ne.u64",
@@ -6699,6 +6821,7 @@ mod tests {
             MUL_WIDE_MNEMONICS,
             MAD_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_SET_MNEMONICS,
             WIDE_SETP_MNEMONICS,
             WIDE_SETP_BOOL_MNEMONICS,
             WIDE_SELP_MNEMONICS,
@@ -7028,6 +7151,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_INT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_set(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_SET_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_wide_shift(ptx: &str) -> bool {
@@ -9673,6 +9802,88 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn wide_set_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_SET_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_set_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_set: false,
+            emit_predicated_wide_set: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_SET_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_wide_set(&ptx),
+                "seed {seed:x} emitted predicated wide set"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_wide_set_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_set(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated wide set");
+    }
+
+    #[test]
+    fn predicated_wide_set_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_set: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_set(&ptx),
+                "seed {seed:x} emitted predicated wide set"
+            );
         }
     }
 
