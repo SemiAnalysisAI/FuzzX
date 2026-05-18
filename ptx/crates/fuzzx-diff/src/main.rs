@@ -117,7 +117,7 @@
 //!   DIV_DISABLE_SHARED_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         race-free per-thread shared-memory store/load roundtrips
 //!   DIV_DISABLE_PREDICATED_MEMORY default: false; set 1/true/yes/on to suppress
-//!                         predicated memory loads and store/load roundtrips
+//!                         predicated scalar/vector memory loads and store/load roundtrips
 //!   DIV_DISABLE_VECTOR_MEMORY default: false; set 1/true/yes/on to suppress
 //!                         vectorized memory loads and store/load roundtrips
 //!   DIV_DISABLE_WIDE_MEMORY default: false; set 1/true/yes/on to suppress

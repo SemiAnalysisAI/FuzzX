@@ -3268,6 +3268,16 @@ enum Inst {
         dsts: [u32; 4],
         offset: u32,
     },
+    /// Predicated aligned vector load from the input buffer.
+    PredicatedGlobalVectorLoad {
+        op: VectorMemOp,
+        dsts: [u32; 4],
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Aligned vector store/reload through this thread's output slice.
     GlobalVectorStoreRoundtrip {
         op: VectorMemOp,
@@ -3275,11 +3285,32 @@ enum Inst {
         srcs: [u32; 4],
         offset: u32,
     },
+    /// Predicated aligned vector store/reload through this thread's output slice.
+    PredicatedGlobalVectorStoreRoundtrip {
+        op: VectorMemOp,
+        dsts: [u32; 4],
+        srcs: [u32; 4],
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Aligned vector load from module-scope constant memory.
     ConstVectorLoad {
         op: VectorMemOp,
         dsts: [u32; 4],
         offset: u32,
+    },
+    /// Predicated aligned vector load from module-scope constant memory.
+    PredicatedConstVectorLoad {
+        op: VectorMemOp,
+        dsts: [u32; 4],
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Aligned vector store/reload through private per-thread local memory.
     LocalVectorMem {
@@ -3288,12 +3319,34 @@ enum Inst {
         srcs: [u32; 4],
         offset: u32,
     },
+    /// Predicated aligned vector store/reload through private per-thread local memory.
+    PredicatedLocalVectorMem {
+        op: VectorMemOp,
+        dsts: [u32; 4],
+        srcs: [u32; 4],
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Aligned vector store/reload through this thread's private shared slot.
     SharedVectorMem {
         op: VectorMemOp,
         dsts: [u32; 4],
         srcs: [u32; 4],
         offset: u32,
+    },
+    /// Predicated aligned vector store/reload through this thread's private shared slot.
+    PredicatedSharedVectorMem {
+        op: VectorMemOp,
+        dsts: [u32; 4],
+        srcs: [u32; 4],
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized single-precision floating-point arithmetic.
     F32Arith {
@@ -5980,30 +6033,83 @@ impl<'a> Generator<'a> {
         let op = self.pick_vector_op(u)?;
         let lanes = op.lanes();
         let bytes = op.bytes();
-        match space {
-            0 => Ok(Inst::GlobalVectorLoad {
+        let guard = if self.cfg.emit_predicated_memory && u.arbitrary::<bool>()? {
+            Some(self.pick_predicate_guard(u)?)
+        } else {
+            None
+        };
+        match (space, guard) {
+            (0, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorLoad {
+                op,
+                dsts: self.pick_vector_dsts(u, lanes)?,
+                offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
+                cmp,
+                ca,
+                cb,
+                pred,
+            }),
+            (0, None) => Ok(Inst::GlobalVectorLoad {
                 op,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
             }),
-            1 => Ok(Inst::GlobalVectorStoreRoundtrip {
+            (1, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorStoreRoundtrip {
+                op,
+                dsts: self.pick_vector_dsts(u, lanes)?,
+                srcs: self.pick_vector_srcs(u, lanes)?,
+                offset: self.pick_vector_offset(u, bytes, N_OUTPUTS * 4)?,
+                cmp,
+                ca,
+                cb,
+                pred,
+            }),
+            (1, None) => Ok(Inst::GlobalVectorStoreRoundtrip {
                 op,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, N_OUTPUTS * 4)?,
             }),
-            2 => Ok(Inst::ConstVectorLoad {
+            (2, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedConstVectorLoad {
+                op,
+                dsts: self.pick_vector_dsts(u, lanes)?,
+                offset: self.pick_vector_offset(u, bytes, CONST_MEM_BYTES)?,
+                cmp,
+                ca,
+                cb,
+                pred,
+            }),
+            (2, None) => Ok(Inst::ConstVectorLoad {
                 op,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, CONST_MEM_BYTES)?,
             }),
-            3 => Ok(Inst::LocalVectorMem {
+            (3, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedLocalVectorMem {
+                op,
+                dsts: self.pick_vector_dsts(u, lanes)?,
+                srcs: self.pick_vector_srcs(u, lanes)?,
+                offset: self.pick_vector_offset(u, bytes, LOCAL_MEM_BYTES)?,
+                cmp,
+                ca,
+                cb,
+                pred,
+            }),
+            (3, None) => Ok(Inst::LocalVectorMem {
                 op,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
                 offset: self.pick_vector_offset(u, bytes, LOCAL_MEM_BYTES)?,
             }),
-            4 => Ok(Inst::SharedVectorMem {
+            (4, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedSharedVectorMem {
+                op,
+                dsts: self.pick_vector_dsts(u, lanes)?,
+                srcs: self.pick_vector_srcs(u, lanes)?,
+                offset: self.pick_vector_offset(u, bytes, SHARED_SLOT_BYTES)?,
+                cmp,
+                ca,
+                cb,
+                pred,
+            }),
+            (4, None) => Ok(Inst::SharedVectorMem {
                 op,
                 dsts: self.pick_vector_dsts(u, lanes)?,
                 srcs: self.pick_vector_srcs(u, lanes)?,
@@ -8177,10 +8283,15 @@ impl<'a> Generator<'a> {
                 self.forget_tracked_write(*dst2);
             }
             Inst::GlobalVectorLoad { op, dsts, .. }
+            | Inst::PredicatedGlobalVectorLoad { op, dsts, .. }
             | Inst::GlobalVectorStoreRoundtrip { op, dsts, .. }
+            | Inst::PredicatedGlobalVectorStoreRoundtrip { op, dsts, .. }
             | Inst::ConstVectorLoad { op, dsts, .. }
+            | Inst::PredicatedConstVectorLoad { op, dsts, .. }
             | Inst::LocalVectorMem { op, dsts, .. }
-            | Inst::SharedVectorMem { op, dsts, .. } => {
+            | Inst::PredicatedLocalVectorMem { op, dsts, .. }
+            | Inst::SharedVectorMem { op, dsts, .. }
+            | Inst::PredicatedSharedVectorMem { op, dsts, .. } => {
                 for dst in dsts.iter().take(op.lanes()) {
                     self.forget_tracked_write(*dst);
                 }
@@ -8611,6 +8722,48 @@ impl<'a> Generator<'a> {
             write!(s, "%r{reg}").unwrap();
         }
         write!(s, "}}").unwrap();
+    }
+
+    fn emit_vector_memory_load(
+        s: &mut String,
+        mnemonic: &str,
+        dsts: [u32; 4],
+        lanes: usize,
+        addr: &str,
+        offset: u32,
+        pred: Option<u32>,
+    ) {
+        if let Some(pred) = pred {
+            write!(s, "    {} {:<12} ", pred_guard(pred), mnemonic).unwrap();
+        } else {
+            write!(s, "    {mnemonic:<17} ").unwrap();
+        }
+        Self::emit_vector_regs(s, dsts, lanes);
+        writeln!(s, ", [{addr} + {offset}];").unwrap();
+    }
+
+    fn emit_vector_memory_store(
+        s: &mut String,
+        mnemonic: &str,
+        srcs: [u32; 4],
+        lanes: usize,
+        addr: &str,
+        offset: u32,
+        pred: Option<u32>,
+    ) {
+        if let Some(pred) = pred {
+            write!(
+                s,
+                "    {} {:<12} [{addr} + {offset}], ",
+                pred_guard(pred),
+                mnemonic
+            )
+            .unwrap();
+        } else {
+            write!(s, "    {mnemonic:<17} [{addr} + {offset}], ").unwrap();
+        }
+        Self::emit_vector_regs(s, srcs, lanes);
+        writeln!(s, ";").unwrap();
     }
 
     fn emit_memory_load(
@@ -9112,9 +9265,36 @@ impl<'a> Generator<'a> {
             }
             Inst::GlobalVectorLoad { op, dsts, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
-                write!(s, "    {:<17} ", op.global_load_mnemonic()).unwrap();
-                Self::emit_vector_regs(s, dsts, op.lanes());
-                writeln!(s, ", [%rd6 + {offset}];").unwrap();
+                Self::emit_vector_memory_load(
+                    s,
+                    op.global_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+            }
+            Inst::PredicatedGlobalVectorLoad {
+                op,
+                dsts,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+                Self::emit_vector_memory_load(
+                    s,
+                    op.global_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
             }
             Inst::GlobalVectorStoreRoundtrip {
                 op,
@@ -9126,23 +9306,91 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
                 writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
                 writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
-                write!(
+                Self::emit_vector_memory_store(
                     s,
-                    "    {:<17} [%rd8 + {offset}], ",
-                    op.global_store_mnemonic()
-                )
-                .unwrap();
-                Self::emit_vector_regs(s, srcs, op.lanes());
-                writeln!(s, ";").unwrap();
-                write!(s, "    {:<17} ", op.global_load_mnemonic()).unwrap();
-                Self::emit_vector_regs(s, dsts, op.lanes());
-                writeln!(s, ", [%rd8 + {offset}];").unwrap();
+                    op.global_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd8",
+                    offset,
+                    None,
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.global_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd8",
+                    offset,
+                    None,
+                );
+            }
+            Inst::PredicatedGlobalVectorStoreRoundtrip {
+                op,
+                dsts,
+                srcs,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                Self::emit_vector_memory_store(
+                    s,
+                    op.global_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd8",
+                    offset,
+                    Some(pred),
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.global_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd8",
+                    offset,
+                    Some(pred),
+                );
             }
             Inst::ConstVectorLoad { op, dsts, offset } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
-                write!(s, "    {:<17} ", op.const_load_mnemonic()).unwrap();
-                Self::emit_vector_regs(s, dsts, op.lanes());
-                writeln!(s, ", [%rd6 + {offset}];").unwrap();
+                Self::emit_vector_memory_load(
+                    s,
+                    op.const_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+            }
+            Inst::PredicatedConstVectorLoad {
+                op,
+                dsts,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
+                Self::emit_vector_memory_load(
+                    s,
+                    op.const_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
             }
             Inst::LocalVectorMem {
                 op,
@@ -9151,17 +9399,55 @@ impl<'a> Generator<'a> {
                 offset,
             } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
-                write!(
+                Self::emit_vector_memory_store(
                     s,
-                    "    {:<17} [%rd6 + {offset}], ",
-                    op.local_store_mnemonic()
-                )
-                .unwrap();
-                Self::emit_vector_regs(s, srcs, op.lanes());
-                writeln!(s, ";").unwrap();
-                write!(s, "    {:<17} ", op.local_load_mnemonic()).unwrap();
-                Self::emit_vector_regs(s, dsts, op.lanes());
-                writeln!(s, ", [%rd6 + {offset}];").unwrap();
+                    op.local_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.local_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+            }
+            Inst::PredicatedLocalVectorMem {
+                op,
+                dsts,
+                srcs,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
+                Self::emit_vector_memory_store(
+                    s,
+                    op.local_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.local_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
             }
             Inst::SharedVectorMem {
                 op,
@@ -9177,17 +9463,62 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
-                write!(
+                Self::emit_vector_memory_store(
                     s,
-                    "    {:<17} [%rd6 + {offset}], ",
-                    op.shared_store_mnemonic()
+                    op.shared_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.shared_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    None,
+                );
+            }
+            Inst::PredicatedSharedVectorMem {
+                op,
+                dsts,
+                srcs,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
                 )
                 .unwrap();
-                Self::emit_vector_regs(s, srcs, op.lanes());
-                writeln!(s, ";").unwrap();
-                write!(s, "    {:<17} ", op.shared_load_mnemonic()).unwrap();
-                Self::emit_vector_regs(s, dsts, op.lanes());
-                writeln!(s, ", [%rd6 + {offset}];").unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                Self::emit_vector_memory_store(
+                    s,
+                    op.shared_store_mnemonic(),
+                    srcs,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
+                Self::emit_vector_memory_load(
+                    s,
+                    op.shared_load_mnemonic(),
+                    dsts,
+                    op.lanes(),
+                    "%rd6",
+                    offset,
+                    Some(pred),
+                );
             }
             Inst::F32Arith { op, dst, a, b, c } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
@@ -14871,7 +15202,13 @@ mod tests {
 
     fn body_vector_memory_access(line: &str) -> Option<(&str, &str, u32)> {
         let line = line.trim_start();
-        let mnemonic = line.split_whitespace().next()?;
+        let mut tokens = line.split_whitespace();
+        let first = tokens.next()?;
+        let mnemonic = if first.starts_with('@') {
+            tokens.next()?
+        } else {
+            first
+        };
         if !VECTOR_MEMORY_MNEMONICS.contains(&mnemonic) {
             return None;
         }
@@ -14977,6 +15314,13 @@ mod tests {
             || has_predicated_memory_access(ptx, LOCAL_MEM_STORE_MNEMONICS, "[%rd6 + ")
             || has_predicated_memory_access(ptx, SHARED_MEM_LOAD_MNEMONICS, "[%rd6 + ")
             || has_predicated_memory_access(ptx, SHARED_MEM_STORE_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd8 + ")
+    }
+
+    fn has_predicated_vector_memory_access(ptx: &str) -> bool {
+        has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd6 + ")
+            || has_predicated_memory_access(ptx, VECTOR_MEMORY_MNEMONICS, "[%rd8 + ")
     }
 
     fn has_negated_predicate(ptx: &str) -> bool {
@@ -17653,6 +17997,7 @@ mod tests {
         let mut saw_const = false;
         let mut saw_local = false;
         let mut saw_shared = false;
+        let mut saw_vector = false;
 
         for seed in 0..4096 {
             let bytes = bytes_from_seed(seed, 8192);
@@ -17665,16 +18010,28 @@ mod tests {
                 || has_predicated_memory_access(&ptx, LOCAL_MEM_STORE_MNEMONICS, "[%rd6 + ");
             saw_shared |= has_predicated_memory_access(&ptx, SHARED_MEM_LOAD_MNEMONICS, "[%rd6 + ")
                 || has_predicated_memory_access(&ptx, SHARED_MEM_STORE_MNEMONICS, "[%rd6 + ");
-            if saw_global_load && saw_global_roundtrip && saw_const && saw_local && saw_shared {
+            saw_vector |= has_predicated_vector_memory_access(&ptx);
+            if saw_global_load
+                && saw_global_roundtrip
+                && saw_const
+                && saw_local
+                && saw_shared
+                && saw_vector
+            {
                 return;
             }
         }
 
         assert!(
-            saw_global_load && saw_global_roundtrip && saw_const && saw_local && saw_shared,
+            saw_global_load
+                && saw_global_roundtrip
+                && saw_const
+                && saw_local
+                && saw_shared
+                && saw_vector,
             "sample missed predicated memory: global_load={saw_global_load} \
              global_roundtrip={saw_global_roundtrip} const={saw_const} \
-             local={saw_local} shared={saw_shared}"
+             local={saw_local} shared={saw_shared} vector={saw_vector}"
         );
     }
 
@@ -17703,6 +18060,21 @@ mod tests {
             4096,
             VECTOR_MEMORY_MNEMONICS,
         );
+    }
+
+    #[test]
+    fn predicated_vector_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_vector_memory_access(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated vector memory");
     }
 
     #[test]
