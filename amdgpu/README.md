@@ -48,9 +48,10 @@ Coverage includes scalar integer arithmetic, bitwise ops, compares/selects,
 rare signed division/remainder by proven-positive divisors,
 `i64` subexpressions truncated to `i32`, `<2 x i32>` / `<4 x i32>` vector
 subexpressions and narrow `<4/8 x i8>` / `<4/8 x i16>` vector subexpressions
-reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
-`i32`, and LLVM bit, min/max, saturation, absolute-value, funnel-shift, and
-integer overflow intrinsics. It also emits a small AMDGPU-specific pure
+reduced back to `i32`, vector forms of LLVM bit/min/max/saturation/absolute
+intrinsics, explicit `i1` boolean subexpressions reduced back to `i32`, and
+LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
+overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
 explicit `bitop3`, `readfirstlane`, wave reductions, and integer dot-product
@@ -172,6 +173,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
 | `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
 | `FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT=1` | unset | Re-enable `add(fshl(Y, x, 30), x)` shapes for [m034](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md). |
+| `FUZZX_ALLOW_M035_WAVE_REDUCE_XOR=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.xor` generation for [m035](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -243,6 +245,7 @@ Tested toolchains as of 2026-05-18:
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
 | [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |
+| [m035-wave-reduce-xor-constant](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` folds `llvm.amdgcn.wave.reduce.xor.i32(30, 0)` to `30` instead of the even-wave XOR result `0`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

@@ -1496,6 +1496,15 @@ bool triggersM034FshlAddWorkitemProduct(const Instruction &I) {
   return false;
 }
 
+bool triggersM035WaveReduceXor(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::amdgcn_wave_reduce_xor;
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1611,6 +1620,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
   bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
+  bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1648,6 +1658,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
               (!AllowM033 && triggersM033SubZExtBool(I)) ||
               (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
+              (!AllowM035 && triggersM035WaveReduceXor(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -1902,6 +1913,76 @@ Value *emitVectorBuild(IRBuilder<NoFolder> &B, Type *VecTy,
   return Result;
 }
 
+Value *emitRandomVectorIntrinsic(IRBuilder<NoFolder> &B, Module &M, Type *VecTy,
+                                 Value *VA, Value *VB,
+                                 std::minstd_rand &Gen,
+                                 StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  auto *ElemTy = cast<IntegerType>(cast<FixedVectorType>(VecTy)->getElementType());
+  bool AllowByteSwap = ElemTy->getBitWidth() >= 16;
+  unsigned Choice = Gen() % (AllowByteSwap ? 14 : 13);
+  if (!AllowByteSwap && Choice >= 2)
+    ++Choice;
+
+  Intrinsic::ID ID;
+  switch (Choice) {
+  case 0:
+    ID = Intrinsic::ctpop;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA}, Twine(NamePrefix) + ".ctpop");
+  case 1:
+    ID = Intrinsic::bitreverse;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA}, Twine(NamePrefix) + ".bitreverse");
+  case 2:
+    ID = Intrinsic::bswap;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA}, Twine(NamePrefix) + ".bswap");
+  case 3:
+    ID = Intrinsic::ctlz;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA, ConstantInt::getFalse(Ctx)},
+                        Twine(NamePrefix) + ".ctlz");
+  case 4:
+    ID = Intrinsic::cttz;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA, ConstantInt::getFalse(Ctx)},
+                        Twine(NamePrefix) + ".cttz");
+  case 5:
+    ID = Intrinsic::abs;
+    return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                        {VA, ConstantInt::getFalse(Ctx)},
+                        Twine(NamePrefix) + ".abs");
+  case 6:
+    ID = Intrinsic::umin;
+    break;
+  case 7:
+    ID = Intrinsic::umax;
+    break;
+  case 8:
+    ID = Intrinsic::smin;
+    break;
+  case 9:
+    ID = Intrinsic::smax;
+    break;
+  case 10:
+    ID = Intrinsic::uadd_sat;
+    break;
+  case 11:
+    ID = Intrinsic::usub_sat;
+    break;
+  case 12:
+    ID = Intrinsic::sadd_sat;
+    break;
+  default:
+    ID = Intrinsic::ssub_sat;
+    break;
+  }
+
+  return B.CreateCall(Intrinsic::getOrInsertDeclaration(&M, ID, {VecTy}),
+                      {VA, VB}, Twine(NamePrefix) + ".binary");
+}
+
 Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
                                    Value *Bv, std::minstd_rand &Gen) {
   LLVMContext &Ctx = M.getContext();
@@ -1921,7 +2002,7 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Value *VA = emitVectorBuild(B, VecTy, AElements);
   Value *VB = emitVectorBuild(B, VecTy, BElements);
   Value *Result = nullptr;
-  switch (Gen() % 11) {
+  switch (Gen() % 18) {
   case 0:
     Result = B.CreateAdd(VA, VB, "fuzz.vec.add");
     break;
@@ -1951,6 +2032,15 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 8:
     Result = B.CreateAShr(VA, randomShiftVector(Ctx, Lanes, Gen),
                           "fuzz.vec.ashr");
+    break;
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+  case 15:
+    Result = emitRandomVectorIntrinsic(B, M, VecTy, VA, VB, Gen, "fuzz.vec");
     break;
   default: {
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
@@ -2004,7 +2094,7 @@ Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
   Value *VA = emitVectorBuild(B, VecTy, AElements);
   Value *VB = emitVectorBuild(B, VecTy, BElements);
   Value *Result = nullptr;
-  switch (Gen() % 10) {
+  switch (Gen() % 17) {
   case 0:
     Result = B.CreateAdd(VA, VB, "fuzz.vec.narrow.add");
     break;
@@ -2034,6 +2124,15 @@ Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 8:
     Result = B.CreateAShr(VA, randomShiftVector(Ctx, ElemTy, Lanes, Width, Gen),
                           "fuzz.vec.narrow.ashr");
+    break;
+  case 9:
+  case 10:
+  case 11:
+  case 12:
+  case 13:
+  case 14:
+    Result = emitRandomVectorIntrinsic(B, M, VecTy, VA, VB, Gen,
+                                       "fuzz.vec.narrow");
     break;
   default: {
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
@@ -2784,11 +2883,14 @@ Value *emitRandomAMDGPUFPIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
 }
 
 Intrinsic::ID randomWaveReduceIntrinsic(std::minstd_rand &Gen) {
-  static constexpr std::array<Intrinsic::ID, 8> IDs = {
+  static constexpr std::array<Intrinsic::ID, 7> IDs = {
       Intrinsic::amdgcn_wave_reduce_umin, Intrinsic::amdgcn_wave_reduce_min,
       Intrinsic::amdgcn_wave_reduce_umax, Intrinsic::amdgcn_wave_reduce_max,
       Intrinsic::amdgcn_wave_reduce_add,  Intrinsic::amdgcn_wave_reduce_and,
-      Intrinsic::amdgcn_wave_reduce_or,   Intrinsic::amdgcn_wave_reduce_xor};
+      Intrinsic::amdgcn_wave_reduce_or};
+  if (envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false) &&
+      (Gen() % (IDs.size() + 1)) == IDs.size())
+    return Intrinsic::amdgcn_wave_reduce_xor;
   return IDs[Gen() % IDs.size()];
 }
 
