@@ -411,6 +411,12 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::usub_sat:
   case Intrinsic::sadd_sat:
   case Intrinsic::ssub_sat:
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+  case Intrinsic::umul_with_overflow:
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
+  case Intrinsic::smul_with_overflow:
   case Intrinsic::fshl:
   case Intrinsic::fshr:
     return true;
@@ -623,6 +629,41 @@ bool isValidVectorInstruction(const Instruction &I) {
   return true;
 }
 
+bool isOverflowIntrinsic(Intrinsic::ID ID) {
+  switch (ID) {
+  case Intrinsic::uadd_with_overflow:
+  case Intrinsic::usub_with_overflow:
+  case Intrinsic::umul_with_overflow:
+  case Intrinsic::sadd_with_overflow:
+  case Intrinsic::ssub_with_overflow:
+  case Intrinsic::smul_with_overflow:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool isValidAggregateInstruction(const Instruction &I) {
+  const auto *Extract = dyn_cast<ExtractValueInst>(&I);
+  if (!Extract)
+    return true;
+  if (Extract->getNumIndices() != 1)
+    return false;
+  const auto *Call = dyn_cast<CallInst>(Extract->getAggregateOperand());
+  if (!Call)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  if (!Callee || !Callee->isIntrinsic() ||
+      !isOverflowIntrinsic(Callee->getIntrinsicID()))
+    return false;
+  unsigned Index = *Extract->idx_begin();
+  if (Index == 0)
+    return Extract->getType()->isIntegerTy(32);
+  if (Index == 1)
+    return Extract->getType()->isIntegerTy(1);
+  return false;
+}
+
 bool isValidFPConversionInstruction(const Instruction &I) {
   const auto *UIToFP = dyn_cast<UIToFPInst>(&I);
   if (!UIToFP)
@@ -638,7 +679,7 @@ bool isValidFPConversionInstruction(const Instruction &I) {
 }
 
 bool isAllowedIRInstruction(const Instruction &I) {
-  if (isa<InsertElementInst, ExtractElementInst>(&I))
+  if (isa<InsertElementInst, ExtractElementInst, ExtractValueInst>(&I))
     return true;
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
@@ -1484,6 +1525,7 @@ bool validateIRCorpusModule(Module &M) {
         for (Instruction &I : BB)
           if (!isAllowedIRInstruction(I) ||
               !isValidVectorInstruction(I) ||
+              !isValidAggregateInstruction(I) ||
               !isValidFPConversionInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
               (!AllowM019 && triggersM019HighBitOrXor(I)) ||
@@ -2382,6 +2424,42 @@ Value *emitRandomFiniteSignedFPInstruction(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Intrinsic::ID randomOverflowIntrinsic(std::minstd_rand &Gen) {
+  static constexpr std::array<Intrinsic::ID, 6> IDs = {
+      Intrinsic::uadd_with_overflow, Intrinsic::usub_with_overflow,
+      Intrinsic::umul_with_overflow, Intrinsic::sadd_with_overflow,
+      Intrinsic::ssub_with_overflow, Intrinsic::smul_with_overflow};
+  return IDs[Gen() % IDs.size()];
+}
+
+Value *emitRandomOverflowInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                     Value *A, Value *Bv,
+                                     std::minstd_rand &Gen,
+                                     StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  FunctionCallee Fn =
+      Intrinsic::getOrInsertDeclaration(&M, randomOverflowIntrinsic(Gen), {I32});
+  Value *Pair = B.CreateCall(Fn, {A, Bv}, Twine(NamePrefix) + ".call");
+  Value *Result = B.CreateExtractValue(Pair, {0}, Twine(NamePrefix) + ".value");
+  Value *Overflow =
+      B.CreateExtractValue(Pair, {1}, Twine(NamePrefix) + ".overflow");
+  Value *OverflowI32 =
+      B.CreateZExt(Overflow, I32, Twine(NamePrefix) + ".overflow.i32");
+  switch (Gen() % 5) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateXor(Result, OverflowI32, Twine(NamePrefix) + ".xor");
+  case 2:
+    return B.CreateAdd(Result, OverflowI32, Twine(NamePrefix) + ".add");
+  case 3:
+    return B.CreateSub(Result, OverflowI32, Twine(NamePrefix) + ".sub");
+  default:
+    return B.CreateSelect(Overflow, Bv, Result, Twine(NamePrefix) + ".select");
+  }
+}
+
 Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
                                        Value *Bv, bool IsRem,
                                        StringRef NamePrefix) {
@@ -2448,7 +2526,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 82) {
+  switch (Gen() % 88) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -2606,6 +2684,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 66:
   case 67:
     return emitRandomFiniteHalfFPInstruction(B, A, Bv, Gen, "fuzz.fp16");
+  case 68:
+  case 69:
+  case 70:
+  case 71:
+  case 72:
+  case 73:
+    return emitRandomOverflowInstruction(B, M, A, Bv, Gen, "fuzz.overflow");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -2640,7 +2725,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 68) {
+  switch (Gen() % 74) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -2785,6 +2870,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 58:
   case 59:
     return emitRandomFiniteHalfFPInstruction(B, A, Bv, Gen, "fuzz.cfg.fp16");
+  case 60:
+  case 61:
+  case 62:
+  case 63:
+  case 64:
+  case 65:
+    return emitRandomOverflowInstruction(B, M, A, Bv, Gen,
+                                         "fuzz.cfg.overflow");
   default:
     switch (Gen() % 5) {
     case 0:

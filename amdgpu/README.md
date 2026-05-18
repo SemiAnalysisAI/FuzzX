@@ -49,8 +49,8 @@ rare signed division/remainder by proven-positive divisors,
 `i64` subexpressions truncated to `i32`, `<2 x i32>` / `<4 x i32>` vector
 subexpressions and narrow `<4/8 x i8>` / `<4/8 x i16>` vector subexpressions
 reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
-`i32`, and LLVM bit, min/max, saturation, absolute-value, and funnel-shift
-intrinsics. It also emits a finite scalar FP subset by masking
+`i32`, and LLVM bit, min/max, saturation, absolute-value, funnel-shift, and
+integer overflow intrinsics. It also emits a finite scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range
 `fptoui`; a signed variant uses small sign-extended integers, `sitofp`,
