@@ -97,9 +97,17 @@
 //!   DIV_DISABLE_PREDICATED_REG_SHIFTS default: false; set 1/true/yes/on to suppress
 //!                         predicated masked register-count shift generation
 //!   DIV_DISABLE_BFIND     default: false; set 1/true/yes/on to suppress
-//!                         PTX bfind.u32/bfind.shiftamt.u32 generation
+//!                         PTX bfind generation
+//!   DIV_DISABLE_SIGNED_BFIND default: false; set 1/true/yes/on to suppress
+//!                         PTX bfind.s32/bfind.shiftamt.s32 generation
+//!   DIV_DISABLE_WIDE_BFIND default: false; set 1/true/yes/on to suppress
+//!                         PTX bfind.{u64,s64}/bfind.shiftamt.{u64,s64} generation
+//!   DIV_DISABLE_SIGNED_WIDE_BFIND default: false; set 1/true/yes/on to suppress
+//!                         PTX bfind.s64/bfind.shiftamt.s64 generation
 //!   DIV_DISABLE_PREDICATED_BFIND default: false; set 1/true/yes/on to suppress
-//!                         predicated bfind.u32/bfind.shiftamt.u32 generation
+//!                         predicated bfind generation
+//!   DIV_DISABLE_PREDICATED_WIDE_BFIND default: false; set 1/true/yes/on to suppress
+//!                         predicated 64-bit bfind generation
 //!   DIV_DISABLE_BFI       default: false; set 1/true/yes/on to suppress
 //!                         PTX bfi.b32 generation
 //!   DIV_DISABLE_BMSK      default: false; set 1/true/yes/on to suppress
@@ -367,7 +375,15 @@ struct Args {
     #[arg(long)]
     disable_bfind: bool,
     #[arg(long)]
+    disable_signed_bfind: bool,
+    #[arg(long)]
+    disable_wide_bfind: bool,
+    #[arg(long)]
+    disable_signed_wide_bfind: bool,
+    #[arg(long)]
     disable_predicated_bfind: bool,
+    #[arg(long)]
+    disable_predicated_wide_bfind: bool,
     #[arg(long)]
     disable_bfi: bool,
     #[arg(long)]
@@ -561,9 +577,19 @@ impl Args {
             "DIV_DISABLE_PREDICATED_REG_SHIFTS"
         );
         set_bool!(self.disable_bfind, "DIV_DISABLE_BFIND");
+        set_bool!(self.disable_signed_bfind, "DIV_DISABLE_SIGNED_BFIND");
+        set_bool!(self.disable_wide_bfind, "DIV_DISABLE_WIDE_BFIND");
+        set_bool!(
+            self.disable_signed_wide_bfind,
+            "DIV_DISABLE_SIGNED_WIDE_BFIND"
+        );
         set_bool!(
             self.disable_predicated_bfind,
             "DIV_DISABLE_PREDICATED_BFIND"
+        );
+        set_bool!(
+            self.disable_predicated_wide_bfind,
+            "DIV_DISABLE_PREDICATED_WIDE_BFIND"
         );
         set_bool!(self.disable_bfi, "DIV_DISABLE_BFI");
         set_bool!(self.disable_bmsk, "DIV_DISABLE_BMSK");
@@ -764,7 +790,12 @@ impl Config {
         let disable_predicated_reg_shifts =
             env_bool("DIV_DISABLE_PREDICATED_REG_SHIFTS")?.unwrap_or(false);
         let disable_bfind = env_bool("DIV_DISABLE_BFIND")?.unwrap_or(false);
+        let disable_signed_bfind = env_bool("DIV_DISABLE_SIGNED_BFIND")?.unwrap_or(false);
+        let disable_wide_bfind = env_bool("DIV_DISABLE_WIDE_BFIND")?.unwrap_or(false);
+        let disable_signed_wide_bfind = env_bool("DIV_DISABLE_SIGNED_WIDE_BFIND")?.unwrap_or(false);
         let disable_predicated_bfind = env_bool("DIV_DISABLE_PREDICATED_BFIND")?.unwrap_or(false);
+        let disable_predicated_wide_bfind =
+            env_bool("DIV_DISABLE_PREDICATED_WIDE_BFIND")?.unwrap_or(false);
         let disable_bfi = env_bool("DIV_DISABLE_BFI")?.unwrap_or(false);
         let disable_bmsk = env_bool("DIV_DISABLE_BMSK")?.unwrap_or(false);
         let disable_predicated_bitfield =
@@ -874,7 +905,14 @@ impl Config {
                 && !disable_reg_shifts
                 && !disable_bitwise_binops,
             emit_bfind: !disable_bfind,
+            emit_signed_bfind: !disable_signed_bfind,
+            emit_wide_bfind: !disable_wide_bfind,
+            emit_signed_wide_bfind: !disable_signed_wide_bfind,
             emit_predicated_bfind: !disable_predicated_bfind && !disable_bfind,
+            emit_predicated_wide_bfind: !disable_predicated_wide_bfind
+                && !disable_predicated_bfind
+                && !disable_wide_bfind
+                && !disable_bfind,
             emit_bfi: !disable_bfi,
             emit_bmsk: !disable_bmsk,
             emit_predicated_bitfield: !disable_predicated_bitfield,
@@ -1112,7 +1150,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_predicated_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_predicated_mul_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1170,7 +1208,11 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_predicated_shifts,
         cfg.gen_config.emit_predicated_reg_shifts,
         cfg.gen_config.emit_bfind,
+        cfg.gen_config.emit_signed_bfind,
+        cfg.gen_config.emit_wide_bfind,
+        cfg.gen_config.emit_signed_wide_bfind,
         cfg.gen_config.emit_predicated_bfind,
+        cfg.gen_config.emit_predicated_wide_bfind,
         cfg.gen_config.emit_bfi,
         cfg.gen_config.emit_bmsk,
         cfg.gen_config.emit_predicated_bitfield,

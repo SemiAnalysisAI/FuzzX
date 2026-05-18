@@ -253,8 +253,12 @@ that feature.
 | `DIV_DISABLE_REG_SHIFTS` | Masked register-count shifts. |
 | `DIV_DISABLE_PREDICATED_SHIFTS` | Predicated immediate-count shifts. |
 | `DIV_DISABLE_PREDICATED_REG_SHIFTS` | Predicated masked register-count shifts. |
-| `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
-| `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind.u32` and `bfind.shiftamt.u32`. |
+| `DIV_DISABLE_BFIND` | `bfind` and `bfind.shiftamt` instructions. |
+| `DIV_DISABLE_SIGNED_BFIND` | `bfind.s32` and `bfind.shiftamt.s32`. |
+| `DIV_DISABLE_WIDE_BFIND` | 64-bit-source `bfind` and `bfind.shiftamt` instructions. |
+| `DIV_DISABLE_SIGNED_WIDE_BFIND` | `bfind.s64` and `bfind.shiftamt.s64`. |
+| `DIV_DISABLE_PREDICATED_BFIND` | Predicated `bfind` and `bfind.shiftamt` instructions. |
+| `DIV_DISABLE_PREDICATED_WIDE_BFIND` | Predicated 64-bit-source `bfind` and `bfind.shiftamt` instructions. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
 | `DIV_DISABLE_PREDICATED_BITFIELD` | Predicated `bfe`, `bfi`, and `bmsk` instructions. |

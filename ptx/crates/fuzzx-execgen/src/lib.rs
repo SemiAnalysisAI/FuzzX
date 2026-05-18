@@ -91,7 +91,11 @@ pub struct GenConfig {
     pub emit_predicated_shifts: bool,
     pub emit_predicated_reg_shifts: bool,
     pub emit_bfind: bool,
+    pub emit_signed_bfind: bool,
+    pub emit_wide_bfind: bool,
+    pub emit_signed_wide_bfind: bool,
     pub emit_predicated_bfind: bool,
+    pub emit_predicated_wide_bfind: bool,
     pub emit_bfi: bool,
     pub emit_bmsk: bool,
     pub emit_predicated_bitfield: bool,
@@ -204,7 +208,11 @@ impl Default for GenConfig {
             emit_predicated_shifts: true,
             emit_predicated_reg_shifts: true,
             emit_bfind: true,
+            emit_signed_bfind: true,
+            emit_wide_bfind: true,
+            emit_signed_wide_bfind: true,
             emit_predicated_bfind: true,
+            emit_predicated_wide_bfind: true,
             emit_bfi: true,
             emit_bmsk: true,
             emit_predicated_bitfield: true,
@@ -422,15 +430,44 @@ impl CvtOp {
 
 #[derive(Clone, Copy)]
 enum BfindOp {
-    Position,
-    ShiftAmount,
+    PositionU32,
+    ShiftAmountU32,
+    PositionS32,
+    ShiftAmountS32,
+    PositionU64,
+    ShiftAmountU64,
+    PositionS64,
+    ShiftAmountS64,
 }
 
 impl BfindOp {
     fn mnemonic(self) -> &'static str {
         match self {
-            BfindOp::Position => "bfind.u32",
-            BfindOp::ShiftAmount => "bfind.shiftamt.u32",
+            BfindOp::PositionU32 => "bfind.u32",
+            BfindOp::ShiftAmountU32 => "bfind.shiftamt.u32",
+            BfindOp::PositionS32 => "bfind.s32",
+            BfindOp::ShiftAmountS32 => "bfind.shiftamt.s32",
+            BfindOp::PositionU64 => "bfind.u64",
+            BfindOp::ShiftAmountU64 => "bfind.shiftamt.u64",
+            BfindOp::PositionS64 => "bfind.s64",
+            BfindOp::ShiftAmountS64 => "bfind.shiftamt.s64",
+        }
+    }
+
+    fn is_wide(self) -> bool {
+        matches!(
+            self,
+            BfindOp::PositionU64
+                | BfindOp::ShiftAmountU64
+                | BfindOp::PositionS64
+                | BfindOp::ShiftAmountS64
+        )
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            BfindOp::PositionS64 | BfindOp::ShiftAmountS64 => "cvt.s64.s32",
+            _ => "cvt.u64.u32",
         }
     }
 }
@@ -2639,9 +2676,17 @@ impl<'a> Generator<'a> {
                     })
                 }
             } else if self.cfg.emit_bfind {
-                if self.cfg.emit_predicated_bfind && u.arbitrary::<bool>()? {
+                let op = pick_bfind(
+                    u,
+                    self.cfg.emit_signed_bfind,
+                    self.cfg.emit_wide_bfind,
+                    self.cfg.emit_signed_wide_bfind,
+                )?;
+                let can_predicate = self.cfg.emit_predicated_bfind
+                    && (!op.is_wide() || self.cfg.emit_predicated_wide_bfind);
+                if can_predicate && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedBfind {
-                        op: pick_bfind(u)?,
+                        op,
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
@@ -2651,7 +2696,7 @@ impl<'a> Generator<'a> {
                     })
                 } else {
                     Ok(Inst::Bfind {
-                        op: pick_bfind(u)?,
+                        op,
                         dst: self.pick_dst(u)?,
                         src: self.pick_operand(u)?,
                     })
@@ -3657,9 +3702,16 @@ impl<'a> Generator<'a> {
                 writeln!(s, ";").unwrap();
             }
             Inst::Bfind { op, dst, src } => {
-                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
-                src.emit(s);
-                writeln!(s, ";").unwrap();
+                if op.is_wide() {
+                    write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                    src.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(s, "    {:<13} %r{dst}, %rd6;", op.mnemonic()).unwrap();
+                } else {
+                    write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                    src.emit(s);
+                    writeln!(s, ";").unwrap();
+                }
             }
             Inst::PredicatedBfind {
                 op,
@@ -3671,9 +3723,22 @@ impl<'a> Generator<'a> {
                 pred,
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
-                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
-                src.emit(s);
-                writeln!(s, ";").unwrap();
+                if op.is_wide() {
+                    write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                    src.emit(s);
+                    writeln!(s, ";").unwrap();
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %rd6;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                    src.emit(s);
+                    writeln!(s, ";").unwrap();
+                }
             }
             Inst::DivRem {
                 op,
@@ -4841,8 +4906,59 @@ fn pick_cvt(u: &mut Unstructured) -> Result<CvtOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_bfind(u: &mut Unstructured) -> Result<BfindOp> {
-    let ops = [BfindOp::Position, BfindOp::ShiftAmount];
+fn pick_bfind(
+    u: &mut Unstructured,
+    emit_signed_bfind: bool,
+    emit_wide_bfind: bool,
+    emit_signed_wide_bfind: bool,
+) -> Result<BfindOp> {
+    let u32_ops = [BfindOp::PositionU32, BfindOp::ShiftAmountU32];
+    let all_32_ops = [
+        BfindOp::PositionU32,
+        BfindOp::ShiftAmountU32,
+        BfindOp::PositionS32,
+        BfindOp::ShiftAmountS32,
+    ];
+    let u32_u64_ops = [
+        BfindOp::PositionU32,
+        BfindOp::ShiftAmountU32,
+        BfindOp::PositionU64,
+        BfindOp::ShiftAmountU64,
+    ];
+    let all_32_u64_ops = [
+        BfindOp::PositionU32,
+        BfindOp::ShiftAmountU32,
+        BfindOp::PositionS32,
+        BfindOp::ShiftAmountS32,
+        BfindOp::PositionU64,
+        BfindOp::ShiftAmountU64,
+    ];
+    let u32_all_64_ops = [
+        BfindOp::PositionU32,
+        BfindOp::ShiftAmountU32,
+        BfindOp::PositionU64,
+        BfindOp::ShiftAmountU64,
+        BfindOp::PositionS64,
+        BfindOp::ShiftAmountS64,
+    ];
+    let all_ops = [
+        BfindOp::PositionU32,
+        BfindOp::ShiftAmountU32,
+        BfindOp::PositionS32,
+        BfindOp::ShiftAmountS32,
+        BfindOp::PositionU64,
+        BfindOp::ShiftAmountU64,
+        BfindOp::PositionS64,
+        BfindOp::ShiftAmountS64,
+    ];
+    let ops: &[BfindOp] = match (emit_signed_bfind, emit_wide_bfind, emit_signed_wide_bfind) {
+        (false, false, _) => &u32_ops,
+        (true, false, _) => &all_32_ops,
+        (false, true, false) => &u32_u64_ops,
+        (true, true, false) => &all_32_u64_ops,
+        (false, true, true) => &u32_all_64_ops,
+        (true, true, true) => &all_ops,
+    };
     Ok(*u.choose(&ops)?)
 }
 
@@ -5212,7 +5328,24 @@ mod tests {
         "cvt.s32.s8",
         "cvt.s32.s16",
     ];
-    const BFIND_MNEMONICS: &[&str] = &["bfind.u32", "bfind.shiftamt.u32"];
+    const BFIND_MNEMONICS: &[&str] = &[
+        "bfind.u32",
+        "bfind.shiftamt.u32",
+        "bfind.s32",
+        "bfind.shiftamt.s32",
+        "bfind.u64",
+        "bfind.shiftamt.u64",
+        "bfind.s64",
+        "bfind.shiftamt.s64",
+    ];
+    const SIGNED_BFIND_MNEMONICS: &[&str] = &["bfind.s32", "bfind.shiftamt.s32"];
+    const WIDE_BFIND_MNEMONICS: &[&str] = &[
+        "bfind.u64",
+        "bfind.shiftamt.u64",
+        "bfind.s64",
+        "bfind.shiftamt.s64",
+    ];
+    const SIGNED_WIDE_BFIND_MNEMONICS: &[&str] = &["bfind.s64", "bfind.shiftamt.s64"];
     const BFE_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32"];
     const BITFIELD_MNEMONICS: &[&str] = &["bfe.u32", "bfe.s32", "bfi.b32", "bmsk.clamp.b32"];
     const DIVREM_MNEMONICS: &[&str] = &["div.u32", "rem.u32", "div.s32", "rem.s32"];
@@ -5563,6 +5696,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| BFIND_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_bfind(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_BFIND_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_mad(ptx: &str) -> bool {
@@ -6992,7 +7131,7 @@ mod tests {
         for seed in 0..256 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in ["bfind.u32", "bfind.shiftamt.u32"] {
+            for mnemonic in BFIND_MNEMONICS {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
         }
@@ -8363,16 +8502,69 @@ mod tests {
 
     #[test]
     fn bfind_generation_is_reachable() {
-        let mut saw_bfind = false;
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, BFIND_MNEMONICS);
+    }
+
+    #[test]
+    fn signed_bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_bfind: false,
+            ..GenConfig::default()
+        };
+
         for seed in 0..1024 {
             let bytes = bytes_from_seed(seed, 4096);
-            let ptx = generate_from_bytes(&bytes).unwrap();
-            if ptx.contains("bfind.") {
-                saw_bfind = true;
-                break;
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_BFIND_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
             }
         }
-        assert!(saw_bfind, "no seed in sample emitted bfind");
+    }
+
+    #[test]
+    fn wide_bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_bfind: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_BFIND_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_wide_bfind(&ptx),
+                "seed {seed:x} emitted predicated wide bfind"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_wide_bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_bfind: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_WIDE_BFIND_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -8417,6 +8609,23 @@ mod tests {
             assert!(
                 !has_predicated_bfind(&ptx),
                 "seed {seed:x} emitted predicated bfind"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_wide_bfind_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_bfind: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_bfind(&ptx),
+                "seed {seed:x} emitted predicated wide bfind"
             );
         }
     }
