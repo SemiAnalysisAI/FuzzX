@@ -113,6 +113,7 @@ pub struct GenConfig {
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
+    pub emit_setp_bool: bool,
     pub emit_predicated_mad: bool,
     pub emit_predicated_mad_hi: bool,
     pub emit_predicated_set: bool,
@@ -211,6 +212,7 @@ impl Default for GenConfig {
             emit_predicated_alu: true,
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
+            emit_setp_bool: true,
             emit_predicated_mad: true,
             emit_predicated_mad_hi: true,
             emit_predicated_set: true,
@@ -752,6 +754,39 @@ impl CmpOp {
             CmpOp::GeS => "set.ge.u32.s32",
         }
     }
+
+    fn setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
+        let suffix = op.suffix();
+        match self {
+            CmpOp::Eq => format!("setp.eq.{suffix}.u32"),
+            CmpOp::Ne => format!("setp.ne.{suffix}.u32"),
+            CmpOp::Lt => format!("setp.lt.{suffix}.u32"),
+            CmpOp::Le => format!("setp.le.{suffix}.u32"),
+            CmpOp::Gt => format!("setp.gt.{suffix}.u32"),
+            CmpOp::Ge => format!("setp.ge.{suffix}.u32"),
+            CmpOp::LtS => format!("setp.lt.{suffix}.s32"),
+            CmpOp::LeS => format!("setp.le.{suffix}.s32"),
+            CmpOp::GtS => format!("setp.gt.{suffix}.s32"),
+            CmpOp::GeS => format!("setp.ge.{suffix}.s32"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PredicateBoolOp {
+    And,
+    Or,
+    Xor,
+}
+
+impl PredicateBoolOp {
+    fn suffix(self) -> &'static str {
+        match self {
+            PredicateBoolOp::And => "and",
+            PredicateBoolOp::Or => "or",
+            PredicateBoolOp::Xor => "xor",
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -850,6 +885,22 @@ enum Inst {
         ca: Operand,
         cb: Operand,
         pred: u32,
+    },
+    /// `setp` + `setp.<cmp>.<bool>` feeding a guarded ALU instruction.
+    SetpBoolBin {
+        bool_op: PredicateBoolOp,
+        base_cmp: CmpOp,
+        base_a: Operand,
+        base_b: Operand,
+        cmp: CmpOp,
+        cmp_a: Operand,
+        cmp_b: Operand,
+        base_pred: u32,
+        guard_pred: u32,
+        op: BinOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred <shift> dst, src, imm;`.
     PredicatedShift {
@@ -1655,6 +1706,37 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_setp_bool_bin(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_binop(
+            u,
+            self.cfg.emit_minmax,
+            self.cfg.emit_sub,
+            self.cfg.emit_mul_lo,
+            self.cfg.emit_signed_lo_alu,
+            self.cfg.emit_sat_arith,
+            self.cfg.emit_mulhi,
+            self.cfg.emit_signed_mulhi,
+            self.cfg.emit_bitwise_binops,
+            self.cfg.emit_or,
+            self.cfg.emit_xor,
+        )?;
+        Ok(Inst::SetpBoolBin {
+            bool_op: pick_predicate_bool_op(u)?,
+            base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            base_a: self.pick_guard_operand(u)?,
+            base_b: self.pick_guard_operand(u)?,
+            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            cmp_a: self.pick_guard_operand(u)?,
+            cmp_b: self.pick_guard_operand(u)?,
+            base_pred: self.alloc_pred(),
+            guard_pred: self.alloc_inst_pred(u)?,
+            op,
+            dst: self.pick_dst(u)?,
+            a: self.pick_bin_operand(u, op)?,
+            b: self.pick_bin_operand(u, op)?,
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -1697,7 +1779,9 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            if self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+                self.pick_setp_bool_bin(u)
+            } else if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
                 let op = pick_binop(
                     u,
                     self.cfg.emit_minmax,
@@ -2403,6 +2487,7 @@ impl<'a> Generator<'a> {
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
+            | Inst::SetpBoolBin { dst, .. }
             | Inst::PredicatedShift { dst, .. }
             | Inst::Shift { dst, .. }
             | Inst::RegShift { dst, .. }
@@ -2773,6 +2858,44 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::SetpBoolBin {
+                bool_op,
+                base_cmp,
+                base_a,
+                base_b,
+                cmp,
+                cmp_a,
+                cmp_b,
+                base_pred,
+                guard_pred,
+                op,
+                dst,
+                a,
+                b,
+            } => {
+                write!(s, "    {:<13} %p{base_pred}, ", base_cmp.mnemonic()).unwrap();
+                base_a.emit(s);
+                write!(s, ", ").unwrap();
+                base_b.emit(s);
+                writeln!(s, ";").unwrap();
+                let mnemonic = cmp.setp_bool_mnemonic(bool_op);
+                write!(s, "    {mnemonic:<13} %p{}, ", pred_id(guard_pred)).unwrap();
+                cmp_a.emit(s);
+                write!(s, ", ").unwrap();
+                cmp_b.emit(s);
+                writeln!(s, ", %p{base_pred};").unwrap();
+                write!(
+                    s,
+                    "    {} {:<8} %r{dst}, ",
+                    pred_guard(guard_pred),
+                    op.mnemonic()
+                )
+                .unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -3742,6 +3865,15 @@ fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_predicate_bool_op(u: &mut Unstructured) -> Result<PredicateBoolOp> {
+    let ops = [
+        PredicateBoolOp::And,
+        PredicateBoolOp::Or,
+        PredicateBoolOp::Xor,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_shift(
     u: &mut Unstructured,
     emit_shl: bool,
@@ -4377,6 +4509,26 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| BIN_MNEMONICS.contains(&op))
+    }
+
+    fn setp_bool_suffix(line: &str) -> Option<&'static str> {
+        let op = line.trim_start().split_whitespace().next()?;
+        if !op.starts_with("setp.") {
+            return None;
+        }
+        if op.contains(".and.") {
+            Some("and")
+        } else if op.contains(".or.") {
+            Some("or")
+        } else if op.contains(".xor.") {
+            Some("xor")
+        } else {
+            None
+        }
+    }
+
+    fn has_setp_bool(ptx: &str) -> bool {
+        ptx.lines().any(|line| setp_bool_suffix(line).is_some())
     }
 
     fn has_predicated_shift(ptx: &str) -> bool {
@@ -7507,6 +7659,50 @@ mod tests {
             assert!(
                 !has_predicated_alu(&ptx),
                 "seed {seed:x} emitted predicated ALU"
+            );
+        }
+    }
+
+    #[test]
+    fn setp_bool_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw = [false; 3];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for suffix in ptx.lines().filter_map(setp_bool_suffix) {
+                match suffix {
+                    "and" => saw[0] = true,
+                    "or" => saw[1] = true,
+                    "xor" => saw[2] = true,
+                    _ => {}
+                }
+            }
+            if saw.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        assert!(
+            saw.iter().all(|seen| *seen),
+            "sample emitted setp bool ops {saw:?}"
+        );
+    }
+
+    #[test]
+    fn setp_bool_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_setp_bool: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_setp_bool(&ptx),
+                "seed {seed:x} emitted setp bool combiner"
             );
         }
     }
