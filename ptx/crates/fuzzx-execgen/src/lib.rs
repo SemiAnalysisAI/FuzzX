@@ -992,18 +992,38 @@ enum F32RoundingArithOp {
     AddRz,
     AddRm,
     AddRp,
+    AddRnFtz,
+    AddRzFtz,
+    AddRmFtz,
+    AddRpFtz,
     SubRz,
     SubRm,
     SubRp,
+    SubRnFtz,
+    SubRzFtz,
+    SubRmFtz,
+    SubRpFtz,
     MulRz,
     MulRm,
     MulRp,
+    MulRnFtz,
+    MulRzFtz,
+    MulRmFtz,
+    MulRpFtz,
     DivRz,
     DivRm,
     DivRp,
+    DivRnFtz,
+    DivRzFtz,
+    DivRmFtz,
+    DivRpFtz,
     FmaRz,
     FmaRm,
     FmaRp,
+    FmaRnFtz,
+    FmaRzFtz,
+    FmaRmFtz,
+    FmaRpFtz,
 }
 
 impl F32RoundingArithOp {
@@ -1012,32 +1032,64 @@ impl F32RoundingArithOp {
             F32RoundingArithOp::AddRz => "add.rz.f32",
             F32RoundingArithOp::AddRm => "add.rm.f32",
             F32RoundingArithOp::AddRp => "add.rp.f32",
+            F32RoundingArithOp::AddRnFtz => "add.rn.ftz.f32",
+            F32RoundingArithOp::AddRzFtz => "add.rz.ftz.f32",
+            F32RoundingArithOp::AddRmFtz => "add.rm.ftz.f32",
+            F32RoundingArithOp::AddRpFtz => "add.rp.ftz.f32",
             F32RoundingArithOp::SubRz => "sub.rz.f32",
             F32RoundingArithOp::SubRm => "sub.rm.f32",
             F32RoundingArithOp::SubRp => "sub.rp.f32",
+            F32RoundingArithOp::SubRnFtz => "sub.rn.ftz.f32",
+            F32RoundingArithOp::SubRzFtz => "sub.rz.ftz.f32",
+            F32RoundingArithOp::SubRmFtz => "sub.rm.ftz.f32",
+            F32RoundingArithOp::SubRpFtz => "sub.rp.ftz.f32",
             F32RoundingArithOp::MulRz => "mul.rz.f32",
             F32RoundingArithOp::MulRm => "mul.rm.f32",
             F32RoundingArithOp::MulRp => "mul.rp.f32",
+            F32RoundingArithOp::MulRnFtz => "mul.rn.ftz.f32",
+            F32RoundingArithOp::MulRzFtz => "mul.rz.ftz.f32",
+            F32RoundingArithOp::MulRmFtz => "mul.rm.ftz.f32",
+            F32RoundingArithOp::MulRpFtz => "mul.rp.ftz.f32",
             F32RoundingArithOp::DivRz => "div.rz.f32",
             F32RoundingArithOp::DivRm => "div.rm.f32",
             F32RoundingArithOp::DivRp => "div.rp.f32",
+            F32RoundingArithOp::DivRnFtz => "div.rn.ftz.f32",
+            F32RoundingArithOp::DivRzFtz => "div.rz.ftz.f32",
+            F32RoundingArithOp::DivRmFtz => "div.rm.ftz.f32",
+            F32RoundingArithOp::DivRpFtz => "div.rp.ftz.f32",
             F32RoundingArithOp::FmaRz => "fma.rz.f32",
             F32RoundingArithOp::FmaRm => "fma.rm.f32",
             F32RoundingArithOp::FmaRp => "fma.rp.f32",
+            F32RoundingArithOp::FmaRnFtz => "fma.rn.ftz.f32",
+            F32RoundingArithOp::FmaRzFtz => "fma.rz.ftz.f32",
+            F32RoundingArithOp::FmaRmFtz => "fma.rm.ftz.f32",
+            F32RoundingArithOp::FmaRpFtz => "fma.rp.ftz.f32",
         }
     }
 
     fn uses_c(self) -> bool {
         matches!(
             self,
-            F32RoundingArithOp::FmaRz | F32RoundingArithOp::FmaRm | F32RoundingArithOp::FmaRp
+            F32RoundingArithOp::FmaRz
+                | F32RoundingArithOp::FmaRm
+                | F32RoundingArithOp::FmaRp
+                | F32RoundingArithOp::FmaRnFtz
+                | F32RoundingArithOp::FmaRzFtz
+                | F32RoundingArithOp::FmaRmFtz
+                | F32RoundingArithOp::FmaRpFtz
         )
     }
 
     fn needs_positive_b(self) -> bool {
         matches!(
             self,
-            F32RoundingArithOp::DivRz | F32RoundingArithOp::DivRm | F32RoundingArithOp::DivRp
+            F32RoundingArithOp::DivRz
+                | F32RoundingArithOp::DivRm
+                | F32RoundingArithOp::DivRp
+                | F32RoundingArithOp::DivRnFtz
+                | F32RoundingArithOp::DivRzFtz
+                | F32RoundingArithOp::DivRmFtz
+                | F32RoundingArithOp::DivRpFtz
         )
     }
 }
@@ -1159,10 +1211,18 @@ enum F32SpecialMathOp {
     SqrtRz,
     SqrtRm,
     SqrtRp,
+    SqrtRnFtz,
+    SqrtRzFtz,
+    SqrtRmFtz,
+    SqrtRpFtz,
     RcpRn,
     RcpRz,
     RcpRm,
     RcpRp,
+    RcpRnFtz,
+    RcpRzFtz,
+    RcpRmFtz,
+    RcpRpFtz,
     RcpApprox,
     RsqrtApprox,
     Ex2Approx,
@@ -1178,10 +1238,18 @@ impl F32SpecialMathOp {
             F32SpecialMathOp::SqrtRz => "sqrt.rz.f32",
             F32SpecialMathOp::SqrtRm => "sqrt.rm.f32",
             F32SpecialMathOp::SqrtRp => "sqrt.rp.f32",
+            F32SpecialMathOp::SqrtRnFtz => "sqrt.rn.ftz.f32",
+            F32SpecialMathOp::SqrtRzFtz => "sqrt.rz.ftz.f32",
+            F32SpecialMathOp::SqrtRmFtz => "sqrt.rm.ftz.f32",
+            F32SpecialMathOp::SqrtRpFtz => "sqrt.rp.ftz.f32",
             F32SpecialMathOp::RcpRn => "rcp.rn.f32",
             F32SpecialMathOp::RcpRz => "rcp.rz.f32",
             F32SpecialMathOp::RcpRm => "rcp.rm.f32",
             F32SpecialMathOp::RcpRp => "rcp.rp.f32",
+            F32SpecialMathOp::RcpRnFtz => "rcp.rn.ftz.f32",
+            F32SpecialMathOp::RcpRzFtz => "rcp.rz.ftz.f32",
+            F32SpecialMathOp::RcpRmFtz => "rcp.rm.ftz.f32",
+            F32SpecialMathOp::RcpRpFtz => "rcp.rp.ftz.f32",
             F32SpecialMathOp::RcpApprox => "rcp.approx.ftz.f32",
             F32SpecialMathOp::RsqrtApprox => "rsqrt.approx.ftz.f32",
             F32SpecialMathOp::Ex2Approx => "ex2.approx.ftz.f32",
@@ -1196,11 +1264,19 @@ impl F32SpecialMathOp {
             F32SpecialMathOp::SqrtRn
             | F32SpecialMathOp::SqrtRz
             | F32SpecialMathOp::SqrtRm
-            | F32SpecialMathOp::SqrtRp => FloatInputDomain::NonNegative,
+            | F32SpecialMathOp::SqrtRp
+            | F32SpecialMathOp::SqrtRnFtz
+            | F32SpecialMathOp::SqrtRzFtz
+            | F32SpecialMathOp::SqrtRmFtz
+            | F32SpecialMathOp::SqrtRpFtz => FloatInputDomain::NonNegative,
             F32SpecialMathOp::RcpRn
             | F32SpecialMathOp::RcpRz
             | F32SpecialMathOp::RcpRm
             | F32SpecialMathOp::RcpRp
+            | F32SpecialMathOp::RcpRnFtz
+            | F32SpecialMathOp::RcpRzFtz
+            | F32SpecialMathOp::RcpRmFtz
+            | F32SpecialMathOp::RcpRpFtz
             | F32SpecialMathOp::RcpApprox
             | F32SpecialMathOp::RsqrtApprox
             | F32SpecialMathOp::Lg2Approx => FloatInputDomain::Positive,
@@ -5503,18 +5579,38 @@ impl<'a> Generator<'a> {
             F32RoundingArithOp::AddRz,
             F32RoundingArithOp::AddRm,
             F32RoundingArithOp::AddRp,
+            F32RoundingArithOp::AddRnFtz,
+            F32RoundingArithOp::AddRzFtz,
+            F32RoundingArithOp::AddRmFtz,
+            F32RoundingArithOp::AddRpFtz,
             F32RoundingArithOp::SubRz,
             F32RoundingArithOp::SubRm,
             F32RoundingArithOp::SubRp,
+            F32RoundingArithOp::SubRnFtz,
+            F32RoundingArithOp::SubRzFtz,
+            F32RoundingArithOp::SubRmFtz,
+            F32RoundingArithOp::SubRpFtz,
             F32RoundingArithOp::MulRz,
             F32RoundingArithOp::MulRm,
             F32RoundingArithOp::MulRp,
+            F32RoundingArithOp::MulRnFtz,
+            F32RoundingArithOp::MulRzFtz,
+            F32RoundingArithOp::MulRmFtz,
+            F32RoundingArithOp::MulRpFtz,
             F32RoundingArithOp::DivRz,
             F32RoundingArithOp::DivRm,
             F32RoundingArithOp::DivRp,
+            F32RoundingArithOp::DivRnFtz,
+            F32RoundingArithOp::DivRzFtz,
+            F32RoundingArithOp::DivRmFtz,
+            F32RoundingArithOp::DivRpFtz,
             F32RoundingArithOp::FmaRz,
             F32RoundingArithOp::FmaRm,
             F32RoundingArithOp::FmaRp,
+            F32RoundingArithOp::FmaRnFtz,
+            F32RoundingArithOp::FmaRzFtz,
+            F32RoundingArithOp::FmaRmFtz,
+            F32RoundingArithOp::FmaRpFtz,
         ];
         let op = *u.choose(&ops)?;
         if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
@@ -5646,10 +5742,18 @@ impl<'a> Generator<'a> {
             F32SpecialMathOp::SqrtRz,
             F32SpecialMathOp::SqrtRm,
             F32SpecialMathOp::SqrtRp,
+            F32SpecialMathOp::SqrtRnFtz,
+            F32SpecialMathOp::SqrtRzFtz,
+            F32SpecialMathOp::SqrtRmFtz,
+            F32SpecialMathOp::SqrtRpFtz,
             F32SpecialMathOp::RcpRn,
             F32SpecialMathOp::RcpRz,
             F32SpecialMathOp::RcpRm,
             F32SpecialMathOp::RcpRp,
+            F32SpecialMathOp::RcpRnFtz,
+            F32SpecialMathOp::RcpRzFtz,
+            F32SpecialMathOp::RcpRmFtz,
+            F32SpecialMathOp::RcpRpFtz,
             F32SpecialMathOp::RcpApprox,
             F32SpecialMathOp::RsqrtApprox,
             F32SpecialMathOp::Ex2Approx,
@@ -12714,18 +12818,38 @@ mod tests {
         "add.rz.f32",
         "add.rm.f32",
         "add.rp.f32",
+        "add.rn.ftz.f32",
+        "add.rz.ftz.f32",
+        "add.rm.ftz.f32",
+        "add.rp.ftz.f32",
         "sub.rz.f32",
         "sub.rm.f32",
         "sub.rp.f32",
+        "sub.rn.ftz.f32",
+        "sub.rz.ftz.f32",
+        "sub.rm.ftz.f32",
+        "sub.rp.ftz.f32",
         "mul.rz.f32",
         "mul.rm.f32",
         "mul.rp.f32",
+        "mul.rn.ftz.f32",
+        "mul.rz.ftz.f32",
+        "mul.rm.ftz.f32",
+        "mul.rp.ftz.f32",
         "div.rz.f32",
         "div.rm.f32",
         "div.rp.f32",
+        "div.rn.ftz.f32",
+        "div.rz.ftz.f32",
+        "div.rm.ftz.f32",
+        "div.rp.ftz.f32",
         "fma.rz.f32",
         "fma.rm.f32",
         "fma.rp.f32",
+        "fma.rn.ftz.f32",
+        "fma.rz.ftz.f32",
+        "fma.rm.ftz.f32",
+        "fma.rp.ftz.f32",
     ];
     const F32_UNARY_MNEMONICS: &[&str] = &["abs.f32", "neg.f32"];
     const F32_CVT_MNEMONICS: &[&str] = &[
@@ -12791,10 +12915,18 @@ mod tests {
         "sqrt.rz.f32",
         "sqrt.rm.f32",
         "sqrt.rp.f32",
+        "sqrt.rn.ftz.f32",
+        "sqrt.rz.ftz.f32",
+        "sqrt.rm.ftz.f32",
+        "sqrt.rp.ftz.f32",
         "rcp.rn.f32",
         "rcp.rz.f32",
         "rcp.rm.f32",
         "rcp.rp.f32",
+        "rcp.rn.ftz.f32",
+        "rcp.rz.ftz.f32",
+        "rcp.rm.ftz.f32",
+        "rcp.rp.ftz.f32",
         "rcp.approx.ftz.f32",
         "rsqrt.approx.ftz.f32",
         "ex2.approx.ftz.f32",
@@ -16581,7 +16713,12 @@ mod tests {
 
     #[test]
     fn f32_rounding_generation_is_reachable() {
-        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F32_ROUNDING_MNEMONICS);
+        assert_mnemonic_coverage(
+            &coverage_heavy_config(),
+            16384,
+            8192,
+            F32_ROUNDING_MNEMONICS,
+        );
     }
 
     #[test]
@@ -16591,7 +16728,7 @@ mod tests {
             emit_f64_rounding: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 16384, 8192, F32_ROUNDING_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F32_ROUNDING_MNEMONICS);
     }
 
     #[test]
@@ -16711,8 +16848,8 @@ mod tests {
     fn f32_special_math_generation_is_reachable() {
         assert_mnemonic_coverage(
             &coverage_heavy_config(),
+            16384,
             8192,
-            4096,
             F32_SPECIAL_MATH_MNEMONICS,
         );
     }
@@ -16723,7 +16860,7 @@ mod tests {
             emit_f64_special_math: false,
             ..coverage_heavy_config()
         };
-        assert_predicated_mnemonic_coverage(&cfg, 32768, 8192, F32_SPECIAL_MATH_MNEMONICS);
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 16384, F32_SPECIAL_MATH_MNEMONICS);
     }
 
     #[test]

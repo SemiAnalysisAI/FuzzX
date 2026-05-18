@@ -273,10 +273,10 @@ that feature.
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded memory loads and store/load roundtrips. |
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division. |
-| `DIV_DISABLE_F32_ROUNDING` | Sanitized `.rz/.rm/.rp` f32 add/sub/mul/div/fma arithmetic. |
+| `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs.f32` and `neg.f32`. |
 | `DIV_DISABLE_F32_CVT` | Sanitized signed/unsigned f32/int, saturating f32-to-int, and f64-to-f32 conversion chains. |
-| `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, `lg2`, `sin`, and `cos`. |
+| `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded and `.ftz` f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, `lg2`, `sin`, and `cos`. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized ordered/unordered `set.*.u32.f32` and `setp.*.f32` comparisons plus `testp.*.f32` classification. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
 | `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f64` arithmetic. |
