@@ -285,6 +285,8 @@ that feature.
 | `DIV_DISABLE_SIGNED_WIDE_BFE` | 64-bit scratch-register `bfe.s64` instructions. |
 | `DIV_DISABLE_WIDE_BFI` | 64-bit scratch-register `bfi.b64` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_BITFIELD` | Predicated 64-bit scratch-register `bfe` and `bfi` instructions. |
+| `DIV_DISABLE_REG_WIDE_BITFIELD` | Sanitized register pos/len operands for 64-bit scratch-register `bfe` and `bfi`. |
+| `DIV_DISABLE_PREDICATED_REG_WIDE_BITFIELD` | Predicated 64-bit scratch-register `bfe` and `bfi` instructions with register pos/len operands. |
 | `DIV_DISABLE_MAD24` | `mad24.lo.u32` and `mad24.hi.u32`. |
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_24BIT` | Predicated `mad24` and `mul24` instructions. |
@@ -329,7 +331,13 @@ that feature.
 | `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
-| `DIV_DISABLE_PREDICATED_CVT` | Predicated subword `cvt` instructions. |
+| `DIV_DISABLE_PREDICATED_CVT` | Predicated `cvt` instructions. |
+| `DIV_DISABLE_NARROW_CVT` | Narrow `cvt` round-trips through 8/16-bit destination types. |
+| `DIV_DISABLE_SIGNED_NARROW_CVT` | Signed narrow `cvt` round-trips. |
+| `DIV_DISABLE_PREDICATED_NARROW_CVT` | Predicated narrow `cvt` round-trips. |
+| `DIV_DISABLE_WIDE_CVT` | 64-bit-source `cvt` round-trips. |
+| `DIV_DISABLE_SIGNED_WIDE_CVT` | Signed 64-bit-source `cvt` round-trips. |
+| `DIV_DISABLE_PREDICATED_WIDE_CVT` | Predicated 64-bit-source `cvt` round-trips. |
 | `DIV_DISABLE_SZEXT` | `szext.{wrap,clamp}.{u32,s32}`. |
 | `DIV_DISABLE_SIGNED_SZEXT` | `szext.*.s32`. |
 | `DIV_DISABLE_PREDICATED_SZEXT` | Predicated `szext` instructions. |

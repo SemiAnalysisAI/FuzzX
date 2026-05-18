@@ -117,6 +117,8 @@ pub struct GenConfig {
     pub emit_signed_wide_bfe: bool,
     pub emit_wide_bfi: bool,
     pub emit_predicated_wide_bitfield: bool,
+    pub emit_reg_wide_bitfield: bool,
+    pub emit_predicated_reg_wide_bitfield: bool,
     pub emit_mad24: bool,
     pub emit_mul24: bool,
     pub emit_predicated_24bit: bool,
@@ -162,6 +164,12 @@ pub struct GenConfig {
     pub emit_predicated_alu: bool,
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
+    pub emit_narrow_cvt: bool,
+    pub emit_signed_narrow_cvt: bool,
+    pub emit_predicated_narrow_cvt: bool,
+    pub emit_wide_cvt: bool,
+    pub emit_signed_wide_cvt: bool,
+    pub emit_predicated_wide_cvt: bool,
     pub emit_szext: bool,
     pub emit_signed_szext: bool,
     pub emit_predicated_szext: bool,
@@ -270,6 +278,8 @@ impl Default for GenConfig {
             emit_signed_wide_bfe: true,
             emit_wide_bfi: true,
             emit_predicated_wide_bitfield: true,
+            emit_reg_wide_bitfield: true,
+            emit_predicated_reg_wide_bitfield: true,
             emit_mad24: true,
             emit_mul24: true,
             emit_predicated_24bit: true,
@@ -315,6 +325,12 @@ impl Default for GenConfig {
             emit_predicated_alu: true,
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
+            emit_narrow_cvt: true,
+            emit_signed_narrow_cvt: true,
+            emit_predicated_narrow_cvt: true,
+            emit_wide_cvt: true,
+            emit_signed_wide_cvt: true,
+            emit_predicated_wide_cvt: true,
             emit_szext: true,
             emit_signed_szext: true,
             emit_predicated_szext: true,
@@ -565,6 +581,34 @@ impl CvtOp {
 }
 
 #[derive(Clone, Copy)]
+enum NarrowCvtOp {
+    U32ToU8,
+    U32ToU16,
+    S32ToS8,
+    S32ToS16,
+}
+
+impl NarrowCvtOp {
+    fn narrow_mnemonic(self) -> &'static str {
+        match self {
+            NarrowCvtOp::U32ToU8 => "cvt.u8.u32",
+            NarrowCvtOp::U32ToU16 => "cvt.u16.u32",
+            NarrowCvtOp::S32ToS8 => "cvt.s8.s32",
+            NarrowCvtOp::S32ToS16 => "cvt.s16.s32",
+        }
+    }
+
+    fn extend_mnemonic(self) -> &'static str {
+        match self {
+            NarrowCvtOp::U32ToU8 => "cvt.u32.u8",
+            NarrowCvtOp::U32ToU16 => "cvt.u32.u16",
+            NarrowCvtOp::S32ToS8 => "cvt.s32.s8",
+            NarrowCvtOp::S32ToS16 => "cvt.s32.s16",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum SzextOp {
     WrapU32,
     ClampU32,
@@ -646,6 +690,12 @@ impl BfeOp {
 enum BmskMode {
     Clamp,
     Wrap,
+}
+
+#[derive(Clone, Copy)]
+enum BitfieldParamSlot {
+    Pos,
+    Len,
 }
 
 impl BmskMode {
@@ -880,6 +930,32 @@ impl WideIntOp {
             | WideIntOp::AndB64
             | WideIntOp::OrB64
             | WideIntOp::XorB64 => "cvt.u64.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WideCvtOp {
+    U64ToU32,
+    S64ToS32,
+    S64ToU32,
+    U64ToS32,
+}
+
+impl WideCvtOp {
+    fn source_cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideCvtOp::U64ToU32 | WideCvtOp::U64ToS32 => "cvt.u64.u32",
+            WideCvtOp::S64ToS32 | WideCvtOp::S64ToU32 => "cvt.s64.s32",
+        }
+    }
+
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideCvtOp::U64ToU32 => "cvt.u32.u64",
+            WideCvtOp::S64ToS32 => "cvt.s32.s64",
+            WideCvtOp::S64ToU32 => "cvt.u32.s64",
+            WideCvtOp::U64ToS32 => "cvt.s32.u64",
         }
     }
 }
@@ -1568,6 +1644,38 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// Narrow to 8/16 bits and re-extend, so the output register is fully defined.
+    NarrowCvt {
+        op: NarrowCvtOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Predicated narrow cvt round-trip.
+    PredicatedNarrowCvt {
+        op: NarrowCvtOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Convert through a scratch 64-bit register and truncate back to 32 bits.
+    WideCvt {
+        op: WideCvtOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Predicated 64-bit-source cvt round-trip.
+    PredicatedWideCvt {
+        op: WideCvtOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// `szext.{wrap,clamp}.{u32,s32} dst, src, width;`.
     Szext {
         op: SzextOp,
@@ -2187,6 +2295,15 @@ enum Inst {
         pos: u32,
         len: u32,
     },
+    /// 64-bit `bfe` with one sanitized register pos/len parameter.
+    RegWideBfe {
+        op: WideBfeOp,
+        dst: u32,
+        src: Operand,
+        param: Operand,
+        slot: BitfieldParamSlot,
+        imm: u32,
+    },
     /// Predicated 64-bit `bfe` through scratch b64 registers.
     PredicatedWideBfe {
         op: WideBfeOp,
@@ -2194,6 +2311,19 @@ enum Inst {
         src: Operand,
         pos: u32,
         len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated 64-bit `bfe` with one sanitized register pos/len parameter.
+    PredicatedRegWideBfe {
+        op: WideBfeOp,
+        dst: u32,
+        src: Operand,
+        param: Operand,
+        slot: BitfieldParamSlot,
+        imm: u32,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2228,6 +2358,15 @@ enum Inst {
         pos: u32,
         len: u32,
     },
+    /// 64-bit `bfi` with one sanitized register pos/len parameter.
+    RegWideBfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        param: Operand,
+        slot: BitfieldParamSlot,
+        imm: u32,
+    },
     /// Predicated 64-bit `bfi` through scratch b64 registers.
     PredicatedWideBfi {
         dst: u32,
@@ -2235,6 +2374,19 @@ enum Inst {
         base: Operand,
         pos: u32,
         len: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated 64-bit `bfi` with one sanitized register pos/len parameter.
+    PredicatedRegWideBfi {
+        dst: u32,
+        src: Operand,
+        base: Operand,
+        param: Operand,
+        slot: BitfieldParamSlot,
+        imm: u32,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2476,12 +2628,72 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_narrow_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_narrow_cvt(u, self.cfg.emit_signed_narrow_cvt)?;
+        if self.cfg.emit_predicated_cvt
+            && self.cfg.emit_predicated_narrow_cvt
+            && u.arbitrary::<bool>()?
+        {
+            Ok(Inst::PredicatedNarrowCvt {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::NarrowCvt {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_wide_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_wide_cvt(u, self.cfg.emit_signed_wide_cvt)?;
+        if self.cfg.emit_predicated_cvt
+            && self.cfg.emit_predicated_wide_cvt
+            && u.arbitrary::<bool>()?
+        {
+            Ok(Inst::PredicatedWideCvt {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideCvt {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_bitfield_param(&mut self, u: &mut Unstructured, allow_reg: bool) -> Result<Operand> {
         if allow_reg && u.arbitrary::<bool>()? {
             self.pick_reg_operand(u)
         } else {
             Ok(Operand::Imm(u.int_in_range(0..=31)?))
         }
+    }
+
+    fn pick_reg_wide_bitfield_param(
+        &mut self,
+        u: &mut Unstructured,
+    ) -> Result<(Operand, BitfieldParamSlot, u32)> {
+        let slot = if u.arbitrary::<bool>()? {
+            BitfieldParamSlot::Pos
+        } else {
+            BitfieldParamSlot::Len
+        };
+        Ok((self.pick_reg_operand(u)?, slot, u.int_in_range(0..=63)?))
     }
 
     fn pick_prmt_ctrl(
@@ -3263,7 +3475,36 @@ impl<'a> Generator<'a> {
         } else if pick < 235 {
             if self.cfg.emit_wide_bfe && u.arbitrary::<bool>()? {
                 let op = pick_wide_bfe(u, self.cfg.emit_signed_wide_bfe)?;
-                if self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()? {
+                let predicated = self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()?;
+                let use_reg_param = self.cfg.emit_reg_wide_bitfield
+                    && self.cfg.emit_bitwise_binops
+                    && (!predicated || self.cfg.emit_predicated_reg_wide_bitfield)
+                    && u.arbitrary::<bool>()?;
+                if predicated && use_reg_param {
+                    let (param, slot, imm) = self.pick_reg_wide_bitfield_param(u)?;
+                    Ok(Inst::PredicatedRegWideBfe {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        param,
+                        slot,
+                        imm,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else if use_reg_param {
+                    let (param, slot, imm) = self.pick_reg_wide_bitfield_param(u)?;
+                    Ok(Inst::RegWideBfe {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        src: self.pick_operand(u)?,
+                        param,
+                        slot,
+                        imm,
+                    })
+                } else if predicated {
                     Ok(Inst::PredicatedWideBfe {
                         op,
                         dst: self.pick_dst(u)?,
@@ -3342,7 +3583,37 @@ impl<'a> Generator<'a> {
                 let use_wide_bfi =
                     self.cfg.emit_wide_bfi && (!self.cfg.emit_bfi || u.arbitrary::<bool>()?);
                 if use_wide_bfi {
-                    if self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()? {
+                    let predicated =
+                        self.cfg.emit_predicated_wide_bitfield && u.arbitrary::<bool>()?;
+                    let use_reg_param = self.cfg.emit_reg_wide_bitfield
+                        && self.cfg.emit_bitwise_binops
+                        && (!predicated || self.cfg.emit_predicated_reg_wide_bitfield)
+                        && u.arbitrary::<bool>()?;
+                    if predicated && use_reg_param {
+                        let (param, slot, imm) = self.pick_reg_wide_bitfield_param(u)?;
+                        Ok(Inst::PredicatedRegWideBfi {
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            base: self.pick_operand(u)?,
+                            param,
+                            slot,
+                            imm,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        })
+                    } else if use_reg_param {
+                        let (param, slot, imm) = self.pick_reg_wide_bitfield_param(u)?;
+                        Ok(Inst::RegWideBfi {
+                            dst: self.pick_dst(u)?,
+                            src: self.pick_operand(u)?,
+                            base: self.pick_operand(u)?,
+                            param,
+                            slot,
+                            imm,
+                        })
+                    } else if predicated {
                         Ok(Inst::PredicatedWideBfi {
                             dst: self.pick_dst(u)?,
                             src: self.pick_operand(u)?,
@@ -3394,7 +3665,12 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 248 {
-            if self.cfg.emit_szext && u.arbitrary::<bool>()? {
+            let cvt_pick: u8 = u.int_in_range(0..=3)?;
+            if self.cfg.emit_wide_cvt && cvt_pick == 0 {
+                self.pick_wide_cvt(u)
+            } else if self.cfg.emit_narrow_cvt && cvt_pick == 1 {
+                self.pick_narrow_cvt(u)
+            } else if self.cfg.emit_szext && u.arbitrary::<bool>()? {
                 let op = pick_szext(u, self.cfg.emit_signed_szext)?;
                 if self.cfg.emit_predicated_szext && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedSzext {
@@ -3931,6 +4207,10 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedSpecialReg { dst, .. }
             | Inst::Cvt { dst, .. }
             | Inst::PredicatedCvt { dst, .. }
+            | Inst::NarrowCvt { dst, .. }
+            | Inst::PredicatedNarrowCvt { dst, .. }
+            | Inst::WideCvt { dst, .. }
+            | Inst::PredicatedWideCvt { dst, .. }
             | Inst::Szext { dst, .. }
             | Inst::PredicatedSzext { dst, .. }
             | Inst::Bfind { dst, .. }
@@ -3986,11 +4266,15 @@ impl<'a> Generator<'a> {
             | Inst::Bfe { dst, .. }
             | Inst::PredicatedBfe { dst, .. }
             | Inst::WideBfe { dst, .. }
+            | Inst::RegWideBfe { dst, .. }
             | Inst::PredicatedWideBfe { dst, .. }
+            | Inst::PredicatedRegWideBfe { dst, .. }
             | Inst::Bfi { dst, .. }
             | Inst::PredicatedBfi { dst, .. }
             | Inst::WideBfi { dst, .. }
+            | Inst::RegWideBfi { dst, .. }
             | Inst::PredicatedWideBfi { dst, .. }
+            | Inst::PredicatedRegWideBfi { dst, .. }
             | Inst::Bmsk { dst, .. }
             | Inst::PredicatedBmsk { dst, .. } => self.forget_tracked_write(*dst),
         }
@@ -4632,6 +4916,74 @@ impl<'a> Generator<'a> {
                 write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
+            }
+            Inst::NarrowCvt { op, dst, src } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %r{scratch}, ", op.narrow_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %r{dst}, %r{scratch};", op.extend_mnemonic()).unwrap();
+            }
+            Inst::PredicatedNarrowCvt {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<8} %r{scratch}, ",
+                    pred_guard(pred),
+                    op.narrow_mnemonic()
+                )
+                .unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, %r{scratch};",
+                    pred_guard(pred),
+                    op.extend_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::WideCvt { op, dst, src } => {
+                write!(s, "    {:<13} %rd6, ", op.source_cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %r{dst}, %rd6;", op.mnemonic()).unwrap();
+            }
+            Inst::PredicatedWideCvt {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(
+                    s,
+                    "    {} {:<8} %rd6, ",
+                    pred_guard(pred),
+                    op.source_cvt_mnemonic()
+                )
+                .unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, %rd6;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
             }
             Inst::Szext {
                 op,
@@ -5916,6 +6268,41 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {:<13} %rd6, %rd6, {pos}, {len};", op.mnemonic()).unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
+            Inst::RegWideBfe {
+                op,
+                dst,
+                src,
+                param,
+                slot,
+                imm,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                match slot {
+                    BitfieldParamSlot::Pos => {
+                        writeln!(
+                            s,
+                            "    {:<13} %rd6, %rd6, %r{scratch_hi}, {imm};",
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    }
+                    BitfieldParamSlot::Len => {
+                        writeln!(
+                            s,
+                            "    {:<13} %rd6, %rd6, {imm}, %r{scratch_hi};",
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    }
+                }
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
             Inst::PredicatedWideBfe {
                 op,
                 dst,
@@ -5939,6 +6326,53 @@ impl<'a> Generator<'a> {
                     op.mnemonic()
                 )
                 .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
+            Inst::PredicatedRegWideBfe {
+                op,
+                dst,
+                src,
+                param,
+                slot,
+                imm,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                match slot {
+                    BitfieldParamSlot::Pos => {
+                        writeln!(
+                            s,
+                            "    {} {:<8} %rd6, %rd6, %r{scratch_hi}, {imm};",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    }
+                    BitfieldParamSlot::Len => {
+                        writeln!(
+                            s,
+                            "    {} {:<8} %rd6, %rd6, {imm}, %r{scratch_hi};",
+                            pred_guard(pred),
+                            op.mnemonic()
+                        )
+                        .unwrap();
+                    }
+                }
                 writeln!(
                     s,
                     "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
@@ -6002,6 +6436,42 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    bfi.b64       %rd6, %rd6, %rd7, {pos}, {len};").unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
+            Inst::RegWideBfi {
+                dst,
+                src,
+                base,
+                param,
+                slot,
+                imm,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                write!(s, "    cvt.u64.u32   %rd6, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32   %rd7, ").unwrap();
+                base.emit(s);
+                writeln!(s, ";").unwrap();
+                match slot {
+                    BitfieldParamSlot::Pos => {
+                        writeln!(
+                            s,
+                            "    bfi.b64       %rd6, %rd6, %rd7, %r{scratch_hi}, {imm};"
+                        )
+                        .unwrap();
+                    }
+                    BitfieldParamSlot::Len => {
+                        writeln!(
+                            s,
+                            "    bfi.b64       %rd6, %rd6, %rd7, {imm}, %r{scratch_hi};"
+                        )
+                        .unwrap();
+                    }
+                }
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
             Inst::PredicatedWideBfi {
                 dst,
                 src,
@@ -6027,6 +6497,54 @@ impl<'a> Generator<'a> {
                     pred_guard(pred)
                 )
                 .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
+            Inst::PredicatedRegWideBfi {
+                dst,
+                src,
+                base,
+                param,
+                slot,
+                imm,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    and.b32       %r{scratch_hi}, ").unwrap();
+                param.emit(s);
+                writeln!(s, ", 63;").unwrap();
+                write!(s, "    cvt.u64.u32   %rd6, ").unwrap();
+                src.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32   %rd7, ").unwrap();
+                base.emit(s);
+                writeln!(s, ";").unwrap();
+                match slot {
+                    BitfieldParamSlot::Pos => {
+                        writeln!(
+                            s,
+                            "    {} bfi.b64  %rd6, %rd6, %rd7, %r{scratch_hi}, {imm};",
+                            pred_guard(pred)
+                        )
+                        .unwrap();
+                    }
+                    BitfieldParamSlot::Len => {
+                        writeln!(
+                            s,
+                            "    {} bfi.b64  %rd6, %rd6, %rd7, {imm}, %r{scratch_hi};",
+                            pred_guard(pred)
+                        )
+                        .unwrap();
+                    }
+                }
                 writeln!(
                     s,
                     "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
@@ -6207,6 +6725,38 @@ fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
         &ops_without_signed
     };
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_narrow_cvt(u: &mut Unstructured, emit_signed_narrow_cvt: bool) -> Result<NarrowCvtOp> {
+    let unsigned_ops = [NarrowCvtOp::U32ToU8, NarrowCvtOp::U32ToU16];
+    let all_ops = [
+        NarrowCvtOp::U32ToU8,
+        NarrowCvtOp::U32ToU16,
+        NarrowCvtOp::S32ToS8,
+        NarrowCvtOp::S32ToS16,
+    ];
+    let ops: &[NarrowCvtOp] = if emit_signed_narrow_cvt {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
+fn pick_wide_cvt(u: &mut Unstructured, emit_signed_wide_cvt: bool) -> Result<WideCvtOp> {
+    let unsigned_ops = [WideCvtOp::U64ToU32];
+    let all_ops = [
+        WideCvtOp::U64ToU32,
+        WideCvtOp::S64ToS32,
+        WideCvtOp::S64ToU32,
+        WideCvtOp::U64ToS32,
+    ];
+    let ops: &[WideCvtOp] = if emit_signed_wide_cvt {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
 }
 
 fn pick_predicate_bool_op(u: &mut Unstructured) -> Result<PredicateBoolOp> {
@@ -6860,6 +7410,12 @@ mod tests {
         "cvt.s32.s8",
         "cvt.s32.s16",
     ];
+    const NARROW_CVT_MNEMONICS: &[&str] =
+        &["cvt.u8.u32", "cvt.u16.u32", "cvt.s8.s32", "cvt.s16.s32"];
+    const SIGNED_NARROW_CVT_MNEMONICS: &[&str] = &["cvt.s8.s32", "cvt.s16.s32"];
+    const WIDE_CVT_MNEMONICS: &[&str] =
+        &["cvt.u32.u64", "cvt.s32.s64", "cvt.u32.s64", "cvt.s32.u64"];
+    const SIGNED_WIDE_CVT_MNEMONICS: &[&str] = &["cvt.s32.s64", "cvt.u32.s64", "cvt.s32.u64"];
     const SZEXT_MNEMONICS: &[&str] = &[
         "szext.wrap.u32",
         "szext.clamp.u32",
@@ -7106,6 +7662,8 @@ mod tests {
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
+            NARROW_CVT_MNEMONICS,
+            WIDE_CVT_MNEMONICS,
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
             PRMT_MODE_MNEMONICS,
@@ -7149,6 +7707,8 @@ mod tests {
             POST_KNOWN_BIN_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
+            NARROW_CVT_MNEMONICS,
+            WIDE_CVT_MNEMONICS,
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
             BFE_MNEMONICS,
@@ -7338,6 +7898,18 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| CVT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_narrow_cvt(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| NARROW_CVT_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_cvt(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_CVT_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_szext(ptx: &str) -> bool {
@@ -7632,6 +8204,45 @@ mod tests {
     fn has_predicated_register_bitfield_param(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(bitfield_param_registers)
+            .any(|(predicated, pos_reg, len_reg)| predicated && (pos_reg || len_reg))
+    }
+
+    fn wide_bitfield_param_registers(line: &str) -> Option<(bool, bool, bool)> {
+        let line = line.trim_start();
+        let predicated = line.starts_with('@');
+        let inst = if predicated {
+            line.split_once(char::is_whitespace)?.1.trim_start()
+        } else {
+            line
+        };
+        let op = inst.split_whitespace().next()?;
+        if !WIDE_BITFIELD_MNEMONICS.contains(&op) {
+            return None;
+        }
+        let args: Vec<_> = inst
+            .strip_prefix(op)?
+            .trim()
+            .trim_end_matches(';')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        let (pos, len) = match op {
+            "bfe.u64" | "bfe.s64" => (args.get(2)?, args.get(3)?),
+            "bfi.b64" => (args.get(3)?, args.get(4)?),
+            _ => return None,
+        };
+        Some((predicated, pos.starts_with("%r"), len.starts_with("%r")))
+    }
+
+    fn has_register_wide_bitfield_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(wide_bitfield_param_registers)
+            .any(|(_, pos_reg, len_reg)| pos_reg || len_reg)
+    }
+
+    fn has_predicated_register_wide_bitfield_param(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(wide_bitfield_param_registers)
             .any(|(predicated, pos_reg, len_reg)| predicated && (pos_reg || len_reg))
     }
 
@@ -9551,6 +10162,79 @@ mod tests {
     }
 
     #[test]
+    fn register_wide_bitfield_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfi: false,
+            emit_bmsk: false,
+            emit_predicated_wide_bitfield: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_register_wide_bitfield_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit a register wide bitfield pos/len operand");
+    }
+
+    #[test]
+    fn register_wide_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_reg_wide_bitfield: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_register_wide_bitfield_param(&ptx),
+                "seed {seed:x} emitted a register wide bitfield pos/len operand"
+            );
+        }
+    }
+
+    #[test]
+    fn predicated_register_wide_bitfield_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_bfi: false,
+            emit_bmsk: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_register_wide_bitfield_param(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit a predicated register wide bitfield pos/len operand");
+    }
+
+    #[test]
+    fn predicated_register_wide_bitfield_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_reg_wide_bitfield: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_register_wide_bitfield_param(&ptx),
+                "seed {seed:x} emitted a predicated register wide bitfield pos/len operand"
+            );
+        }
+    }
+
+    #[test]
     fn mad24_generation_is_reachable_when_bfind_is_disabled() {
         let cfg = GenConfig {
             emit_bfind: false,
@@ -11324,6 +12008,186 @@ mod tests {
             assert!(
                 !has_predicated_cvt(&ptx),
                 "seed {seed:x} emitted predicated cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_cvt: false,
+            emit_szext: false,
+            emit_predicated_narrow_cvt: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 4096, NARROW_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn narrow_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_narrow_cvt: false,
+            emit_predicated_narrow_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in NARROW_CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_narrow_cvt(&ptx),
+                "seed {seed:x} emitted predicated narrow cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_narrow_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_narrow_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_NARROW_CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_narrow_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_cvt: false,
+            emit_szext: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_narrow_cvt(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated narrow cvt");
+    }
+
+    #[test]
+    fn predicated_narrow_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_narrow_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_narrow_cvt(&ptx),
+                "seed {seed:x} emitted predicated narrow cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_narrow_cvt: false,
+            emit_szext: false,
+            emit_predicated_wide_cvt: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 4096, WIDE_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_cvt: false,
+            emit_predicated_wide_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_wide_cvt(&ptx),
+                "seed {seed:x} emitted predicated wide cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_wide_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_WIDE_CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_narrow_cvt: false,
+            emit_szext: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_cvt(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated wide cvt");
+    }
+
+    #[test]
+    fn predicated_wide_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_cvt: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_cvt(&ptx),
+                "seed {seed:x} emitted predicated wide cvt"
             );
         }
     }
