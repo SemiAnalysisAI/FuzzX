@@ -395,8 +395,8 @@ that feature.
 | `DIV_DISABLE_MAD_CARRY` | Three-instruction `mad.cc` / `madc.cc` / `madc` carry chains. |
 | `DIV_DISABLE_SIGNED_MAD_CARRY` | Signed `mad.cc` / `madc.cc` / `madc` carry chains. |
 | `DIV_DISABLE_PREDICATED_MAD_CARRY` | Predicated `mad.cc` / `madc.cc` / `madc` carry chains. |
-| `DIV_DISABLE_PREDICATED_SET` | Predicated `set.{cmp}` instructions. |
-| `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32` instructions. |
+| `DIV_DISABLE_PREDICATED_SET` | Predicated integer and floating-point `set.{cmp}` instructions. |
+| `DIV_DISABLE_PREDICATED_SELP` | Instruction-predicated `selp.b32`, `selp.f32`, and `selp.f64` instructions. |
 | `DIV_DISABLE_SAD` | `sad.{u32,s32}`. |
 | `DIV_DISABLE_SLCT` | `slct.{u32,s32,b32}.s32`. |
 | `DIV_DISABLE_PREDICATED_SAD` | Predicated `sad.{u32,s32}` instructions. |
