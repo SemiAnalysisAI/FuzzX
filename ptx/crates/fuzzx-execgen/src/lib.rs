@@ -114,12 +114,14 @@ pub struct GenConfig {
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
     pub emit_f32_cvt: bool,
+    pub emit_f32_special_math: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
     pub emit_f64_arith: bool,
     pub emit_f64_rounding: bool,
     pub emit_f64_unary: bool,
     pub emit_f64_cvt: bool,
+    pub emit_f64_special_math: bool,
     pub emit_f64_compare: bool,
     pub emit_f64_selp: bool,
     pub emit_signed_cmp: bool,
@@ -322,12 +324,14 @@ impl Default for GenConfig {
             emit_f32_rounding: true,
             emit_f32_unary: true,
             emit_f32_cvt: true,
+            emit_f32_special_math: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
             emit_f64_arith: true,
             emit_f64_rounding: true,
             emit_f64_unary: true,
             emit_f64_cvt: true,
+            emit_f64_special_math: true,
             emit_f64_compare: true,
             emit_f64_selp: true,
             emit_signed_cmp: true,
@@ -1069,6 +1073,47 @@ impl F32ToIntCvtOp {
 }
 
 #[derive(Clone, Copy)]
+enum FloatInputDomain {
+    NonNegative,
+    Positive,
+    SmallNonNegative,
+}
+
+#[derive(Clone, Copy)]
+enum F32SpecialMathOp {
+    SqrtRn,
+    RcpRn,
+    RcpApprox,
+    RsqrtApprox,
+    Ex2Approx,
+    Lg2Approx,
+}
+
+impl F32SpecialMathOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32SpecialMathOp::SqrtRn => "sqrt.rn.f32",
+            F32SpecialMathOp::RcpRn => "rcp.rn.f32",
+            F32SpecialMathOp::RcpApprox => "rcp.approx.ftz.f32",
+            F32SpecialMathOp::RsqrtApprox => "rsqrt.approx.ftz.f32",
+            F32SpecialMathOp::Ex2Approx => "ex2.approx.ftz.f32",
+            F32SpecialMathOp::Lg2Approx => "lg2.approx.ftz.f32",
+        }
+    }
+
+    fn input_domain(self) -> FloatInputDomain {
+        match self {
+            F32SpecialMathOp::SqrtRn => FloatInputDomain::NonNegative,
+            F32SpecialMathOp::RcpRn
+            | F32SpecialMathOp::RcpApprox
+            | F32SpecialMathOp::RsqrtApprox
+            | F32SpecialMathOp::Lg2Approx => FloatInputDomain::Positive,
+            F32SpecialMathOp::Ex2Approx => FloatInputDomain::SmallNonNegative,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum F64ArithOp {
     Add,
     Sub,
@@ -1190,6 +1235,28 @@ impl F64ToIntCvtOp {
             F64ToIntCvtOp::U32Rni => "cvt.rni.u32.f64",
             F64ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f64",
             F64ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f64",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F64SpecialMathOp {
+    SqrtRn,
+    RcpRn,
+}
+
+impl F64SpecialMathOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F64SpecialMathOp::SqrtRn => "sqrt.rn.f64",
+            F64SpecialMathOp::RcpRn => "rcp.rn.f64",
+        }
+    }
+
+    fn input_domain(self) -> FloatInputDomain {
+        match self {
+            F64SpecialMathOp::SqrtRn => FloatInputDomain::NonNegative,
+            F64SpecialMathOp::RcpRn => FloatInputDomain::Positive,
         }
     }
 }
@@ -2574,6 +2641,12 @@ enum Inst {
         dst: u32,
         src: Operand,
     },
+    /// Sanitized single-precision special math.
+    F32SpecialMath {
+        op: F32SpecialMathOp,
+        dst: u32,
+        src: Operand,
+    },
     /// Sanitized single-precision floating-point compare materialized as u32.
     F32Set {
         cmp: CmpOp,
@@ -2628,6 +2701,12 @@ enum Inst {
     F64Cvt {
         from_int: F64FromIntCvtOp,
         to_int: F64ToIntCvtOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Sanitized double-precision special math.
+    F64SpecialMath {
+        op: F64SpecialMathOp,
         dst: u32,
         src: Operand,
     },
@@ -4995,6 +5074,22 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_f32_special_math(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F32SpecialMathOp::SqrtRn,
+            F32SpecialMathOp::RcpRn,
+            F32SpecialMathOp::RcpApprox,
+            F32SpecialMathOp::RsqrtApprox,
+            F32SpecialMathOp::Ex2Approx,
+            F32SpecialMathOp::Lg2Approx,
+        ];
+        Ok(Inst::F32SpecialMath {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
     fn pick_f32_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::F32Set {
             cmp: pick_f32_cmp(u)?,
@@ -5098,6 +5193,15 @@ impl<'a> Generator<'a> {
         Ok(Inst::F64Cvt {
             from_int: *u.choose(&from_ops)?,
             to_int: *u.choose(&to_ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f64_special_math(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [F64SpecialMathOp::SqrtRn, F64SpecialMathOp::RcpRn];
+        Ok(Inst::F64SpecialMath {
+            op: *u.choose(&ops)?,
             dst: self.pick_dst(u)?,
             src: self.pick_cvt_operand(u)?,
         })
@@ -5208,6 +5312,12 @@ impl<'a> Generator<'a> {
             {
                 return self.pick_f32_cvt(u);
             }
+            if self.cfg.emit_f32_special_math
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f32_special_math(u);
+            }
             if self.cfg.emit_f64_arith
                 && self.cfg.emit_bitwise_binops
                 && u.int_in_range(0..=7)? == 0
@@ -5230,6 +5340,12 @@ impl<'a> Generator<'a> {
             if self.cfg.emit_f64_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f64_cvt(u);
+            }
+            if self.cfg.emit_f64_special_math
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f64_special_math(u);
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -6526,11 +6642,13 @@ impl<'a> Generator<'a> {
             | Inst::F32RoundingArith { dst, .. }
             | Inst::F32Unary { dst, .. }
             | Inst::F32Cvt { dst, .. }
+            | Inst::F32SpecialMath { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::F64Arith { dst, .. }
             | Inst::F64RoundingArith { dst, .. }
             | Inst::F64Unary { dst, .. }
             | Inst::F64Cvt { dst, .. }
+            | Inst::F64SpecialMath { dst, .. }
             | Inst::F64Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
@@ -6939,11 +7057,53 @@ impl<'a> Generator<'a> {
         writeln!(s, "    cvt.rn.f32.u32 %f{freg}, %r{scratch};").unwrap();
     }
 
+    fn emit_sanitized_f32_math_operand(
+        &self,
+        s: &mut String,
+        freg: u32,
+        operand: Operand,
+        domain: FloatInputDomain,
+    ) {
+        let scratch = self.wide_scratch_hi_reg();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        let mask = match domain {
+            FloatInputDomain::NonNegative | FloatInputDomain::Positive => FLOAT_INPUT_MASK,
+            FloatInputDomain::SmallNonNegative => 7,
+        };
+        writeln!(s, ", {mask};").unwrap();
+        if matches!(domain, FloatInputDomain::Positive) {
+            writeln!(s, "    add.u32       %r{scratch}, %r{scratch}, 1;").unwrap();
+        }
+        writeln!(s, "    cvt.rn.f32.u32 %f{freg}, %r{scratch};").unwrap();
+    }
+
     fn emit_sanitized_f64_operand(&self, s: &mut String, freg: u32, operand: Operand) {
         let scratch = self.wide_scratch_hi_reg();
         write!(s, "    and.b32       %r{scratch}, ").unwrap();
         operand.emit(s);
         writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
+        writeln!(s, "    cvt.rn.f64.u32 %fd{freg}, %r{scratch};").unwrap();
+    }
+
+    fn emit_sanitized_f64_math_operand(
+        &self,
+        s: &mut String,
+        freg: u32,
+        operand: Operand,
+        domain: FloatInputDomain,
+    ) {
+        let scratch = self.wide_scratch_hi_reg();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        let mask = match domain {
+            FloatInputDomain::NonNegative | FloatInputDomain::Positive => FLOAT_INPUT_MASK,
+            FloatInputDomain::SmallNonNegative => 7,
+        };
+        writeln!(s, ", {mask};").unwrap();
+        if matches!(domain, FloatInputDomain::Positive) {
+            writeln!(s, "    add.u32       %r{scratch}, %r{scratch}, 1;").unwrap();
+        }
         writeln!(s, "    cvt.rn.f64.u32 %fd{freg}, %r{scratch};").unwrap();
     }
 
@@ -7387,6 +7547,11 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {:<13} %f0, %r{scratch};", from_int.mnemonic()).unwrap();
                 writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
             }
+            Inst::F32SpecialMath { op, dst, src } => {
+                self.emit_sanitized_f32_math_operand(s, 0, src, op.input_domain());
+                writeln!(s, "    {:<13} %f1, %f0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
+            }
             Inst::F32Set { cmp, dst, a, b } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
                 self.emit_sanitized_f32_operand(s, 1, b);
@@ -7467,6 +7632,11 @@ impl<'a> Generator<'a> {
                 writeln!(s, ", {FLOAT_INPUT_MASK};").unwrap();
                 writeln!(s, "    {:<13} %fd0, %r{scratch};", from_int.mnemonic()).unwrap();
                 writeln!(s, "    {:<13} %r{dst}, %fd0;", to_int.mnemonic()).unwrap();
+            }
+            Inst::F64SpecialMath { op, dst, src } => {
+                self.emit_sanitized_f64_math_operand(s, 0, src, op.input_domain());
+                writeln!(s, "    {:<13} %fd1, %fd0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
             }
             Inst::F64Set { cmp, dst, a, b } => {
                 self.emit_sanitized_f64_operand(s, 0, a);
@@ -11031,6 +11201,14 @@ mod tests {
         "cvt.rmi.u32.f32",
         "cvt.rpi.u32.f32",
     ];
+    const F32_SPECIAL_MATH_MNEMONICS: &[&str] = &[
+        "sqrt.rn.f32",
+        "rcp.rn.f32",
+        "rcp.approx.ftz.f32",
+        "rsqrt.approx.ftz.f32",
+        "ex2.approx.ftz.f32",
+        "lg2.approx.ftz.f32",
+    ];
     const F32_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f32",
         "set.ne.u32.f32",
@@ -11103,6 +11281,7 @@ mod tests {
         "cvt.rmi.u32.f64",
         "cvt.rpi.u32.f64",
     ];
+    const F64_SPECIAL_MATH_MNEMONICS: &[&str] = &["sqrt.rn.f64", "rcp.rn.f64"];
     const F64_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f64",
         "set.ne.u32.f64",
@@ -11467,6 +11646,7 @@ mod tests {
             F32_ROUNDING_MNEMONICS,
             F32_UNARY_MNEMONICS,
             F32_CVT_MNEMONICS,
+            F32_SPECIAL_MATH_MNEMONICS,
             F32_COMPARE_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SETP_BOOL_MNEMONICS,
@@ -11475,6 +11655,7 @@ mod tests {
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
             F64_CVT_MNEMONICS,
+            F64_SPECIAL_MATH_MNEMONICS,
             F64_COMPARE_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SETP_BOOL_MNEMONICS,
@@ -11539,6 +11720,7 @@ mod tests {
             F32_ROUNDING_MNEMONICS,
             F32_UNARY_MNEMONICS,
             F32_CVT_MNEMONICS,
+            F32_SPECIAL_MATH_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SETP_BOOL_MNEMONICS,
             F32_SELP_MNEMONICS,
@@ -11546,6 +11728,7 @@ mod tests {
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
             F64_CVT_MNEMONICS,
+            F64_SPECIAL_MATH_MNEMONICS,
             F64_SETP_MNEMONICS,
             F64_SETP_BOOL_MNEMONICS,
             F64_SELP_MNEMONICS,
@@ -14663,6 +14846,35 @@ mod tests {
     }
 
     #[test]
+    fn f32_special_math_generation_is_reachable() {
+        assert_mnemonic_coverage(
+            &coverage_heavy_config(),
+            8192,
+            4096,
+            F32_SPECIAL_MATH_MNEMONICS,
+        );
+    }
+
+    #[test]
+    fn f32_special_math_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_special_math: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_SPECIAL_MATH_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn f32_compare_generation_is_reachable() {
         let cfg = GenConfig {
             emit_f32_selp: false,
@@ -14833,6 +15045,35 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in F64_CVT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f64_special_math_generation_is_reachable() {
+        assert_mnemonic_coverage(
+            &coverage_heavy_config(),
+            4096,
+            2048,
+            F64_SPECIAL_MATH_MNEMONICS,
+        );
+    }
+
+    #[test]
+    fn f64_special_math_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f64_special_math: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F64_SPECIAL_MATH_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"

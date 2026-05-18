@@ -276,12 +276,14 @@ that feature.
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized `.rz/.rm/.rp` f32 add/sub/mul/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs.f32` and `neg.f32`. |
 | `DIV_DISABLE_F32_CVT` | Sanitized f32/int conversion chains. |
+| `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized f32 `sqrt`, `rcp`, `rsqrt`, `ex2`, and `lg2`. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized `set.*.u32.f32` and `setp.*.f32` comparisons. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
 | `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/fma/min/max.f64` arithmetic. |
 | `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/fma arithmetic. |
 | `DIV_DISABLE_F64_UNARY` | Sanitized `abs.f64` and `neg.f64`. |
 | `DIV_DISABLE_F64_CVT` | Sanitized f64/int conversion chains. |
+| `DIV_DISABLE_F64_SPECIAL_MATH` | Sanitized f64 `sqrt` and `rcp`. |
 | `DIV_DISABLE_F64_COMPARE` | Sanitized `set.*.u32.f64` and `setp.*.f64` comparisons. |
 | `DIV_DISABLE_F64_SELP` | Sanitized `setp.*.f64` feeding `selp.f64`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
