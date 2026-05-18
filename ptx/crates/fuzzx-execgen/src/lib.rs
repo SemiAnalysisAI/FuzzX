@@ -64,6 +64,7 @@ pub struct GenConfig {
     pub emit_predicated_lop3: bool,
     pub emit_minmax: bool,
     pub emit_selp: bool,
+    pub emit_typed_selp: bool,
     pub emit_sub: bool,
     pub emit_mul_lo: bool,
     pub emit_signed_lo_alu: bool,
@@ -284,6 +285,7 @@ impl Default for GenConfig {
             emit_predicated_lop3: true,
             emit_minmax: true,
             emit_selp: true,
+            emit_typed_selp: true,
             emit_sub: true,
             emit_mul_lo: true,
             emit_signed_lo_alu: true,
@@ -2267,6 +2269,23 @@ impl UnaryOp {
 }
 
 #[derive(Clone, Copy)]
+enum SelpOp {
+    B32,
+    U32,
+    S32,
+}
+
+impl SelpOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            SelpOp::B32 => "selp.b32",
+            SelpOp::U32 => "selp.u32",
+            SelpOp::S32 => "selp.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum SpecialRegOp {
     TidX,
     TidY,
@@ -4194,6 +4213,7 @@ enum Inst {
         guard_pred: u32,
     },
     Sel {
+        op: SelpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -4204,6 +4224,7 @@ enum Inst {
     },
     /// `setp` for selp input and instruction guard, then guarded `selp.b32`.
     PredicatedSel {
+        op: SelpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -8075,6 +8096,7 @@ impl<'a> Generator<'a> {
             } else if self.cfg.emit_selp {
                 if self.cfg.emit_predicated_selp && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedSel {
+                        op: pick_selp(u, self.cfg.emit_typed_selp)?,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
@@ -8089,6 +8111,7 @@ impl<'a> Generator<'a> {
                     })
                 } else {
                     Ok(Inst::Sel {
+                        op: pick_selp(u, self.cfg.emit_typed_selp)?,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
@@ -11367,6 +11390,7 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd2;").unwrap();
             }
             Inst::Sel {
+                op,
                 dst,
                 a,
                 b,
@@ -11380,13 +11404,14 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 cb.emit(s);
                 writeln!(s, ";").unwrap();
-                write!(s, "    selp.b32      %r{dst}, ").unwrap();
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ", %p{pred};").unwrap();
             }
             Inst::PredicatedSel {
+                op,
                 dst,
                 a,
                 b,
@@ -11405,7 +11430,13 @@ impl<'a> Generator<'a> {
                 cb.emit(s);
                 writeln!(s, ";").unwrap();
                 self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
-                write!(s, "    {} selp.b32 %r{dst}, ", pred_guard(guard_pred)).unwrap();
+                write!(
+                    s,
+                    "    {} {:<8} %r{dst}, ",
+                    pred_guard(guard_pred),
+                    op.mnemonic()
+                )
+                .unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -14273,6 +14304,18 @@ fn pick_unary(
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_selp(u: &mut Unstructured, emit_typed_selp: bool) -> Result<SelpOp> {
+    const BASE_OPS: &[SelpOp] = &[SelpOp::B32];
+    const TYPED_OPS: &[SelpOp] = &[SelpOp::U32, SelpOp::S32];
+
+    let mut ops = Vec::with_capacity(3);
+    ops.extend_from_slice(BASE_OPS);
+    if emit_typed_selp {
+        ops.extend_from_slice(TYPED_OPS);
+    }
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
     let ops = [
         SpecialRegOp::TidX,
@@ -16139,6 +16182,8 @@ mod tests {
         "set.gt.u32.s32",
         "set.ge.u32.s32",
     ];
+    const SELP_MNEMONICS: &[&str] = &["selp.b32", "selp.u32", "selp.s32"];
+    const TYPED_SELP_MNEMONICS: &[&str] = &["selp.u32", "selp.s32"];
     const FUNNEL_CLAMP_MNEMONICS: &[&str] = &["shf.l.clamp.b32", "shf.r.clamp.b32"];
     const FUNNEL_MNEMONICS: &[&str] = &[
         "shf.l.wrap.b32",
@@ -16298,6 +16343,7 @@ mod tests {
             UNSIGNED_SETP_MNEMONICS,
             SIGNED_SETP_MNEMONICS,
             SET_MNEMONICS,
+            SELP_MNEMONICS,
             FUNNEL_MNEMONICS,
             SAD_MNEMONICS,
             SLCT_MNEMONICS,
@@ -16307,7 +16353,7 @@ mod tests {
         ] {
             mnemonics.extend_from_slice(group);
         }
-        mnemonics.extend_from_slice(&["selp.b32", "lop3.b32", "prmt.b32", "bfi.b32"]);
+        mnemonics.extend_from_slice(&["lop3.b32", "prmt.b32", "bfi.b32"]);
         mnemonics
     }
 
@@ -17069,7 +17115,18 @@ mod tests {
 
     fn has_predicated_selp(ptx: &str) -> bool {
         ptx.lines().filter_map(predicated_mnemonic).any(|op| {
-            op == "selp.b32" || F32_SELP_MNEMONICS.contains(&op) || F64_SELP_MNEMONICS.contains(&op)
+            SELP_MNEMONICS.contains(&op)
+                || F32_SELP_MNEMONICS.contains(&op)
+                || F64_SELP_MNEMONICS.contains(&op)
+        })
+    }
+
+    fn has_direct_typed_selp(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let Some(op) = body_mnemonic(line) else {
+                return false;
+            };
+            op == "selp.s32" || (op == "selp.u32" && !line.contains(", 1, 0,"))
         })
     }
 
@@ -25125,6 +25182,53 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("selp.b32"), "seed {seed:x} emitted selp.b32");
+            assert!(!ptx.contains("selp.s32"), "seed {seed:x} emitted selp.s32");
+        }
+    }
+
+    #[test]
+    fn typed_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            control_flow: ControlFlowMode::Arbitrary,
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 1024,
+            max_insts_per_block: 1024,
+            n_working_regs: 96,
+            max_immediate: u32::MAX,
+            emit_structured_loops: false,
+            emit_arbitrary_loops: false,
+            emit_set: false,
+            emit_selp: true,
+            emit_typed_selp: true,
+            emit_predicated_selp: false,
+            emit_f32_compare: false,
+            emit_f64_compare: false,
+            emit_scalar_16bit_compare: false,
+            emit_scalar_16bit_selp: false,
+            ..GenConfig::default()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 2048, TYPED_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn typed_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_typed_selp: false,
+            emit_f32_compare: false,
+            emit_f64_compare: false,
+            emit_scalar_16bit_compare: false,
+            emit_scalar_16bit_selp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_direct_typed_selp(&ptx),
+                "seed {seed:x} emitted direct typed selp"
+            );
         }
     }
 

@@ -225,7 +225,8 @@ that feature.
 | `DIV_DISABLE_LOP3` | `lop3.b32`. |
 | `DIV_DISABLE_PREDICATED_LOP3` | Predicated `lop3.b32` instructions. |
 | `DIV_DISABLE_MINMAX` | `min.u32`, `max.u32`, `min.s32`, `max.s32`. |
-| `DIV_DISABLE_SELP` | `selp.b32`. |
+| `DIV_DISABLE_SELP` | Direct integer `selp.{b32,u32,s32}` instructions. |
+| `DIV_DISABLE_TYPED_SELP` | Direct integer `selp.u32` and `selp.s32` instructions. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
 | `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
 | `DIV_DISABLE_SIGNED_LO_ALU` | Signed low-ALU spellings, including saturating add/sub. |
