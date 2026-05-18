@@ -66,6 +66,8 @@
 //!                         PTX popc.b32 generation
 //!   DIV_DISABLE_ABS       default: false; set 1/true/yes/on to suppress
 //!                         PTX abs.s32 generation
+//!   DIV_DISABLE_SPECIAL_REGS default: false; set 1/true/yes/on to suppress
+//!                         deterministic PTX special-register reads
 //!   DIV_DISABLE_SIGNED_CMP default: false; set 1/true/yes/on to suppress
 //!                         PTX setp.{lt,le,gt,ge}.s32 generation
 //!   DIV_DISABLE_SIGNED_DIVREM default: false; set 1/true/yes/on to suppress
@@ -77,11 +79,13 @@
 //!   DIV_DISABLE_PREDICATED_DIVREM default: false; set 1/true/yes/on to suppress
 //!                         predicated div/rem generation
 //!   DIV_DISABLE_FUNNEL    default: false; set 1/true/yes/on to suppress
-//!                         PTX shf.{l,r}.wrap.b32 generation
+//!                         PTX shf.{l,r}.{wrap,clamp}.b32 generation
 //!   DIV_DISABLE_REG_FUNNEL default: false; set 1/true/yes/on to suppress
-//!                         register-count shf.{l,r}.wrap.b32 generation
+//!                         register-count shf.{l,r}.{wrap,clamp}.b32 generation
 //!   DIV_DISABLE_PREDICATED_FUNNEL default: false; set 1/true/yes/on to suppress
-//!                         predicated shf.{l,r}.wrap.b32 generation
+//!                         predicated shf.{l,r}.{wrap,clamp}.b32 generation
+//!   DIV_DISABLE_FUNNEL_CLAMP default: false; set 1/true/yes/on to suppress
+//!                         shf.{l,r}.clamp.b32 generation
 //!   DIV_DISABLE_NEG       default: false; set 1/true/yes/on to suppress
 //!                         PTX neg.s32 generation
 //!   DIV_DISABLE_SHL       default: false; set 1/true/yes/on to suppress
@@ -138,6 +142,8 @@
 //!                         PTX mad.wide.s32 generation
 //!   DIV_DISABLE_PREDICATED_MAD_WIDE default: false; set 1/true/yes/on to suppress
 //!                         predicated mad.wide.{u32,s32} generation
+//!   DIV_DISABLE_WIDE_HIGH_RESULT default: false; set 1/true/yes/on to suppress
+//!                         high-half extraction from mul.wide/mad.wide results
 //!   DIV_DISABLE_WIDE_INT  default: false; set 1/true/yes/on to suppress
 //!                         PTX 64-bit ALU scratch-register generation
 //!   DIV_DISABLE_WIDE_MINMAX default: false; set 1/true/yes/on to suppress
@@ -178,8 +184,10 @@
 //!                         predicated add/sub carry pair generation
 //!   DIV_DISABLE_I32_BOUNDARY_IMMS default: false; set 1/true/yes/on to
 //!                         suppress immediate 0x7fffffff/0x80000000 generation
+//!   DIV_DISABLE_DP4A      default: false; set 1/true/yes/on to suppress
+//!                         PTX dp4a generation
 //!   DIV_DISABLE_DP2A      default: false; set 1/true/yes/on to suppress
-//!                         PTX dp2a.{lo,hi}.u32.u32 generation
+//!                         PTX dp2a generation
 //!   DIV_DISABLE_NEGATED_PREDICATES default: false; set 1/true/yes/on to suppress
 //!                         @!%p instruction predicates
 //!   DIV_DISABLE_PREDICATED_ALU default: false; set 1/true/yes/on to suppress
@@ -357,6 +365,8 @@ struct Args {
     #[arg(long)]
     disable_abs: bool,
     #[arg(long)]
+    disable_special_regs: bool,
+    #[arg(long)]
     disable_signed_cmp: bool,
     #[arg(long)]
     disable_signed_divrem: bool,
@@ -372,6 +382,8 @@ struct Args {
     disable_reg_funnel: bool,
     #[arg(long)]
     disable_predicated_funnel: bool,
+    #[arg(long)]
+    disable_funnel_clamp: bool,
     #[arg(long)]
     disable_neg: bool,
     #[arg(long)]
@@ -429,6 +441,8 @@ struct Args {
     #[arg(long)]
     disable_predicated_mad_wide: bool,
     #[arg(long)]
+    disable_wide_high_result: bool,
+    #[arg(long)]
     disable_wide_int: bool,
     #[arg(long)]
     disable_wide_minmax: bool,
@@ -468,6 +482,8 @@ struct Args {
     disable_predicated_carry: bool,
     #[arg(long)]
     disable_i32_boundary_imms: bool,
+    #[arg(long)]
+    disable_dp4a: bool,
     #[arg(long)]
     disable_dp2a: bool,
     #[arg(long)]
@@ -574,6 +590,7 @@ impl Args {
         set_bool!(self.disable_cnot, "DIV_DISABLE_CNOT");
         set_bool!(self.disable_popc, "DIV_DISABLE_POPC");
         set_bool!(self.disable_abs, "DIV_DISABLE_ABS");
+        set_bool!(self.disable_special_regs, "DIV_DISABLE_SPECIAL_REGS");
         set_bool!(self.disable_signed_cmp, "DIV_DISABLE_SIGNED_CMP");
         set_bool!(self.disable_signed_divrem, "DIV_DISABLE_SIGNED_DIVREM");
         set_bool!(self.disable_reg_divrem, "DIV_DISABLE_REG_DIVREM");
@@ -591,6 +608,7 @@ impl Args {
             self.disable_predicated_funnel,
             "DIV_DISABLE_PREDICATED_FUNNEL"
         );
+        set_bool!(self.disable_funnel_clamp, "DIV_DISABLE_FUNNEL_CLAMP");
         set_bool!(self.disable_neg, "DIV_DISABLE_NEG");
         set_bool!(self.disable_shl, "DIV_DISABLE_SHL");
         set_bool!(self.disable_shr, "DIV_DISABLE_SHR");
@@ -649,6 +667,10 @@ impl Args {
             self.disable_predicated_mad_wide,
             "DIV_DISABLE_PREDICATED_MAD_WIDE"
         );
+        set_bool!(
+            self.disable_wide_high_result,
+            "DIV_DISABLE_WIDE_HIGH_RESULT"
+        );
         set_bool!(self.disable_wide_int, "DIV_DISABLE_WIDE_INT");
         set_bool!(self.disable_wide_minmax, "DIV_DISABLE_WIDE_MINMAX");
         set_bool!(self.disable_wide_mulhi, "DIV_DISABLE_WIDE_MULHI");
@@ -693,6 +715,7 @@ impl Args {
             self.disable_i32_boundary_imms,
             "DIV_DISABLE_I32_BOUNDARY_IMMS"
         );
+        set_bool!(self.disable_dp4a, "DIV_DISABLE_DP4A");
         set_bool!(self.disable_dp2a, "DIV_DISABLE_DP2A");
         set_bool!(
             self.disable_negated_predicates,
@@ -813,6 +836,7 @@ impl Config {
         let disable_cnot = env_bool("DIV_DISABLE_CNOT")?.unwrap_or(false);
         let disable_popc = env_bool("DIV_DISABLE_POPC")?.unwrap_or(false);
         let disable_abs = env_bool("DIV_DISABLE_ABS")?.unwrap_or(false);
+        let disable_special_regs = env_bool("DIV_DISABLE_SPECIAL_REGS")?.unwrap_or(false);
         let disable_signed_cmp = env_bool("DIV_DISABLE_SIGNED_CMP")?.unwrap_or(false);
         let disable_signed_divrem = env_bool("DIV_DISABLE_SIGNED_DIVREM")?.unwrap_or(false);
         let disable_reg_divrem = env_bool("DIV_DISABLE_REG_DIVREM")?.unwrap_or(false);
@@ -822,6 +846,7 @@ impl Config {
         let disable_funnel = env_bool("DIV_DISABLE_FUNNEL")?.unwrap_or(false);
         let disable_reg_funnel = env_bool("DIV_DISABLE_REG_FUNNEL")?.unwrap_or(false);
         let disable_predicated_funnel = env_bool("DIV_DISABLE_PREDICATED_FUNNEL")?.unwrap_or(false);
+        let disable_funnel_clamp = env_bool("DIV_DISABLE_FUNNEL_CLAMP")?.unwrap_or(false);
         let disable_neg = env_bool("DIV_DISABLE_NEG")?.unwrap_or(false);
         let disable_shl = env_bool("DIV_DISABLE_SHL")?.unwrap_or(false);
         let disable_shr = env_bool("DIV_DISABLE_SHR")?.unwrap_or(false);
@@ -856,6 +881,7 @@ impl Config {
             env_bool("DIV_DISABLE_PREDICATED_MUL_WIDE")?.unwrap_or(false);
         let disable_predicated_mad_wide =
             env_bool("DIV_DISABLE_PREDICATED_MAD_WIDE")?.unwrap_or(false);
+        let disable_wide_high_result = env_bool("DIV_DISABLE_WIDE_HIGH_RESULT")?.unwrap_or(false);
         let disable_wide_int = env_bool("DIV_DISABLE_WIDE_INT")?.unwrap_or(false);
         let disable_wide_minmax = env_bool("DIV_DISABLE_WIDE_MINMAX")?.unwrap_or(false);
         let disable_wide_mulhi = env_bool("DIV_DISABLE_WIDE_MULHI")?.unwrap_or(false);
@@ -882,6 +908,7 @@ impl Config {
         let disable_subc = env_bool("DIV_DISABLE_SUBC")?.unwrap_or(false);
         let disable_predicated_carry = env_bool("DIV_DISABLE_PREDICATED_CARRY")?.unwrap_or(false);
         let disable_i32_boundary_imms = env_bool("DIV_DISABLE_I32_BOUNDARY_IMMS")?.unwrap_or(false);
+        let disable_dp4a = env_bool("DIV_DISABLE_DP4A")?.unwrap_or(false);
         let disable_dp2a = env_bool("DIV_DISABLE_DP2A")?.unwrap_or(false);
         let disable_negated_predicates =
             env_bool("DIV_DISABLE_NEGATED_PREDICATES")?.unwrap_or(false);
@@ -934,6 +961,7 @@ impl Config {
             emit_cnot: !disable_cnot,
             emit_popc: !disable_popc,
             emit_abs: !disable_abs,
+            emit_special_regs: !disable_special_regs,
             emit_signed_cmp: !disable_signed_cmp,
             emit_signed_divrem: !disable_signed_divrem,
             emit_reg_divrem: !disable_reg_divrem && !disable_bitwise_binops && !disable_or,
@@ -945,6 +973,7 @@ impl Config {
             emit_funnel: !disable_funnel,
             emit_reg_funnel: !disable_reg_funnel && !disable_funnel,
             emit_predicated_funnel: !disable_predicated_funnel && !disable_funnel,
+            emit_funnel_clamp: !disable_funnel_clamp && !disable_funnel,
             emit_neg: !disable_neg,
             emit_shl: !disable_shl,
             emit_shr: !disable_shr,
@@ -980,6 +1009,7 @@ impl Config {
             emit_signed_mad_wide: !disable_signed_mad_wide,
             emit_predicated_mul_wide: !disable_predicated_mul_wide && !disable_mul_wide,
             emit_predicated_mad_wide: !disable_predicated_mad_wide && !disable_mad_wide,
+            emit_wide_high_result: !disable_wide_high_result,
             emit_wide_int: !disable_wide_int,
             emit_wide_minmax: !disable_wide_minmax && !disable_wide_int,
             emit_wide_mulhi: !disable_wide_mulhi && !disable_wide_int,
@@ -1005,6 +1035,7 @@ impl Config {
             emit_subc: !disable_subc,
             emit_predicated_carry: !disable_predicated_carry && (!disable_addc || !disable_subc),
             emit_i32_boundary_immediates: !disable_i32_boundary_imms,
+            emit_dp4a: !disable_dp4a,
             emit_dp2a: !disable_dp2a,
             emit_negated_predicates: !disable_negated_predicates,
             emit_predicated_alu: !disable_predicated_alu,
@@ -1209,7 +1240,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_bfi={} emit_bmsk={} emit_predicated_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_predicated_wide_divrem={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_predicated_cvt={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_predicated_set={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1251,6 +1282,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_cnot,
         cfg.gen_config.emit_popc,
         cfg.gen_config.emit_abs,
+        cfg.gen_config.emit_special_regs,
         cfg.gen_config.emit_signed_cmp,
         cfg.gen_config.emit_signed_divrem,
         cfg.gen_config.emit_reg_divrem,
@@ -1259,6 +1291,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_funnel,
         cfg.gen_config.emit_reg_funnel,
         cfg.gen_config.emit_predicated_funnel,
+        cfg.gen_config.emit_funnel_clamp,
         cfg.gen_config.emit_neg,
         cfg.gen_config.emit_shl,
         cfg.gen_config.emit_shr,
@@ -1287,6 +1320,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_signed_mad_wide,
         cfg.gen_config.emit_predicated_mul_wide,
         cfg.gen_config.emit_predicated_mad_wide,
+        cfg.gen_config.emit_wide_high_result,
         cfg.gen_config.emit_wide_int,
         cfg.gen_config.emit_wide_minmax,
         cfg.gen_config.emit_wide_mulhi,
@@ -1307,6 +1341,7 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_subc,
         cfg.gen_config.emit_predicated_carry,
         cfg.gen_config.emit_i32_boundary_immediates,
+        cfg.gen_config.emit_dp4a,
         cfg.gen_config.emit_dp2a,
         cfg.gen_config.emit_negated_predicates,
         cfg.gen_config.emit_predicated_alu,

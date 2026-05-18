@@ -76,6 +76,7 @@ pub struct GenConfig {
     pub emit_cnot: bool,
     pub emit_popc: bool,
     pub emit_abs: bool,
+    pub emit_special_regs: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
     pub emit_reg_divrem: bool,
@@ -83,6 +84,7 @@ pub struct GenConfig {
     pub emit_funnel: bool,
     pub emit_reg_funnel: bool,
     pub emit_predicated_funnel: bool,
+    pub emit_funnel_clamp: bool,
     pub emit_neg: bool,
     pub emit_shl: bool,
     pub emit_shr: bool,
@@ -111,6 +113,7 @@ pub struct GenConfig {
     pub emit_signed_mad_wide: bool,
     pub emit_predicated_mul_wide: bool,
     pub emit_predicated_mad_wide: bool,
+    pub emit_wide_high_result: bool,
     pub emit_wide_int: bool,
     pub emit_wide_minmax: bool,
     pub emit_wide_mulhi: bool,
@@ -131,6 +134,7 @@ pub struct GenConfig {
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
     pub emit_i32_boundary_immediates: bool,
+    pub emit_dp4a: bool,
     pub emit_dp2a: bool,
     pub emit_negated_predicates: bool,
     pub emit_predicated_alu: bool,
@@ -200,6 +204,7 @@ impl Default for GenConfig {
             emit_cnot: true,
             emit_popc: true,
             emit_abs: true,
+            emit_special_regs: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
             emit_reg_divrem: true,
@@ -207,6 +212,7 @@ impl Default for GenConfig {
             emit_funnel: true,
             emit_reg_funnel: true,
             emit_predicated_funnel: true,
+            emit_funnel_clamp: true,
             emit_neg: true,
             emit_shl: true,
             emit_shr: true,
@@ -235,6 +241,7 @@ impl Default for GenConfig {
             emit_signed_mad_wide: true,
             emit_predicated_mul_wide: true,
             emit_predicated_mad_wide: true,
+            emit_wide_high_result: true,
             emit_wide_int: true,
             emit_wide_minmax: true,
             emit_wide_mulhi: true,
@@ -255,6 +262,7 @@ impl Default for GenConfig {
             emit_subc: true,
             emit_predicated_carry: true,
             emit_i32_boundary_immediates: true,
+            emit_dp4a: true,
             emit_dp2a: true,
             emit_negated_predicates: true,
             emit_predicated_alu: true,
@@ -411,6 +419,29 @@ impl UnaryOp {
             // INT_MIN per PTX spec — no UB on arbitrary inputs.
             UnaryOp::AbsS => "abs.s32",
             UnaryOp::NegS => "neg.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SpecialRegOp {
+    LaneId,
+    LaneMaskEq,
+    LaneMaskLt,
+    LaneMaskLe,
+    LaneMaskGt,
+    LaneMaskGe,
+}
+
+impl SpecialRegOp {
+    fn reg_name(self) -> &'static str {
+        match self {
+            SpecialRegOp::LaneId => "%laneid",
+            SpecialRegOp::LaneMaskEq => "%lanemask_eq",
+            SpecialRegOp::LaneMaskLt => "%lanemask_lt",
+            SpecialRegOp::LaneMaskLe => "%lanemask_le",
+            SpecialRegOp::LaneMaskGt => "%lanemask_gt",
+            SpecialRegOp::LaneMaskGe => "%lanemask_ge",
         }
     }
 }
@@ -1054,11 +1085,29 @@ enum FunnelDir {
 }
 
 impl FunnelDir {
-    fn mnemonic(self) -> &'static str {
+    fn mnemonic(self, mode: FunnelMode) -> &'static str {
+        match (self, mode) {
+            // .wrap masks the shift amount to 5 bits, while .clamp has defined
+            // behavior for out-of-range counts.
+            (FunnelDir::Left, FunnelMode::Wrap) => "shf.l.wrap.b32",
+            (FunnelDir::Right, FunnelMode::Wrap) => "shf.r.wrap.b32",
+            (FunnelDir::Left, FunnelMode::Clamp) => "shf.l.clamp.b32",
+            (FunnelDir::Right, FunnelMode::Clamp) => "shf.r.clamp.b32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FunnelMode {
+    Wrap,
+    Clamp,
+}
+
+impl FunnelMode {
+    fn max_immediate_amount(self) -> u32 {
         match self {
-            // .wrap mode masks the shift amount to 5 bits — safe for any input.
-            FunnelDir::Left => "shf.l.wrap.b32",
-            FunnelDir::Right => "shf.r.wrap.b32",
+            FunnelMode::Wrap => 31,
+            FunnelMode::Clamp => 63,
         }
     }
 }
@@ -1259,6 +1308,8 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// `mov.u32 dst, %special;` for deterministic per-lane special registers.
+    SpecialReg { op: SpecialRegOp, dst: u32 },
     /// `cvt.{u32,s32}.{u8,u16,s8,s16} dst, src;` — subword integer extension.
     Cvt { op: CvtOp, dst: u32, src: Operand },
     /// `setp.<cmp> pred, ca, cb; @pred cvt.{...} dst, src;`.
@@ -1357,12 +1408,13 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
-    /// `mul.wide.{u32,s32}` through a scratch b64 register, low 32 bits kept.
+    /// `mul.wide.{u32,s32}` through a scratch b64 register.
     MulWide {
         op: MulWideOp,
         dst: u32,
         a: Operand,
         b: Operand,
+        keep_high: bool,
     },
     /// `setp.<cmp> pred, ca, cb; @pred mul.wide.* ...; @pred mov.b64 ...;`.
     PredicatedMulWide {
@@ -1370,18 +1422,20 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+        keep_high: bool,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
         pred: u32,
     },
-    /// `mad.wide.{u32,s32}` through scratch b64 registers, low 32 bits kept.
+    /// `mad.wide.{u32,s32}` through scratch b64 registers.
     MadWide {
         op: MadWideOp,
         dst: u32,
         a: Operand,
         b: Operand,
         c: Operand,
+        keep_high: bool,
     },
     /// `setp.<cmp> pred, ca, cb; @pred mad.wide.* ...; @pred mov.b64 ...;`.
     PredicatedMadWide {
@@ -1390,6 +1444,7 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+        keep_high: bool,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -1726,26 +1781,28 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
-    /// `shf.{l,r}.wrap.b32 dst, a, b, amount;` — funnel shift. `.wrap`
-    /// masks `amount` to 5 bits → safe for any input.
+    /// `shf.{l,r}.{wrap,clamp}.b32 dst, a, b, amount;`.
     Funnel {
         dir: FunnelDir,
+        mode: FunnelMode,
         dst: u32,
         a: Operand,
         b: Operand,
         amount: u32,
     },
-    /// `shf.{l,r}.wrap.b32 dst, a, b, amount_reg;`.
+    /// `shf.{l,r}.{wrap,clamp}.b32 dst, a, b, amount_reg;`.
     RegFunnel {
         dir: FunnelDir,
+        mode: FunnelMode,
         dst: u32,
         a: Operand,
         b: Operand,
         amount: Operand,
     },
-    /// `setp.<cmp> pred, ca, cb; @pred shf.{l,r}.wrap.b32 dst, a, b, amount;`.
+    /// `setp.<cmp> pred, ca, cb; @pred shf.* dst, a, b, amount;`.
     PredicatedFunnel {
         dir: FunnelDir,
+        mode: FunnelMode,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -2558,8 +2615,14 @@ impl<'a> Generator<'a> {
                 })
             }
         } else if pick < 160 {
-            if !self.can_emit_unary() {
+            if !self.can_emit_unary() && !self.cfg.emit_special_regs {
                 return self.pick_mad_or_add(u);
+            }
+            if self.cfg.emit_special_regs && (!self.can_emit_unary() || u.arbitrary::<bool>()?) {
+                return Ok(Inst::SpecialReg {
+                    op: pick_special_reg(u)?,
+                    dst: self.pick_dst(u)?,
+                });
             }
             let op = pick_unary(
                 u,
@@ -2645,16 +2708,18 @@ impl<'a> Generator<'a> {
                 } else {
                     FunnelDir::Right
                 };
+                let mode = pick_funnel_mode(u, self.cfg.emit_funnel_clamp)?;
                 if self.cfg.emit_predicated_funnel && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedFunnel {
                         dir,
+                        mode,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
                         amount: if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
                             self.pick_reg_operand(u)?
                         } else {
-                            Operand::Imm(u.int_in_range(0..=31)?)
+                            Operand::Imm(u.int_in_range(0..=mode.max_immediate_amount())?)
                         },
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
@@ -2664,6 +2729,7 @@ impl<'a> Generator<'a> {
                 } else if self.cfg.emit_reg_funnel && u.arbitrary::<bool>()? {
                     Ok(Inst::RegFunnel {
                         dir,
+                        mode,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
@@ -2672,10 +2738,11 @@ impl<'a> Generator<'a> {
                 } else {
                     Ok(Inst::Funnel {
                         dir,
+                        mode,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
-                        amount: u.int_in_range(0..=31)?,
+                        amount: u.int_in_range(0..=mode.max_immediate_amount())?,
                     })
                 }
             } else {
@@ -2943,12 +3010,14 @@ impl<'a> Generator<'a> {
                 }
             } else if self.cfg.emit_mul_wide && wide_pick == 1 {
                 let op = pick_mul_wide(u)?;
+                let keep_high = self.cfg.emit_wide_high_result && u.arbitrary::<bool>()?;
                 if self.cfg.emit_predicated_mul_wide && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedMulWide {
                         op,
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
+                        keep_high,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2960,10 +3029,12 @@ impl<'a> Generator<'a> {
                         dst: self.pick_dst(u)?,
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
+                        keep_high,
                     })
                 }
             } else if self.cfg.emit_mad_wide && wide_pick == 8 {
                 let op = pick_mad_wide(u, self.cfg.emit_signed_mad_wide)?;
+                let keep_high = self.cfg.emit_wide_high_result && u.arbitrary::<bool>()?;
                 if self.cfg.emit_predicated_mad_wide && u.arbitrary::<bool>()? {
                     Ok(Inst::PredicatedMadWide {
                         op,
@@ -2971,6 +3042,7 @@ impl<'a> Generator<'a> {
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
                         c: self.pick_operand(u)?,
+                        keep_high,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
@@ -2983,6 +3055,7 @@ impl<'a> Generator<'a> {
                         a: self.pick_operand(u)?,
                         b: self.pick_operand(u)?,
                         c: self.pick_operand(u)?,
+                        keep_high,
                     })
                 }
             } else if self.cfg.emit_wide_shifts && wide_pick == 2 {
@@ -3162,52 +3235,61 @@ impl<'a> Generator<'a> {
                     c: self.pick_operand(u)?,
                 })
             }
-        } else if self.cfg.emit_dp2a && u.arbitrary::<bool>()? {
-            let op = pick_dp2a(u)?;
-            if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
-                Ok(Inst::PredicatedDp2a {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_guard_operand(u)?,
-                    cb: self.pick_guard_operand(u)?,
-                    pred: self.alloc_inst_pred(u)?,
-                })
+        } else if self.cfg.emit_dp2a || self.cfg.emit_dp4a {
+            let use_dp2a = if self.cfg.emit_dp2a && self.cfg.emit_dp4a {
+                u.arbitrary::<bool>()?
             } else {
-                Ok(Inst::Dp2a {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
+                self.cfg.emit_dp2a
+            };
+            if use_dp2a {
+                let op = pick_dp2a(u)?;
+                if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedDp2a {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Dp2a {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                    })
+                }
+            } else {
+                let op = pick_dp4a(u)?;
+                if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedDp4a {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::Dp4a {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        c: self.pick_operand(u)?,
+                    })
+                }
             }
         } else {
-            let op = pick_dp4a(u)?;
-            if self.cfg.emit_predicated_dp && u.arbitrary::<bool>()? {
-                Ok(Inst::PredicatedDp4a {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                    cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
-                    ca: self.pick_guard_operand(u)?,
-                    cb: self.pick_guard_operand(u)?,
-                    pred: self.alloc_inst_pred(u)?,
-                })
-            } else {
-                Ok(Inst::Dp4a {
-                    op,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                    c: self.pick_operand(u)?,
-                })
-            }
+            self.pick_mad_or_add(u)
         }
     }
 
@@ -3256,6 +3338,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedRegShift { dst, .. }
             | Inst::Unary { dst, .. }
             | Inst::PredicatedUnary { dst, .. }
+            | Inst::SpecialReg { dst, .. }
             | Inst::Cvt { dst, .. }
             | Inst::PredicatedCvt { dst, .. }
             | Inst::Bfind { dst, .. }
@@ -3876,6 +3959,9 @@ impl<'a> Generator<'a> {
                 src.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::SpecialReg { op, dst } => {
+                writeln!(s, "    mov.u32       %r{dst}, {};", op.reg_name()).unwrap();
+            }
             Inst::Cvt { op, dst, src } => {
                 write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
                 src.emit(s);
@@ -4045,20 +4131,31 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
             }
-            Inst::MulWide { op, dst, a, b } => {
+            Inst::MulWide {
+                op,
+                dst,
+                a,
+                b,
+                keep_high,
+            } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
                 write!(s, "    {:<13} %rd6, ", op.mnemonic()).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ";").unwrap();
-                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+                if keep_high {
+                    writeln!(s, "    mov.b64       {{%r{scratch_hi}, %r{dst}}}, %rd6;").unwrap();
+                } else {
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+                }
             }
             Inst::PredicatedMulWide {
                 op,
                 dst,
                 a,
                 b,
+                keep_high,
                 cmp,
                 ca,
                 cb,
@@ -4071,14 +4168,30 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ";").unwrap();
-                writeln!(
-                    s,
-                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
-                    pred_guard(pred)
-                )
-                .unwrap();
+                if keep_high {
+                    writeln!(
+                        s,
+                        "    {} mov.b64 {{%r{scratch_hi}, %r{dst}}}, %rd6;",
+                        pred_guard(pred)
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                        pred_guard(pred)
+                    )
+                    .unwrap();
+                }
             }
-            Inst::MadWide { op, dst, a, b, c } => {
+            Inst::MadWide {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                keep_high,
+            } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
                 write!(s, "    {:<13} %rd7, ", op.cvt_mnemonic()).unwrap();
                 c.emit(s);
@@ -4088,7 +4201,11 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ", %rd7;").unwrap();
-                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+                if keep_high {
+                    writeln!(s, "    mov.b64       {{%r{scratch_hi}, %r{dst}}}, %rd6;").unwrap();
+                } else {
+                    writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+                }
             }
             Inst::PredicatedMadWide {
                 op,
@@ -4096,6 +4213,7 @@ impl<'a> Generator<'a> {
                 a,
                 b,
                 c,
+                keep_high,
                 cmp,
                 ca,
                 cb,
@@ -4111,12 +4229,21 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ", %rd7;").unwrap();
-                writeln!(
-                    s,
-                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
-                    pred_guard(pred)
-                )
-                .unwrap();
+                if keep_high {
+                    writeln!(
+                        s,
+                        "    {} mov.b64 {{%r{scratch_hi}, %r{dst}}}, %rd6;",
+                        pred_guard(pred)
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                        pred_guard(pred)
+                    )
+                    .unwrap();
+                }
             }
             Inst::WideInt { op, dst, a, b } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
@@ -4786,12 +4913,13 @@ impl<'a> Generator<'a> {
             }
             Inst::Funnel {
                 dir,
+                mode,
                 dst,
                 a,
                 b,
                 amount,
             } => {
-                write!(s, "    {:<13} %r{dst}, ", dir.mnemonic()).unwrap();
+                write!(s, "    {:<17} %r{dst}, ", dir.mnemonic(mode)).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -4799,12 +4927,13 @@ impl<'a> Generator<'a> {
             }
             Inst::RegFunnel {
                 dir,
+                mode,
                 dst,
                 a,
                 b,
                 amount,
             } => {
-                write!(s, "    {:<13} %r{dst}, ", dir.mnemonic()).unwrap();
+                write!(s, "    {:<17} %r{dst}, ", dir.mnemonic(mode)).unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
@@ -4814,6 +4943,7 @@ impl<'a> Generator<'a> {
             }
             Inst::PredicatedFunnel {
                 dir,
+                mode,
                 dst,
                 a,
                 b,
@@ -4826,9 +4956,9 @@ impl<'a> Generator<'a> {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 write!(
                     s,
-                    "    {} {:<8} %r{dst}, ",
+                    "    {} {:<12} %r{dst}, ",
                     pred_guard(pred),
-                    dir.mnemonic()
+                    dir.mnemonic(mode)
                 )
                 .unwrap();
                 a.emit(s);
@@ -5219,6 +5349,18 @@ fn pick_unary(
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
+    let ops = [
+        SpecialRegOp::LaneId,
+        SpecialRegOp::LaneMaskEq,
+        SpecialRegOp::LaneMaskLt,
+        SpecialRegOp::LaneMaskLe,
+        SpecialRegOp::LaneMaskGt,
+        SpecialRegOp::LaneMaskGe,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_cvt(u: &mut Unstructured) -> Result<CvtOp> {
     let ops = [
         CvtOp::U8ToU32,
@@ -5328,6 +5470,14 @@ fn pick_mul24(u: &mut Unstructured) -> Result<Mul24Op> {
 fn pick_mul_wide(u: &mut Unstructured) -> Result<MulWideOp> {
     let ops = [MulWideOp::U32, MulWideOp::S32];
     Ok(*u.choose(&ops)?)
+}
+
+fn pick_funnel_mode(u: &mut Unstructured, emit_funnel_clamp: bool) -> Result<FunnelMode> {
+    if emit_funnel_clamp && u.arbitrary::<bool>()? {
+        Ok(FunnelMode::Clamp)
+    } else {
+        Ok(FunnelMode::Wrap)
+    }
 }
 
 fn pick_mad_wide(u: &mut Unstructured, emit_signed_mad_wide: bool) -> Result<MadWideOp> {
@@ -5667,6 +5817,14 @@ mod tests {
         "not.b32", "cnot.b32", "popc.b32", "clz.b32", "brev.b32", "abs.s32", "neg.s32",
     ];
     const POST_KNOWN_UNARY_MNEMONICS: &[&str] = &["popc.b32", "clz.b32"];
+    const SPECIAL_REG_NAMES: &[&str] = &[
+        "%laneid",
+        "%lanemask_eq",
+        "%lanemask_lt",
+        "%lanemask_le",
+        "%lanemask_gt",
+        "%lanemask_ge",
+    ];
     const CVT_MNEMONICS: &[&str] = &[
         "cvt.u32.u8",
         "cvt.u32.u16",
@@ -5809,7 +5967,13 @@ mod tests {
         "set.gt.u32.s32",
         "set.ge.u32.s32",
     ];
-    const FUNNEL_MNEMONICS: &[&str] = &["shf.l.wrap.b32", "shf.r.wrap.b32"];
+    const FUNNEL_CLAMP_MNEMONICS: &[&str] = &["shf.l.clamp.b32", "shf.r.clamp.b32"];
+    const FUNNEL_MNEMONICS: &[&str] = &[
+        "shf.l.wrap.b32",
+        "shf.r.wrap.b32",
+        "shf.l.clamp.b32",
+        "shf.r.clamp.b32",
+    ];
     const SAD_MNEMONICS: &[&str] = &["sad.u32", "sad.s32"];
     const SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.s32.s32", "slct.b32.s32"];
     const POST_KNOWN_SLCT_MNEMONICS: &[&str] = &["slct.u32.s32", "slct.b32.s32"];
@@ -5946,6 +6110,49 @@ mod tests {
         ptx.lines()
             .filter_map(|line| line.trim_start().split_whitespace().next())
             .any(|token| token == mnemonic)
+    }
+
+    fn has_special_reg(ptx: &str, reg_name: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("mov.u32") && line.ends_with(&format!("{reg_name};"))
+        })
+    }
+
+    fn parse_u32_reg(token: &str) -> Option<u32> {
+        token.trim().strip_prefix("%r")?.parse().ok()
+    }
+
+    fn has_wide_high_result(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            let mut tokens = line.split_whitespace();
+            let first = tokens.next();
+            let op = if first.is_some_and(|token| token.starts_with('@')) {
+                tokens.next()
+            } else {
+                first
+            };
+            if op != Some("mov.b64") {
+                return false;
+            }
+
+            let Some(start) = line.find('{') else {
+                return false;
+            };
+            let Some(end) = line[start + 1..].find('}') else {
+                return false;
+            };
+            let regs = &line[start + 1..start + 1 + end];
+            let mut parts = regs.split(',');
+            let Some(lo) = parts.next().and_then(parse_u32_reg) else {
+                return false;
+            };
+            let Some(hi) = parts.next().and_then(parse_u32_reg) else {
+                return false;
+            };
+            lo > hi
+        })
     }
 
     fn predicated_mnemonic(line: &str) -> Option<&str> {
@@ -7265,6 +7472,48 @@ mod tests {
     }
 
     #[test]
+    fn special_reg_generation_is_reachable() {
+        let mut found = vec![false; SPECIAL_REG_NAMES.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes(&bytes).unwrap();
+            for (i, reg_name) in SPECIAL_REG_NAMES.iter().enumerate() {
+                found[i] |= has_special_reg(&ptx, reg_name);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SPECIAL_REG_NAMES
+            .iter()
+            .zip(found)
+            .filter_map(|(reg_name, seen)| (!seen).then_some(*reg_name))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn special_reg_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_special_regs: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for reg_name in SPECIAL_REG_NAMES {
+                assert!(
+                    !has_special_reg(&ptx, reg_name),
+                    "seed {seed:x} emitted {reg_name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn neg_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_neg: false,
@@ -8177,6 +8426,52 @@ mod tests {
             assert!(
                 !has_predicated_mad_wide(&ptx),
                 "seed {seed:x} emitted predicated mad.wide"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_high_result_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_high_result = false;
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_high_result |= has_wide_high_result(&ptx);
+            if saw_high_result {
+                break;
+            }
+        }
+
+        assert!(
+            saw_high_result,
+            "sample did not emit high-half wide result extraction"
+        );
+    }
+
+    #[test]
+    fn wide_high_result_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_high_result: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_wide_high_result(&ptx),
+                "seed {seed:x} emitted high-half wide result extraction"
             );
         }
     }
@@ -9630,6 +9925,25 @@ mod tests {
     }
 
     #[test]
+    fn dp4a_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_dp4a: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in DP4A_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn dp2a_generation_is_reachable() {
         let mnemonics = [
             "dp2a.lo.u32.u32",
@@ -10178,8 +10492,33 @@ mod tests {
         for seed in 0..256 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in ["shf.l.wrap.b32", "shf.r.wrap.b32"] {
+            for mnemonic in FUNNEL_MNEMONICS {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn funnel_clamp_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, FUNNEL_CLAMP_MNEMONICS);
+    }
+
+    #[test]
+    fn funnel_clamp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_funnel_clamp: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in FUNNEL_CLAMP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
             }
         }
     }

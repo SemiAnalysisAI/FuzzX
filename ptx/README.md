@@ -238,14 +238,16 @@ that feature.
 | `DIV_DISABLE_CNOT` | `cnot.b32`. |
 | `DIV_DISABLE_POPC` | `popc.b32`. |
 | `DIV_DISABLE_ABS` | `abs.s32`. |
+| `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
 | `DIV_DISABLE_REG_DIVREM` | Register-divisor `div.u32` and `rem.u32` with sanitized divisors. |
 | `DIV_DISABLE_PREDICATED_REG_DIVREM` | Predicated register-divisor `div.u32` and `rem.u32`. |
 | `DIV_DISABLE_PREDICATED_DIVREM` | Predicated `div` and `rem` instructions. |
-| `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
-| `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
-| `DIV_DISABLE_PREDICATED_FUNNEL` | Predicated `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
+| `DIV_DISABLE_FUNNEL` | `shf.{l,r}.{wrap,clamp}.b32`. |
+| `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.{l,r}.{wrap,clamp}.b32`. |
+| `DIV_DISABLE_PREDICATED_FUNNEL` | Predicated `shf.{l,r}.{wrap,clamp}.b32`. |
+| `DIV_DISABLE_FUNNEL_CLAMP` | `shf.l.clamp.b32` and `shf.r.clamp.b32`. |
 | `DIV_DISABLE_NEG` | `neg.s32`. |
 | `DIV_DISABLE_SHL` | `shl.b32`. |
 | `DIV_DISABLE_SHR` | `shr.u32`. |
@@ -274,6 +276,7 @@ that feature.
 | `DIV_DISABLE_MAD_WIDE` | `mad.wide.{u32,s32}`. |
 | `DIV_DISABLE_SIGNED_MAD_WIDE` | `mad.wide.s32`. |
 | `DIV_DISABLE_PREDICATED_MAD_WIDE` | Predicated `mad.wide.{u32,s32}` instructions. |
+| `DIV_DISABLE_WIDE_HIGH_RESULT` | High-half extraction from `mul.wide` and `mad.wide` results. |
 | `DIV_DISABLE_WIDE_INT` | 64-bit scratch-register ALU generation. |
 | `DIV_DISABLE_WIDE_MINMAX` | 64-bit scratch-register `min/max.{u64,s64}` instructions. |
 | `DIV_DISABLE_WIDE_MULHI` | 64-bit scratch-register `mul.hi.{u64,s64}` instructions. |
@@ -294,7 +297,8 @@ that feature.
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_PREDICATED_CARRY` | Predicated `add.cc` / `addc` and `sub.cc` / `subc` pairs. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
-| `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
+| `DIV_DISABLE_DP4A` | `dp4a.{u32,s32}.{u32,s32}`. |
+| `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.{u32,s32}.{u32,s32}`. |
 | `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
 | `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
