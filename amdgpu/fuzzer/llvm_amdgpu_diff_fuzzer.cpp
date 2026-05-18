@@ -808,8 +808,12 @@ bool isAllowedIRInstruction(const Instruction &I) {
     case Instruction::Shl:
     case Instruction::LShr:
     case Instruction::AShr:
-      if (unsigned Width = integerScalarWidth(BO->getType()))
-        return isConstantIntOrVectorBelow(BO->getOperand(1), Width);
+      if (unsigned Width = integerScalarWidth(BO->getType())) {
+        if (isConstantIntOrVectorBelow(BO->getOperand(1), Width))
+          return true;
+        return BO->getType()->isIntegerTy(32) &&
+               isKnownUnsignedI32AtMost(BO->getOperand(1), Width - 1);
+      }
       return false;
     default:
       return false;
@@ -3990,6 +3994,58 @@ Value *emitSafeInputLoadInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomMaskedShiftInstruction(IRBuilder<NoFolder> &B, Value *A,
+                                        Value *Bv, std::minstd_rand &Gen,
+                                        StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *Shift =
+      B.CreateAnd(Bv, ci32(Ctx, 31), Twine(NamePrefix) + ".shift.mask");
+  Value *Result = nullptr;
+  switch (Gen() % 6) {
+  case 0:
+    Result = B.CreateShl(A, Shift, Twine(NamePrefix) + ".shl");
+    break;
+  case 1:
+    Result = B.CreateLShr(A, Shift, Twine(NamePrefix) + ".lshr");
+    break;
+  case 2:
+    Result = B.CreateAShr(A, Shift, Twine(NamePrefix) + ".ashr");
+    break;
+  case 3: {
+    Value *Lo = B.CreateLShr(A, Shift, Twine(NamePrefix) + ".lo");
+    Value *Hi = B.CreateShl(Bv, Shift, Twine(NamePrefix) + ".hi");
+    Result = B.CreateOr(Lo, Hi, Twine(NamePrefix) + ".or");
+    break;
+  }
+  case 4: {
+    Value *Lo = B.CreateShl(A, Shift, Twine(NamePrefix) + ".lo");
+    Value *Hi = B.CreateLShr(Bv, Shift, Twine(NamePrefix) + ".hi");
+    Result = B.CreateXor(Lo, Hi, Twine(NamePrefix) + ".xor");
+    break;
+  }
+  default: {
+    Value *Signed = B.CreateAShr(A, Shift, Twine(NamePrefix) + ".signed");
+    Value *Unsigned = B.CreateLShr(A, Shift, Twine(NamePrefix) + ".unsigned");
+    Value *UseSigned =
+        B.CreateICmpSLT(A, ci32(Ctx, 0), Twine(NamePrefix) + ".sign");
+    Result = B.CreateSelect(UseSigned, Signed, Unsigned,
+                            Twine(NamePrefix) + ".select");
+    break;
+  }
+  }
+
+  switch (Gen() % 4) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateAdd(Result, A, Twine(NamePrefix) + ".add");
+  case 2:
+    return B.CreateXor(Result, Bv, Twine(NamePrefix) + ".xor.mix");
+  default:
+    return B.CreateSub(Bv, Result, Twine(NamePrefix) + ".sub");
+  }
+}
+
 Value *emitRandomNarrowScalarInstruction(IRBuilder<NoFolder> &B, Module &M,
                                          Value *A, Value *Bv,
                                          std::minstd_rand &Gen,
@@ -4674,7 +4730,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 186) {
+  switch (Gen() % 194) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4958,6 +5014,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 169:
     return emitRandomByteDotChainIdiom(B, A, Bv, Gen,
                                        "fuzz.bytedot.idiom");
+  case 170:
+  case 171:
+  case 172:
+  case 173:
+  case 174:
+  case 175:
+  case 176:
+  case 177:
+    return emitRandomMaskedShiftInstruction(B, A, Bv, Gen,
+                                            "fuzz.maskshift");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4992,7 +5058,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 170) {
+  switch (Gen() % 178) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -5269,6 +5335,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 161:
     return emitRandomByteDotChainIdiom(B, A, Bv, Gen,
                                        "fuzz.cfg.bytedot.idiom");
+  case 162:
+  case 163:
+  case 164:
+  case 165:
+  case 166:
+  case 167:
+  case 168:
+  case 169:
+    return emitRandomMaskedShiftInstruction(B, A, Bv, Gen,
+                                            "fuzz.cfg.maskshift");
   default:
     switch (Gen() % 5) {
     case 0:
