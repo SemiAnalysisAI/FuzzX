@@ -64,6 +64,14 @@ pub struct GenConfig {
     pub emit_packed_add: bool,
     pub emit_signed_packed_add: bool,
     pub emit_predicated_packed_add: bool,
+    pub emit_packed_minmax: bool,
+    pub emit_signed_packed_minmax: bool,
+    pub emit_predicated_packed_minmax: bool,
+    pub emit_scalar_16bit: bool,
+    pub emit_signed_scalar_16bit: bool,
+    pub emit_scalar_16bit_min: bool,
+    pub emit_scalar_16bit_signed_unary: bool,
+    pub emit_predicated_scalar_16bit: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_mad_hi: bool,
@@ -241,6 +249,14 @@ impl Default for GenConfig {
             emit_packed_add: true,
             emit_signed_packed_add: true,
             emit_predicated_packed_add: true,
+            emit_packed_minmax: true,
+            emit_signed_packed_minmax: true,
+            emit_predicated_packed_minmax: true,
+            emit_scalar_16bit: true,
+            emit_signed_scalar_16bit: true,
+            emit_scalar_16bit_min: true,
+            emit_scalar_16bit_signed_unary: true,
+            emit_predicated_scalar_16bit: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_mad_hi: true,
@@ -489,6 +505,98 @@ impl PackedAddOp {
             PackedAddOp::U16x2 => "add.u16x2",
             PackedAddOp::S16x2 => "add.s16x2",
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PackedMinMaxOp {
+    MinU16x2,
+    MaxU16x2,
+    MinS16x2,
+    MaxS16x2,
+}
+
+impl PackedMinMaxOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            PackedMinMaxOp::MinU16x2 => "min.u16x2",
+            PackedMinMaxOp::MaxU16x2 => "max.u16x2",
+            PackedMinMaxOp::MinS16x2 => "min.s16x2",
+            PackedMinMaxOp::MaxS16x2 => "max.s16x2",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Scalar16Op {
+    AddU16,
+    SubU16,
+    MinU16,
+    MaxU16,
+    MulLoU16,
+    MulHiU16,
+    AddS16,
+    SubS16,
+    MinS16,
+    MaxS16,
+    MulLoS16,
+    MulHiS16,
+    AbsS16,
+    NegS16,
+}
+
+impl Scalar16Op {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Scalar16Op::AddU16 => "add.u16",
+            Scalar16Op::SubU16 => "sub.u16",
+            Scalar16Op::MinU16 => "min.u16",
+            Scalar16Op::MaxU16 => "max.u16",
+            Scalar16Op::MulLoU16 => "mul.lo.u16",
+            Scalar16Op::MulHiU16 => "mul.hi.u16",
+            Scalar16Op::AddS16 => "add.s16",
+            Scalar16Op::SubS16 => "sub.s16",
+            Scalar16Op::MinS16 => "min.s16",
+            Scalar16Op::MaxS16 => "max.s16",
+            Scalar16Op::MulLoS16 => "mul.lo.s16",
+            Scalar16Op::MulHiS16 => "mul.hi.s16",
+            Scalar16Op::AbsS16 => "abs.s16",
+            Scalar16Op::NegS16 => "neg.s16",
+        }
+    }
+
+    fn input_cvt_mnemonic(self) -> &'static str {
+        if self.is_signed() {
+            "cvt.s16.s32"
+        } else {
+            "cvt.u16.u32"
+        }
+    }
+
+    fn output_cvt_mnemonic(self) -> &'static str {
+        if self.is_signed() {
+            "cvt.s32.s16"
+        } else {
+            "cvt.u32.u16"
+        }
+    }
+
+    fn is_unary(self) -> bool {
+        matches!(self, Scalar16Op::AbsS16 | Scalar16Op::NegS16)
+    }
+
+    fn is_signed(self) -> bool {
+        matches!(
+            self,
+            Scalar16Op::AddS16
+                | Scalar16Op::SubS16
+                | Scalar16Op::MinS16
+                | Scalar16Op::MaxS16
+                | Scalar16Op::MulLoS16
+                | Scalar16Op::MulHiS16
+                | Scalar16Op::AbsS16
+                | Scalar16Op::NegS16
+        )
     }
 }
 
@@ -1562,6 +1670,20 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// Packed halfword min/max through a 32-bit register.
+    PackedMinMax {
+        op: PackedMinMaxOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Scalar 16-bit ALU through `.b16` scratch registers.
+    Scalar16 {
+        op: Scalar16Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
     Sel {
         dst: u32,
         a: Operand,
@@ -1599,6 +1721,28 @@ enum Inst {
     /// `setp.<cmp> pred, ca, cb; @pred add.{u16x2,s16x2} dst, a, b;`.
     PredicatedPackedAdd {
         op: PackedAddOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// `setp.<cmp> pred, ca, cb; @pred min/max.{u16x2,s16x2} dst, a, b;`.
+    PredicatedPackedMinMax {
+        op: PackedMinMaxOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated scalar 16-bit ALU through `.b16` scratch registers.
+    PredicatedScalar16 {
+        op: Scalar16Op,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -3544,28 +3688,86 @@ impl<'a> Generator<'a> {
         //   255..256 (<1%) Dp4a/Dp2a
         let pick: u8 = u.arbitrary()?;
         if pick < 90 {
-            if self.cfg.emit_packed_add && u.int_in_range(0..=7)? == 0 {
-                let op = pick_packed_add(u, self.cfg.emit_signed_packed_add)?;
-                if self.cfg.emit_predicated_alu
-                    && self.cfg.emit_predicated_packed_add
-                    && u.arbitrary::<bool>()?
-                {
-                    return Ok(Inst::PredicatedPackedAdd {
+            if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
+                && u.int_in_range(0..=7)? == 0
+            {
+                let use_minmax = self.cfg.emit_packed_minmax
+                    && (!self.cfg.emit_packed_add || u.arbitrary::<bool>()?);
+                if use_minmax {
+                    let op = pick_packed_minmax(u, self.cfg.emit_signed_packed_minmax)?;
+                    if self.cfg.emit_predicated_alu
+                        && self.cfg.emit_predicated_packed_minmax
+                        && u.arbitrary::<bool>()?
+                    {
+                        return Ok(Inst::PredicatedPackedMinMax {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_reg_operand(u)?,
+                            b: self.pick_reg_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        });
+                    }
+                    return Ok(Inst::PackedMinMax {
                         op,
                         dst: self.pick_dst(u)?,
                         a: self.pick_reg_operand(u)?,
                         b: self.pick_reg_operand(u)?,
+                    });
+                } else {
+                    let op = pick_packed_add(u, self.cfg.emit_signed_packed_add)?;
+                    if self.cfg.emit_predicated_alu
+                        && self.cfg.emit_predicated_packed_add
+                        && u.arbitrary::<bool>()?
+                    {
+                        return Ok(Inst::PredicatedPackedAdd {
+                            op,
+                            dst: self.pick_dst(u)?,
+                            a: self.pick_reg_operand(u)?,
+                            b: self.pick_reg_operand(u)?,
+                            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                            ca: self.pick_guard_operand(u)?,
+                            cb: self.pick_guard_operand(u)?,
+                            pred: self.alloc_inst_pred(u)?,
+                        });
+                    }
+                    return Ok(Inst::PackedAdd {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_reg_operand(u)?,
+                        b: self.pick_reg_operand(u)?,
+                    });
+                }
+            }
+            if self.cfg.emit_scalar_16bit && u.int_in_range(0..=7)? == 0 {
+                let op = pick_scalar_16(
+                    u,
+                    self.cfg.emit_signed_scalar_16bit,
+                    self.cfg.emit_scalar_16bit_min,
+                    self.cfg.emit_scalar_16bit_signed_unary,
+                )?;
+                if self.cfg.emit_predicated_alu
+                    && self.cfg.emit_predicated_scalar_16bit
+                    && u.arbitrary::<bool>()?
+                {
+                    return Ok(Inst::PredicatedScalar16 {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_cvt_operand(u)?,
+                        b: self.pick_cvt_operand(u)?,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     });
                 }
-                return Ok(Inst::PackedAdd {
+                return Ok(Inst::Scalar16 {
                     op,
                     dst: self.pick_dst(u)?,
-                    a: self.pick_reg_operand(u)?,
-                    b: self.pick_reg_operand(u)?,
+                    a: self.pick_cvt_operand(u)?,
+                    b: self.pick_cvt_operand(u)?,
                 });
             }
             let op = pick_binop(
@@ -4660,10 +4862,14 @@ impl<'a> Generator<'a> {
             }
             Inst::Bin { dst, .. }
             | Inst::PackedAdd { dst, .. }
+            | Inst::PackedMinMax { dst, .. }
+            | Inst::Scalar16 { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
             | Inst::PredicatedPackedAdd { dst, .. }
+            | Inst::PredicatedPackedMinMax { dst, .. }
+            | Inst::PredicatedScalar16 { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
             | Inst::PredLogicBin { dst, .. }
@@ -5038,6 +5244,29 @@ impl<'a> Generator<'a> {
                 b.emit(s);
                 writeln!(s, ";").unwrap();
             }
+            Inst::PackedMinMax { op, dst, a, b } => {
+                write!(s, "    {:<13} %r{dst}, ", op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::Scalar16 { op, dst, a, b } => {
+                write!(s, "    {:<13} %h0, ", op.input_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                if !op.is_unary() {
+                    write!(s, "    {:<13} %h1, ", op.input_cvt_mnemonic()).unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                }
+                if op.is_unary() {
+                    writeln!(s, "    {:<13} %h2, %h0;", op.mnemonic()).unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %h2, %h0, %h1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    {:<13} %r{dst}, %h2;", op.output_cvt_mnemonic()).unwrap();
+            }
             Inst::Sel {
                 dst,
                 a,
@@ -5116,6 +5345,61 @@ impl<'a> Generator<'a> {
                 write!(s, ", ").unwrap();
                 b.emit(s);
                 writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedPackedMinMax {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %r{dst}, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::PredicatedScalar16 {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %h0, ", op.input_cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                if !op.is_unary() {
+                    write!(s, "    {:<13} %h1, ", op.input_cvt_mnemonic()).unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
+                }
+                if op.is_unary() {
+                    writeln!(s, "    {} {:<8} %h2, %h0;", pred_guard(pred), op.mnemonic()).unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %h2, %h0, %h1;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(
+                    s,
+                    "    {} {:<8} %r{dst}, %h2;",
+                    pred_guard(pred),
+                    op.output_cvt_mnemonic()
+                )
+                .unwrap();
             }
             Inst::SetpBoolBin {
                 bool_op,
@@ -7509,6 +7793,59 @@ fn pick_packed_add(u: &mut Unstructured, emit_signed_packed_add: bool) -> Result
     Ok(*u.choose(ops)?)
 }
 
+fn pick_packed_minmax(
+    u: &mut Unstructured,
+    emit_signed_packed_minmax: bool,
+) -> Result<PackedMinMaxOp> {
+    let unsigned_ops = [PackedMinMaxOp::MinU16x2, PackedMinMaxOp::MaxU16x2];
+    let all_ops = [
+        PackedMinMaxOp::MinU16x2,
+        PackedMinMaxOp::MaxU16x2,
+        PackedMinMaxOp::MinS16x2,
+        PackedMinMaxOp::MaxS16x2,
+    ];
+    let ops: &[PackedMinMaxOp] = if emit_signed_packed_minmax {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
+fn pick_scalar_16(
+    u: &mut Unstructured,
+    emit_signed_scalar_16bit: bool,
+    emit_scalar_16bit_min: bool,
+    emit_scalar_16bit_signed_unary: bool,
+) -> Result<Scalar16Op> {
+    let mut ops = vec![
+        Scalar16Op::AddU16,
+        Scalar16Op::SubU16,
+        Scalar16Op::MaxU16,
+        Scalar16Op::MulLoU16,
+        Scalar16Op::MulHiU16,
+    ];
+    if emit_scalar_16bit_min {
+        ops.push(Scalar16Op::MinU16);
+    }
+    if emit_signed_scalar_16bit {
+        ops.extend_from_slice(&[
+            Scalar16Op::AddS16,
+            Scalar16Op::SubS16,
+            Scalar16Op::MaxS16,
+            Scalar16Op::MulLoS16,
+            Scalar16Op::MulHiS16,
+        ]);
+        if emit_scalar_16bit_min {
+            ops.push(Scalar16Op::MinS16);
+        }
+        if emit_scalar_16bit_signed_unary {
+            ops.extend_from_slice(&[Scalar16Op::AbsS16, Scalar16Op::NegS16]);
+        }
+    }
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
     let ops_with_signed = [
         CmpOp::Eq,
@@ -8216,6 +8553,46 @@ mod tests {
     const SAT_ARITH_MNEMONICS: &[&str] = &["add.sat.s32", "sub.sat.s32"];
     const PACKED_ADD_MNEMONICS: &[&str] = &["add.u16x2", "add.s16x2"];
     const SIGNED_PACKED_ADD_MNEMONICS: &[&str] = &["add.s16x2"];
+    const PACKED_MINMAX_MNEMONICS: &[&str] = &["min.u16x2", "max.u16x2", "min.s16x2", "max.s16x2"];
+    const SIGNED_PACKED_MINMAX_MNEMONICS: &[&str] = &["min.s16x2", "max.s16x2"];
+    const SCALAR_16BIT_MNEMONICS: &[&str] = &[
+        "add.u16",
+        "sub.u16",
+        "min.u16",
+        "max.u16",
+        "mul.lo.u16",
+        "mul.hi.u16",
+        "add.s16",
+        "sub.s16",
+        "min.s16",
+        "max.s16",
+        "mul.lo.s16",
+        "mul.hi.s16",
+        "abs.s16",
+        "neg.s16",
+    ];
+    const SCALAR_16BIT_POST_KNOWN_MNEMONICS: &[&str] = &[
+        "add.u16",
+        "sub.u16",
+        "max.u16",
+        "mul.lo.u16",
+        "mul.hi.u16",
+        "add.s16",
+        "sub.s16",
+        "max.s16",
+        "mul.lo.s16",
+        "mul.hi.s16",
+    ];
+    const SIGNED_SCALAR_16BIT_MNEMONICS: &[&str] = &[
+        "add.s16",
+        "sub.s16",
+        "min.s16",
+        "max.s16",
+        "mul.lo.s16",
+        "mul.hi.s16",
+        "abs.s16",
+        "neg.s16",
+    ];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
@@ -8536,6 +8913,8 @@ mod tests {
         for group in [
             BIN_MNEMONICS,
             PACKED_ADD_MNEMONICS,
+            PACKED_MINMAX_MNEMONICS,
+            SCALAR_16BIT_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -8582,6 +8961,8 @@ mod tests {
         let mut mnemonics = Vec::new();
         for group in [
             POST_KNOWN_BIN_MNEMONICS,
+            PACKED_MINMAX_MNEMONICS,
+            SCALAR_16BIT_POST_KNOWN_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
@@ -8721,9 +9102,12 @@ mod tests {
     }
 
     fn has_predicated_alu(ptx: &str) -> bool {
-        ptx.lines()
-            .filter_map(predicated_mnemonic)
-            .any(|op| BIN_MNEMONICS.contains(&op) || PACKED_ADD_MNEMONICS.contains(&op))
+        ptx.lines().filter_map(predicated_mnemonic).any(|op| {
+            BIN_MNEMONICS.contains(&op)
+                || PACKED_ADD_MNEMONICS.contains(&op)
+                || PACKED_MINMAX_MNEMONICS.contains(&op)
+                || SCALAR_16BIT_MNEMONICS.contains(&op)
+        })
     }
 
     fn setp_bool_suffix(line: &str) -> Option<&'static str> {
@@ -9351,6 +9735,8 @@ mod tests {
             emit_bfind: false,
             emit_bfi: false,
             emit_reg_bitfield: false,
+            emit_scalar_16bit_min: false,
+            emit_scalar_16bit_signed_unary: false,
             emit_addc: false,
             emit_subc: false,
             emit_i32_boundary_immediates: false,
@@ -9844,6 +10230,249 @@ mod tests {
             for op in ptx.lines().filter_map(predicated_mnemonic) {
                 assert!(
                     !PACKED_ADD_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packed_minmax_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 4096, PACKED_MINMAX_MNEMONICS);
+    }
+
+    #[test]
+    fn packed_minmax_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_packed_minmax: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in PACKED_MINMAX_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn signed_packed_minmax_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_packed_minmax: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_PACKED_MINMAX_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+            saw_unsigned |= has_mnemonic(&ptx, "min.u16x2") || has_mnemonic(&ptx, "max.u16x2");
+        }
+        assert!(
+            saw_unsigned,
+            "sample did not retain unsigned packed min/max coverage"
+        );
+    }
+
+    #[test]
+    fn predicated_packed_minmax_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; PACKED_MINMAX_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in PACKED_MINMAX_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = PACKED_MINMAX_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_packed_minmax_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_packed_minmax: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !PACKED_MINMAX_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_16bit_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 8192, SCALAR_16BIT_MNEMONICS);
+    }
+
+    #[test]
+    fn scalar_16bit_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SCALAR_16BIT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn signed_scalar_16bit_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_scalar_16bit: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_unsigned = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_SCALAR_16BIT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_unsigned |= has_mnemonic(&ptx, "add.u16")
+                || has_mnemonic(&ptx, "sub.u16")
+                || has_mnemonic(&ptx, "mul.lo.u16");
+        }
+        assert!(
+            saw_unsigned,
+            "sample did not retain unsigned scalar 16-bit coverage"
+        );
+    }
+
+    #[test]
+    fn scalar_16bit_signed_unary_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_signed_unary: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_other_signed = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "abs.s16"),
+                "seed {seed:x} emitted abs.s16"
+            );
+            assert!(
+                !has_mnemonic(&ptx, "neg.s16"),
+                "seed {seed:x} emitted neg.s16"
+            );
+            saw_other_signed |= has_mnemonic(&ptx, "add.s16") || has_mnemonic(&ptx, "mul.lo.s16");
+        }
+        assert!(
+            saw_other_signed,
+            "sample did not retain other signed scalar 16-bit coverage"
+        );
+    }
+
+    #[test]
+    fn scalar_16bit_min_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_min: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_max = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "min.u16"),
+                "seed {seed:x} emitted min.u16"
+            );
+            assert!(
+                !has_mnemonic(&ptx, "min.s16"),
+                "seed {seed:x} emitted min.s16"
+            );
+            saw_max |= has_mnemonic(&ptx, "max.u16") || has_mnemonic(&ptx, "max.s16");
+        }
+        assert!(saw_max, "sample did not retain scalar 16-bit max coverage");
+    }
+
+    #[test]
+    fn predicated_scalar_16bit_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SCALAR_16BIT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SCALAR_16BIT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SCALAR_16BIT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_scalar_16bit_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_scalar_16bit: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !SCALAR_16BIT_MNEMONICS.contains(&op),
                     "seed {seed:x} emitted predicated {op}"
                 );
             }
@@ -13289,6 +13918,7 @@ mod tests {
         let cfg = GenConfig {
             emit_cvt: false,
             emit_narrow_cvt: false,
+            emit_scalar_16bit: false,
             ..GenConfig::default()
         };
 
@@ -13337,6 +13967,8 @@ mod tests {
     fn predicated_cvt_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_predicated_cvt: false,
+            emit_predicated_narrow_cvt: false,
+            emit_predicated_scalar_16bit: false,
             ..GenConfig::default()
         };
 
@@ -13367,6 +13999,7 @@ mod tests {
             emit_narrow_cvt: false,
             emit_predicated_narrow_cvt: false,
             emit_subword_wide: false,
+            emit_scalar_16bit: false,
             ..GenConfig::default()
         };
 
@@ -13391,6 +14024,7 @@ mod tests {
         let cfg = GenConfig {
             emit_signed_narrow_cvt: false,
             emit_signed_subword_wide: false,
+            emit_signed_scalar_16bit: false,
             ..GenConfig::default()
         };
 

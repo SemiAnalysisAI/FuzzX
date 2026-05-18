@@ -111,6 +111,8 @@ Version | Description |
 | 13.0.88 | [m055-prmt-reg-control-eq-fold](known-miscompiles/m055-prmt-reg-control-eq-fold/NOTES.md): Register-control `prmt.b32` feeding an equality fold selects the wrong arm. |
 | 13.0.88 | [m054-packed-add-cvt-fold](known-miscompiles/m054-packed-add-cvt-fold/NOTES.md): `add.s16x2` feeding `cvt.u16` and another packed add drops the first packed-add contribution. |
 | 13.0.88 | [m056-packed-add-cvt-s16-fold](known-miscompiles/m056-packed-add-cvt-s16-fold/NOTES.md): Likely same root cause as m054; `add.u16x2` feeding `cvt.s16` drops the packed-add contribution. |
+| 13.0.88 | [m057-s16-unary-intmin-fold](known-miscompiles/m057-s16-unary-intmin-fold/NOTES.md): `abs.s16` / `neg.s16` of `INT16_MIN` feeding `cvt.s32.s16` is treated as a positive value. |
+| 13.0.88 | [m058-scalar16-min-cvt-fold](known-miscompiles/m058-scalar16-min-cvt-fold/NOTES.md): Scalar `min.{u16,s16}` through `.b16` scratch registers folds a following equality predicate incorrectly. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
 | 13.2.78 | [m028-shf-r-wrap-sub-fold](known-miscompiles/m028-shf-r-wrap-sub-fold/NOTES.md): `shf.r.wrap.b32` output is folded to zero before a final subtract. |
@@ -231,6 +233,14 @@ that feature.
 | `DIV_DISABLE_PACKED_ADD` | `add.u16x2` and `add.s16x2`. |
 | `DIV_DISABLE_SIGNED_PACKED_ADD` | `add.s16x2` only. |
 | `DIV_DISABLE_PREDICATED_PACKED_ADD` | Predicated `add.u16x2` and `add.s16x2` instructions. |
+| `DIV_DISABLE_PACKED_MINMAX` | `min/max.{u16x2,s16x2}`. |
+| `DIV_DISABLE_SIGNED_PACKED_MINMAX` | `min/max.s16x2` only. |
+| `DIV_DISABLE_PREDICATED_PACKED_MINMAX` | Predicated `min/max.{u16x2,s16x2}` instructions. |
+| `DIV_DISABLE_SCALAR_16BIT` | Scalar 16-bit ALU through `.b16` scratch registers. |
+| `DIV_DISABLE_SIGNED_SCALAR_16BIT` | Signed scalar 16-bit ALU while retaining unsigned `u16` ops. |
+| `DIV_DISABLE_SCALAR_16BIT_MIN` | `min.u16` and `min.s16` while retaining scalar 16-bit max and arithmetic instructions. |
+| `DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY` | `abs.s16` and `neg.s16` while retaining other scalar 16-bit ALU instructions. |
+| `DIV_DISABLE_PREDICATED_SCALAR_16BIT` | Predicated scalar 16-bit ALU instructions. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_MAD_HI` | `mad.hi.u32` and `mad.hi.s32`. |
