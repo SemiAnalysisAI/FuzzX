@@ -191,6 +191,7 @@ pub struct GenConfig {
     pub emit_wide_setp_bool: bool,
     pub emit_wide_selp: bool,
     pub emit_wide_unary: bool,
+    pub emit_signed_wide_unary: bool,
     pub emit_predicated_wide_unary: bool,
     pub emit_wide_shifts: bool,
     pub emit_wide_reg_shifts: bool,
@@ -410,6 +411,7 @@ impl Default for GenConfig {
             emit_wide_setp_bool: true,
             emit_wide_selp: true,
             emit_wide_unary: true,
+            emit_signed_wide_unary: true,
             emit_predicated_wide_unary: true,
             emit_wide_shifts: true,
             emit_wide_reg_shifts: true,
@@ -2832,6 +2834,8 @@ enum WideUnaryOp {
     PopcB64,
     ClzB64,
     BrevB64,
+    NegS64,
+    AbsS64,
 }
 
 impl WideUnaryOp {
@@ -2842,13 +2846,30 @@ impl WideUnaryOp {
             WideUnaryOp::PopcB64 => "popc.b64",
             WideUnaryOp::ClzB64 => "clz.b64",
             WideUnaryOp::BrevB64 => "brev.b64",
+            WideUnaryOp::NegS64 => "neg.s64",
+            WideUnaryOp::AbsS64 => "abs.s64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideUnaryOp::NegS64 | WideUnaryOp::AbsS64 => "cvt.s64.s32",
+            WideUnaryOp::NotB64
+            | WideUnaryOp::CnotB64
+            | WideUnaryOp::PopcB64
+            | WideUnaryOp::ClzB64
+            | WideUnaryOp::BrevB64 => "cvt.u64.u32",
         }
     }
 
     fn writes_b64(self) -> bool {
         matches!(
             self,
-            WideUnaryOp::NotB64 | WideUnaryOp::CnotB64 | WideUnaryOp::BrevB64
+            WideUnaryOp::NotB64
+                | WideUnaryOp::CnotB64
+                | WideUnaryOp::BrevB64
+                | WideUnaryOp::NegS64
+                | WideUnaryOp::AbsS64
         )
     }
 }
@@ -6095,7 +6116,7 @@ impl<'a> Generator<'a> {
     }
 
     fn pick_wide_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
-        let op = pick_wide_unary(u)?;
+        let op = pick_wide_unary(u, self.cfg.emit_signed_wide_unary)?;
         if self.cfg.emit_predicated_wide_unary && u.arbitrary::<bool>()? {
             Ok(Inst::PredicatedWideUnary {
                 op,
@@ -12496,7 +12517,7 @@ impl<'a> Generator<'a> {
             }
             Inst::WideUnary { op, dst, src } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
-                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
                 if op.writes_b64() {
@@ -12517,7 +12538,7 @@ impl<'a> Generator<'a> {
             } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
-                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
                 src.emit(s);
                 writeln!(s, ";").unwrap();
                 if op.writes_b64() {
@@ -14502,14 +14523,21 @@ fn pick_wide_shift(u: &mut Unstructured) -> Result<WideShiftOp> {
     Ok(*u.choose(&ops)?)
 }
 
-fn pick_wide_unary(u: &mut Unstructured) -> Result<WideUnaryOp> {
-    let ops = [
+fn pick_wide_unary(u: &mut Unstructured, emit_signed_wide_unary: bool) -> Result<WideUnaryOp> {
+    const BASE_OPS: &[WideUnaryOp] = &[
         WideUnaryOp::NotB64,
         WideUnaryOp::CnotB64,
         WideUnaryOp::PopcB64,
         WideUnaryOp::ClzB64,
         WideUnaryOp::BrevB64,
     ];
+    const SIGNED_OPS: &[WideUnaryOp] = &[WideUnaryOp::NegS64, WideUnaryOp::AbsS64];
+
+    let mut ops = Vec::with_capacity(7);
+    ops.extend_from_slice(BASE_OPS);
+    if emit_signed_wide_unary {
+        ops.extend_from_slice(SIGNED_OPS);
+    }
     Ok(*u.choose(&ops)?)
 }
 
@@ -16054,8 +16082,10 @@ mod tests {
         "setp.ge.xor.s64",
     ];
     const WIDE_SELP_MNEMONICS: &[&str] = &["selp.b64"];
-    const WIDE_UNARY_MNEMONICS: &[&str] =
-        &["not.b64", "cnot.b64", "popc.b64", "clz.b64", "brev.b64"];
+    const WIDE_UNARY_MNEMONICS: &[&str] = &[
+        "not.b64", "cnot.b64", "popc.b64", "clz.b64", "brev.b64", "neg.s64", "abs.s64",
+    ];
+    const SIGNED_WIDE_UNARY_MNEMONICS: &[&str] = &["neg.s64", "abs.s64"];
     const WIDE_SHIFT_MNEMONICS: &[&str] = &["shl.b64", "shr.u64", "shr.s64"];
     const WIDE_DIVREM_MNEMONICS: &[&str] = &["div.u64", "rem.u64", "div.s64", "rem.s64"];
     const SIGNED_WIDE_DIVREM_MNEMONICS: &[&str] = &["div.s64", "rem.s64"];
@@ -17171,6 +17201,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| WIDE_UNARY_MNEMONICS.contains(&op))
+    }
+
+    fn has_signed_wide_unary_mnemonic(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .any(|op| SIGNED_WIDE_UNARY_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_wide_divrem(ptx: &str) -> bool {
@@ -22347,6 +22383,23 @@ mod tests {
             assert!(
                 !has_predicated_wide_unary(&ptx),
                 "seed {seed:x} emitted predicated wide unary"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_wide_unary_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_unary: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_signed_wide_unary_mnemonic(&ptx),
+                "seed {seed:x} emitted signed wide unary"
             );
         }
     }

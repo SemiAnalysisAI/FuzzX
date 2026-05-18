@@ -353,7 +353,8 @@ that feature.
 | `DIV_DISABLE_WIDE_SETP` | 64-bit scratch-register `setp`-fed guarded ALU instructions. |
 | `DIV_DISABLE_WIDE_SETP_BOOL` | 64-bit scratch-register `setp.<cmp>.<and|or|xor>`-fed guarded ALU instructions. |
 | `DIV_DISABLE_WIDE_SELP` | 64-bit scratch-register `selp.b64` instructions. |
-| `DIV_DISABLE_WIDE_UNARY` | 64-bit scratch-register `not`, `cnot`, `popc`, `clz`, and `brev` instructions. |
+| `DIV_DISABLE_WIDE_UNARY` | 64-bit scratch-register `not`, `cnot`, `popc`, `clz`, `brev`, `neg`, and `abs` instructions. |
+| `DIV_DISABLE_SIGNED_WIDE_UNARY` | `neg.s64` and `abs.s64`. |
 | `DIV_DISABLE_PREDICATED_WIDE_UNARY` | Predicated 64-bit scratch-register unary instructions. |
 | `DIV_DISABLE_WIDE_SHIFTS` | 64-bit scratch-register shifts. |
 | `DIV_DISABLE_WIDE_REG_SHIFTS` | Masked register-count 64-bit scratch-register shifts. |
