@@ -1509,37 +1509,6 @@ bool triggersM033SubZExtBool(const Instruction &I) {
          BO->getType()->isIntegerTy(32) && isI1ZExtToI32(BO->getOperand(1));
 }
 
-bool isM034Fshl(const Value *V, const Value **X) {
-  const auto *Call = dyn_cast<CallInst>(V);
-  if (!Call || !Call->getType()->isIntegerTy(32) || Call->arg_size() != 3)
-    return false;
-  const Function *Callee = Call->getCalledFunction();
-  if (!Callee || !Callee->isIntrinsic() ||
-      Callee->getIntrinsicID() != Intrinsic::fshl)
-    return false;
-  const auto *Shift = dyn_cast<ConstantInt>(Call->getArgOperand(2));
-  if (!Shift || Shift->getZExtValue() != 30)
-    return false;
-  const Value *CandidateX = Call->getArgOperand(1);
-  if (X)
-    *X = CandidateX;
-  return true;
-}
-
-bool triggersM034FshlAddWorkitemProduct(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Add ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  for (unsigned Idx = 0; Idx != 2; ++Idx) {
-    const Value *X = nullptr;
-    if (isM034Fshl(BO->getOperand(Idx), &X) &&
-        BO->getOperand(1 - Idx) == X)
-      return true;
-  }
-  return false;
-}
-
 bool triggersM035WaveReduceXor(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1556,111 +1525,6 @@ bool triggersM036WaveReduceAdd(const Instruction &I) {
   const Function *Callee = Call->getCalledFunction();
   return Callee && Callee->isIntrinsic() &&
          Callee->getIntrinsicID() == Intrinsic::amdgcn_wave_reduce_add;
-}
-
-bool isI32AndWithConstant(const Value *V, const Value **Base,
-                          uint64_t *Mask) {
-  const auto *BO = dyn_cast<BinaryOperator>(V);
-  if (!BO || BO->getOpcode() != Instruction::And ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-
-  for (unsigned Idx = 0; Idx != 2; ++Idx) {
-    const auto *C = dyn_cast<ConstantInt>(BO->getOperand(Idx));
-    if (!C)
-      continue;
-    if (Base)
-      *Base = BO->getOperand(1 - Idx);
-    if (Mask)
-      *Mask = C->getZExtValue();
-    return true;
-  }
-  return false;
-}
-
-bool isM037ByteMask(uint64_t Mask) {
-  return Mask >= 255 && Mask <= 4095 && (Mask & 0xff) == 0xff;
-}
-
-bool isM037MaskedByteSquare(const Value *V) {
-  const auto *BO = dyn_cast<BinaryOperator>(V);
-  if (!BO || BO->getOpcode() != Instruction::Mul ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-
-  const Value *LBase = nullptr;
-  const Value *RBase = nullptr;
-  uint64_t LMask = 0;
-  uint64_t RMask = 0;
-  if (!isI32AndWithConstant(BO->getOperand(0), &LBase, &LMask) ||
-      !isI32AndWithConstant(BO->getOperand(1), &RBase, &RMask))
-    return false;
-  return LBase == RBase && isM037ByteMask(LMask) && isM037ByteMask(RMask);
-}
-
-bool isI32AndOfValueAndConstant(const Value *MaybeAnd, const Value *Operand) {
-  const Value *Base = nullptr;
-  uint64_t Mask = 0;
-  return isI32AndWithConstant(MaybeAnd, &Base, &Mask) && Base == Operand &&
-         Mask != 0;
-}
-
-bool triggersM037Dot4SquareLowbit(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Add ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-
-  return (isM037MaskedByteSquare(BO->getOperand(0)) &&
-          isI32AndOfValueAndConstant(BO->getOperand(1), BO->getOperand(0))) ||
-         (isM037MaskedByteSquare(BO->getOperand(1)) &&
-          isI32AndOfValueAndConstant(BO->getOperand(0), BO->getOperand(1)));
-}
-
-bool isM038MaskedI32ToDouble(const Value *V, const Value **Base) {
-  const auto *Ext = dyn_cast<FPExtInst>(V);
-  if (!Ext || !Ext->getType()->isDoubleTy())
-    return false;
-  const auto *UIToFP = dyn_cast<UIToFPInst>(Ext->getOperand(0));
-  if (!UIToFP || !UIToFP->getType()->isFloatTy())
-    return false;
-  uint64_t Mask = 0;
-  return isI32AndWithConstant(UIToFP->getOperand(0), Base, &Mask) &&
-         Mask == 1023;
-}
-
-bool isM038MaskedDoubleAddRoundTrip(const Value *V, const Value **BaseA,
-                                    const Value **BaseB) {
-  const auto *FPToUI = dyn_cast<FPToUIInst>(V);
-  if (!FPToUI || !FPToUI->getType()->isIntegerTy(32))
-    return false;
-  const auto *Trunc = dyn_cast<FPTruncInst>(FPToUI->getOperand(0));
-  if (!Trunc || !Trunc->getType()->isFloatTy())
-    return false;
-  const auto *FAdd = dyn_cast<BinaryOperator>(Trunc->getOperand(0));
-  if (!FAdd || FAdd->getOpcode() != Instruction::FAdd ||
-      !FAdd->getType()->isDoubleTy())
-    return false;
-  return isM038MaskedI32ToDouble(FAdd->getOperand(0), BaseA) &&
-         isM038MaskedI32ToDouble(FAdd->getOperand(1), BaseB);
-}
-
-bool triggersM038LoopFPMaskXor(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Add ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-
-  for (unsigned Idx = 0; Idx != 2; ++Idx) {
-    const Value *BaseA = nullptr;
-    const Value *BaseB = nullptr;
-    if (!isM038MaskedDoubleAddRoundTrip(BO->getOperand(Idx), &BaseA, &BaseB))
-      continue;
-    const Value *Other = BO->getOperand(1 - Idx);
-    if (Other == BaseA || Other == BaseB)
-      return true;
-  }
-  return false;
 }
 
 bool triggersM039SExtI8HighBytePack(const Instruction &I) {
@@ -1795,11 +1659,8 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
   bool AllowM033 = envFlag("FUZZX_ALLOW_M033_SUB_ZEXT_BOOL", false);
-  bool AllowM034 = envFlag("FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT", false);
   bool AllowM035 = envFlag("FUZZX_ALLOW_M035_WAVE_REDUCE_XOR", false);
   bool AllowM036 = envFlag("FUZZX_ALLOW_M036_WAVE_REDUCE_ADD", false);
-  bool AllowM037 = envFlag("FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT", false);
-  bool AllowM038 = envFlag("FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR", false);
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
   bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
@@ -1837,11 +1698,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||
               (!AllowM033 && triggersM033SubZExtBool(I)) ||
-              (!AllowM034 && triggersM034FshlAddWorkitemProduct(I)) ||
               (!AllowM035 && triggersM035WaveReduceXor(I)) ||
               (!AllowM036 && triggersM036WaveReduceAdd(I)) ||
-              (!AllowM037 && triggersM037Dot4SquareLowbit(I)) ||
-              (!AllowM038 && triggersM038LoopFPMaskXor(I)) ||
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
               (!AllowM040 && triggersM040SignedDivRem24(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||

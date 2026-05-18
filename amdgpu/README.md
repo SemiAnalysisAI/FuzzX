@@ -24,8 +24,9 @@ I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
 compared to the release.)  Seeing this, I figured I should be fuzzing the
 release instead.  After m038, AMD asked us to switch active fuzzing back to
 HEAD builds; the current upstream LLVM and ROCm HEAD columns both have
-llvm/llvm-project#198373 and llvm/llvm-project#196418 applied locally.  In any
-case, the table of results below shows which versions reproduce which bugs.
+llvm/llvm-project#198373, llvm/llvm-project#196418, and
+llvm/llvm-project#198412 applied locally.  In any case, the table of results
+below shows which versions reproduce which bugs.
 
 Everything below this line is AI-generated.  You probably only care about the
 "bugs generated" table.  Good luck.
@@ -208,11 +209,8 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB=1` | unset | Re-enable subtracting two scalar extracts from the same vector `or` for [m031](known-miscompiles/m031-vector-or-extract-sub/NOTES.md). |
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
 | `FUZZX_ALLOW_M033_SUB_ZEXT_BOOL=1` | unset | Re-enable `sub i32 X, zext(i1 Cond)` shapes for [m033](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md). |
-| `FUZZX_ALLOW_M034_FSHL_ADD_PRODUCT=1` | unset | Re-enable `add(fshl(Y, x, 30), x)` shapes for [m034](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md). |
 | `FUZZX_ALLOW_M035_WAVE_REDUCE_XOR=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.xor` generation for [m035](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md). |
 | `FUZZX_ALLOW_M036_WAVE_REDUCE_ADD=1` | unset | Re-enable `llvm.amdgcn.wave.reduce.add` generation for [m036](known-miscompiles/m036-wave-reduce-add-constant/NOTES.md). |
-| `FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT=1` | unset | Re-enable byte-masked `x*x + (x*x & C)` shapes for [m037](known-miscompiles/m037-dot4-square-lowbit/NOTES.md). |
-| `FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR=1` | unset | Re-enable masked integer-to-FP round-trips added back to one masked operand after nested xor loops for [m038](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md). |
 | `FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE=1` | unset | Re-enable `sext i8 to i32` values feeding high-byte extraction for [m039](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
@@ -225,6 +223,7 @@ rediscovering the same issue.
 | `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
 | `patches/llvm-pr-198373.diff` | Local patch for the current HEAD campaigns; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `patches/llvm-pr-196418.diff` | Local patch for unsigned `LowerDIVREM24`; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
+| `patches/llvm-pr-198412.diff` | Local patch for non-add AMDGPU dot-product add-chain matching; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/seed_ir_corpus.sh` | Writes the initial LLVM bitcode corpus seed. |
@@ -249,8 +248,8 @@ Tested toolchains as of 2026-05-18:
 | Column | Toolchain |
 | --- | --- |
 | ROCm release | [ROCm 7.2.3 source tag](https://github.com/ROCm/llvm-project/releases/tag/rocm-7.2.3), commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`; also checked against the matching [ROCm 7.2.3 `rocm-llvm` package](https://repo.radeon.com/rocm/apt/7.2.3/pool/main/r/rocm-llvm/rocm-llvm_22.0.0.26084.70203-90~22.04_amd64.deb), package SHA256 `4c406e184f88949cea60869949454e5392e1cbd9480c4c87274f7b59e9f810e5`. |
-| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373) and [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), built `Release` with sanitizer coverage, no ASan. |
-| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373) and [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), built with assertions, ASan, and sanitizer coverage. |
+| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), and [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), built `Release` with sanitizer coverage, no ASan. |
+| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), and [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), built with assertions, ASan, and sanitizer coverage. |
 
 | Bug | ROCm 7.2.3 | LLVM HEAD | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
@@ -287,11 +286,11 @@ Tested toolchains as of 2026-05-18:
 | [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `or(x, 255) - x` instead of `or(x, 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
 | [m033-sub-zext-bool-fp](known-miscompiles/m033-sub-zext-bool-fp/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `sub i32 X, zext(i1 Cond)` through `s_subb_u32` with the wrong false-case borrow before a masked FP accumulation. |
-| [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ❌ | ❌ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`. |
+| [m034-fshl-add-workitem-product](known-miscompiles/m034-fshl-add-workitem-product/NOTES.md) | ❌ | ✅ | ✅ | `-O2` rewrites a workitem-product `fshl`/add chain as a byte dot product that returns `0xffffffff` instead of `0xc0000000` for `x == 0`; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
 | [m035-wave-reduce-xor-constant](known-miscompiles/m035-wave-reduce-xor-constant/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` folds `llvm.amdgcn.wave.reduce.xor.i32(30, 0)` to `30` instead of the even-wave XOR result `0`. |
 | [m036-wave-reduce-add-constant](known-miscompiles/m036-wave-reduce-add-constant/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` folds `llvm.amdgcn.wave.reduce.add.i32(65536, 1)` to `65536` instead of the full-wave sum `0x00400000`. |
-| [m037-dot4-square-lowbit](known-miscompiles/m037-dot4-square-lowbit/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a byte-masked `x*x + (x*x & 1)` expression to `v_perm_b32` / `v_dot4_u32_u8` with an extra constant accumulator. |
-| [m038-loop-fp-mask-xor](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O2` unrolls nested xor loops and folds a masked integer-to-FP round-trip into a byte-dot sequence that adds `1023` for input zero. |
+| [m037-dot4-square-lowbit](known-miscompiles/m037-dot4-square-lowbit/NOTES.md) | ❌ | ✅ | ✅ | `-O2` lowers a byte-masked `x*x + (x*x & 1)` expression to `v_perm_b32` / `v_dot4_u32_u8` with an extra constant accumulator; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
+| [m038-loop-fp-mask-xor](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md) | ❌ | ✅ | ✅ | `-O2` unrolls nested xor loops and folds a masked integer-to-FP round-trip into a byte-dot sequence that adds `1023` for input zero; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198412. |
 | [m039-sext-i8-highbyte-pack](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` packs bytes after an `i8` sign-extension but clears the byte lanes contributed by the sign bits. |
 | [m040-sdivrem24-boundary](known-miscompiles/m040-sdivrem24-boundary/NOTES.md) | ❌ | ❌ | ❌ | `-O2` applies the signed 24-bit reciprocal division lowering when the positive numerator has bit 23 set, returning a quotient one too large. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |

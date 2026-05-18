@@ -65,8 +65,8 @@ masking.
 | Toolchain | Result |
 | --- | --- |
 | ROCm 7.2.3 source build from tag `rocm-7.2.3`, commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`, `Release`, sanitizer coverage, no ASan | Reproduces: `O0=0x00000000`, `O2=0x00000001`. |
-| LLVM HEAD, commit `10756d32f96154f0889eda159ea9a26bc4188bda` | Reproduces: `O0=0x00000000`, `O2=0x00000001`. |
-| ROCm HEAD, commit `9115c466b3577830455f70c4f492429bf6c64b25` | Reproduces: `O0=0x00000000`, `O2=0x00000001`. |
+| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, and llvm/llvm-project#198412 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
+| ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373, llvm/llvm-project#196418, and llvm/llvm-project#198412 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
 
 Original fuzzer input SHA-1:
 
@@ -76,7 +76,7 @@ Original fuzzer input SHA-1:
 
 ## Fuzzer Follow-Up
 
-The IR-bitcode fuzzer now suppresses byte-masked square expressions of the form
-`(x * x) + ((x * x) & C)` by default. Set
-`FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT=1` to re-enable this pattern when replaying
-or intentionally fuzzing the dot-product combine family.
+The IR-bitcode fuzzer used to suppress byte-masked square expressions of the
+form `(x * x) + ((x * x) & C)` by default. That suppression was removed after
+llvm/llvm-project#198412 fixed this case for the active LLVM HEAD and ROCm HEAD
+campaigns.
