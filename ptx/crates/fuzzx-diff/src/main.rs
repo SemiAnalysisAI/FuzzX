@@ -56,6 +56,10 @@
 //!                         min.{u16,s16} scalar 16-bit ALU while retaining max and arithmetic ops
 //!   DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY default: false; set 1/true/yes/on to suppress
 //!                         abs.s16/neg.s16 scalar 16-bit ALU while retaining other scalar 16-bit ops
+//!   DIV_DISABLE_SCALAR_16BIT_BITWISE default: false; set 1/true/yes/on to suppress
+//!                         and/or/xor/not.b16 scalar 16-bit ALU
+//!   DIV_DISABLE_SCALAR_16BIT_SHIFTS default: false; set 1/true/yes/on to suppress
+//!                         shl.b16, shr.u16, and shr.s16 scalar 16-bit ALU
 //!   DIV_DISABLE_PREDICATED_SCALAR_16BIT default: false; set 1/true/yes/on to suppress
 //!                         predicated scalar 16-bit ALU generation
 //!   DIV_DISABLE_MULHI     default: false; set 1/true/yes/on to suppress
@@ -469,6 +473,10 @@ struct Args {
     #[arg(long)]
     disable_scalar_16bit_signed_unary: bool,
     #[arg(long)]
+    disable_scalar_16bit_bitwise: bool,
+    #[arg(long)]
+    disable_scalar_16bit_shifts: bool,
+    #[arg(long)]
     disable_predicated_scalar_16bit: bool,
     #[arg(long)]
     disable_mulhi: bool,
@@ -833,6 +841,14 @@ impl Args {
         set_bool!(
             self.disable_scalar_16bit_signed_unary,
             "DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY"
+        );
+        set_bool!(
+            self.disable_scalar_16bit_bitwise,
+            "DIV_DISABLE_SCALAR_16BIT_BITWISE"
+        );
+        set_bool!(
+            self.disable_scalar_16bit_shifts,
+            "DIV_DISABLE_SCALAR_16BIT_SHIFTS"
         );
         set_bool!(
             self.disable_predicated_scalar_16bit,
@@ -1211,6 +1227,10 @@ impl Config {
         let disable_scalar_16bit_min = env_bool("DIV_DISABLE_SCALAR_16BIT_MIN")?.unwrap_or(false);
         let disable_scalar_16bit_signed_unary =
             env_bool("DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY")?.unwrap_or(false);
+        let disable_scalar_16bit_bitwise =
+            env_bool("DIV_DISABLE_SCALAR_16BIT_BITWISE")?.unwrap_or(false);
+        let disable_scalar_16bit_shifts =
+            env_bool("DIV_DISABLE_SCALAR_16BIT_SHIFTS")?.unwrap_or(false);
         let disable_predicated_scalar_16bit =
             env_bool("DIV_DISABLE_PREDICATED_SCALAR_16BIT")?.unwrap_or(false);
         let disable_mulhi = env_bool("DIV_DISABLE_MULHI")?.unwrap_or(false);
@@ -1416,6 +1436,8 @@ impl Config {
             emit_scalar_16bit_signed_unary: !disable_scalar_16bit_signed_unary
                 && !disable_signed_scalar_16bit
                 && !disable_scalar_16bit,
+            emit_scalar_16bit_bitwise: !disable_scalar_16bit_bitwise && !disable_scalar_16bit,
+            emit_scalar_16bit_shifts: !disable_scalar_16bit_shifts && !disable_scalar_16bit,
             emit_predicated_scalar_16bit: !disable_predicated_scalar_16bit
                 && !disable_scalar_16bit
                 && !disable_predicated_alu,
@@ -1801,7 +1823,7 @@ fn main() -> Result<()> {
 
     let total_workers = cfg.gpus.len() * cfg.workers_per_gpu;
     eprintln!(
-        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_packed_add={} emit_signed_packed_add={} emit_predicated_packed_add={} emit_packed_minmax={} emit_signed_packed_minmax={} emit_predicated_packed_minmax={} emit_scalar_16bit={} emit_signed_scalar_16bit={} emit_scalar_16bit_min={} emit_scalar_16bit_signed_unary={} emit_predicated_scalar_16bit={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_reg_prmt={} emit_predicated_reg_prmt={} emit_prmt_modes={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_predicated_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_reg_fns={} emit_predicated_fns={} emit_predicated_reg_fns={} emit_bfi={} emit_bfe={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_reg_wide_bitfield={} emit_predicated_reg_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_subword_wide={} emit_signed_subword_wide={} emit_predicated_subword_wide={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_mad64={} emit_signed_wide_mad64={} emit_predicated_wide_mad64={} emit_wide_set={} emit_predicated_wide_set={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_reg_wide_divrem={} emit_predicated_reg_wide_divrem={} emit_predicated_wide_divrem={} emit_wide_addc={} emit_wide_subc={} emit_predicated_wide_carry={} emit_wide_carry_chain={} emit_predicated_wide_carry_chain={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_carry_chain={} emit_predicated_carry_chain={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_cvt={} emit_predicated_cvt={} emit_narrow_cvt={} emit_signed_narrow_cvt={} emit_predicated_narrow_cvt={} emit_wide_cvt={} emit_signed_wide_cvt={} emit_predicated_wide_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_mad_carry={} emit_signed_mad_carry={} emit_predicated_mad_carry={} emit_predicated_set={} emit_sad={} emit_slct={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
+        "fuzzx-diff: starting_seed=0x{:016x} out={} program_bytes={} max_iters={} control_flow={:?} blocks={}..{} insts_per_block={}..{} regs={} max_loop_iters={} max_immediate={} max_structured_depth={} emit_structured_loops={} emit_arbitrary_loops={} emit_lop3={} emit_predicated_lop3={} emit_minmax={} emit_selp={} emit_predicated_selp={} emit_sub={} emit_mul_lo={} emit_signed_lo_alu={} emit_sat_arith={} emit_packed_add={} emit_signed_packed_add={} emit_predicated_packed_add={} emit_packed_minmax={} emit_signed_packed_minmax={} emit_predicated_packed_minmax={} emit_scalar_16bit={} emit_signed_scalar_16bit={} emit_scalar_16bit_min={} emit_scalar_16bit_signed_unary={} emit_scalar_16bit_bitwise={} emit_scalar_16bit_shifts={} emit_predicated_scalar_16bit={} emit_mulhi={} emit_signed_mulhi={} emit_mad_hi={} emit_signed_mad_hi={} emit_bitwise_binops={} emit_or={} emit_xor={} emit_prmt={} emit_predicated_prmt={} emit_reg_prmt={} emit_predicated_reg_prmt={} emit_prmt_modes={} emit_not={} emit_clz={} emit_brev={} emit_cnot={} emit_popc={} emit_abs={} emit_special_regs={} emit_predicated_special_regs={} emit_signed_cmp={} emit_signed_divrem={} emit_reg_divrem={} emit_predicated_reg_divrem={} emit_predicated_divrem={} emit_funnel={} emit_reg_funnel={} emit_predicated_funnel={} emit_funnel_clamp={} emit_neg={} emit_shl={} emit_shr={} emit_signed_shr={} emit_reg_shifts={} emit_predicated_shifts={} emit_predicated_reg_shifts={} emit_bfind={} emit_signed_bfind={} emit_wide_bfind={} emit_signed_wide_bfind={} emit_predicated_bfind={} emit_predicated_wide_bfind={} emit_fns={} emit_reg_fns={} emit_predicated_fns={} emit_predicated_reg_fns={} emit_bfi={} emit_bfe={} emit_bmsk={} emit_bmsk_wrap={} emit_predicated_bitfield={} emit_reg_bitfield={} emit_predicated_reg_bitfield={} emit_wide_bfe={} emit_signed_wide_bfe={} emit_wide_bfi={} emit_predicated_wide_bitfield={} emit_reg_wide_bitfield={} emit_predicated_reg_wide_bitfield={} emit_mad24={} emit_mul24={} emit_predicated_24bit={} emit_subword_wide={} emit_signed_subword_wide={} emit_predicated_subword_wide={} emit_mul_wide={} emit_mad_wide={} emit_signed_mad_wide={} emit_predicated_mul_wide={} emit_predicated_mad_wide={} emit_wide_high_result={} emit_wide_int={} emit_wide_minmax={} emit_wide_mulhi={} emit_predicated_wide_int={} emit_wide_mad64={} emit_signed_wide_mad64={} emit_predicated_wide_mad64={} emit_wide_set={} emit_predicated_wide_set={} emit_wide_setp={} emit_wide_setp_bool={} emit_wide_selp={} emit_wide_unary={} emit_predicated_wide_unary={} emit_wide_shifts={} emit_wide_reg_shifts={} emit_predicated_wide_shifts={} emit_predicated_wide_reg_shifts={} emit_wide_divrem={} emit_signed_wide_divrem={} emit_reg_wide_divrem={} emit_predicated_reg_wide_divrem={} emit_predicated_wide_divrem={} emit_wide_addc={} emit_wide_subc={} emit_predicated_wide_carry={} emit_wide_carry_chain={} emit_predicated_wide_carry_chain={} emit_addc={} emit_subc={} emit_predicated_carry={} emit_carry_chain={} emit_predicated_carry_chain={} emit_i32_boundary_immediates={} emit_dp4a={} emit_dp2a={} emit_negated_predicates={} emit_predicated_alu={} emit_predicated_unary={} emit_cvt={} emit_predicated_cvt={} emit_narrow_cvt={} emit_signed_narrow_cvt={} emit_predicated_narrow_cvt={} emit_wide_cvt={} emit_signed_wide_cvt={} emit_predicated_wide_cvt={} emit_szext={} emit_signed_szext={} emit_predicated_szext={} emit_setp_bool={} emit_setp_dual={} emit_pred_logic={} emit_predicated_mad={} emit_predicated_mad_hi={} emit_mad_carry={} emit_signed_mad_carry={} emit_predicated_mad_carry={} emit_predicated_set={} emit_sad={} emit_slct={} emit_predicated_sad={} emit_predicated_slct={} emit_predicated_dp={} emit_predicated_video={} emit_set={} emit_s32_slct={} emit_video={} emit_vsub4={} gpus={:?} workers_per_gpu={} (total={})",
         cfg.starting_seed,
         cfg.out_dir.display(),
         cfg.program_bytes,
@@ -1838,6 +1860,8 @@ fn main() -> Result<()> {
         cfg.gen_config.emit_signed_scalar_16bit,
         cfg.gen_config.emit_scalar_16bit_min,
         cfg.gen_config.emit_scalar_16bit_signed_unary,
+        cfg.gen_config.emit_scalar_16bit_bitwise,
+        cfg.gen_config.emit_scalar_16bit_shifts,
         cfg.gen_config.emit_predicated_scalar_16bit,
         cfg.gen_config.emit_mulhi,
         cfg.gen_config.emit_signed_mulhi,

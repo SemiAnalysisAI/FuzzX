@@ -240,6 +240,8 @@ that feature.
 | `DIV_DISABLE_SIGNED_SCALAR_16BIT` | Signed scalar 16-bit ALU while retaining unsigned `u16` ops. |
 | `DIV_DISABLE_SCALAR_16BIT_MIN` | `min.u16` and `min.s16` while retaining scalar 16-bit max and arithmetic instructions. |
 | `DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY` | `abs.s16` and `neg.s16` while retaining other scalar 16-bit ALU instructions. |
+| `DIV_DISABLE_SCALAR_16BIT_BITWISE` | `and.b16`, `or.b16`, `xor.b16`, and `not.b16`. |
+| `DIV_DISABLE_SCALAR_16BIT_SHIFTS` | `shl.b16`, `shr.u16`, and `shr.s16` with immediate counts in `0..15`. |
 | `DIV_DISABLE_PREDICATED_SCALAR_16BIT` | Predicated scalar 16-bit ALU instructions. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |

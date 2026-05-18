@@ -71,6 +71,8 @@ pub struct GenConfig {
     pub emit_signed_scalar_16bit: bool,
     pub emit_scalar_16bit_min: bool,
     pub emit_scalar_16bit_signed_unary: bool,
+    pub emit_scalar_16bit_bitwise: bool,
+    pub emit_scalar_16bit_shifts: bool,
     pub emit_predicated_scalar_16bit: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
@@ -256,6 +258,8 @@ impl Default for GenConfig {
             emit_signed_scalar_16bit: true,
             emit_scalar_16bit_min: true,
             emit_scalar_16bit_signed_unary: true,
+            emit_scalar_16bit_bitwise: true,
+            emit_scalar_16bit_shifts: true,
             emit_predicated_scalar_16bit: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
@@ -543,6 +547,13 @@ enum Scalar16Op {
     MulHiS16,
     AbsS16,
     NegS16,
+    AndB16,
+    OrB16,
+    XorB16,
+    NotB16,
+    ShlB16,
+    ShrU16,
+    ShrS16,
 }
 
 impl Scalar16Op {
@@ -562,11 +573,18 @@ impl Scalar16Op {
             Scalar16Op::MulHiS16 => "mul.hi.s16",
             Scalar16Op::AbsS16 => "abs.s16",
             Scalar16Op::NegS16 => "neg.s16",
+            Scalar16Op::AndB16 => "and.b16",
+            Scalar16Op::OrB16 => "or.b16",
+            Scalar16Op::XorB16 => "xor.b16",
+            Scalar16Op::NotB16 => "not.b16",
+            Scalar16Op::ShlB16 => "shl.b16",
+            Scalar16Op::ShrU16 => "shr.u16",
+            Scalar16Op::ShrS16 => "shr.s16",
         }
     }
 
     fn input_cvt_mnemonic(self) -> &'static str {
-        if self.is_signed() {
+        if self.is_signed_input() {
             "cvt.s16.s32"
         } else {
             "cvt.u16.u32"
@@ -581,8 +599,30 @@ impl Scalar16Op {
         }
     }
 
+    fn uses_h1(self) -> bool {
+        !matches!(
+            self,
+            Scalar16Op::AbsS16
+                | Scalar16Op::NegS16
+                | Scalar16Op::NotB16
+                | Scalar16Op::ShlB16
+                | Scalar16Op::ShrU16
+                | Scalar16Op::ShrS16
+        )
+    }
+
+    fn is_shift(self) -> bool {
+        matches!(
+            self,
+            Scalar16Op::ShlB16 | Scalar16Op::ShrU16 | Scalar16Op::ShrS16
+        )
+    }
+
     fn is_unary(self) -> bool {
-        matches!(self, Scalar16Op::AbsS16 | Scalar16Op::NegS16)
+        matches!(
+            self,
+            Scalar16Op::AbsS16 | Scalar16Op::NegS16 | Scalar16Op::NotB16
+        )
     }
 
     fn is_signed(self) -> bool {
@@ -596,6 +636,22 @@ impl Scalar16Op {
                 | Scalar16Op::MulHiS16
                 | Scalar16Op::AbsS16
                 | Scalar16Op::NegS16
+                | Scalar16Op::ShrS16
+        )
+    }
+
+    fn is_signed_input(self) -> bool {
+        matches!(
+            self,
+            Scalar16Op::AddS16
+                | Scalar16Op::SubS16
+                | Scalar16Op::MinS16
+                | Scalar16Op::MaxS16
+                | Scalar16Op::MulLoS16
+                | Scalar16Op::MulHiS16
+                | Scalar16Op::AbsS16
+                | Scalar16Op::NegS16
+                | Scalar16Op::ShrS16
         )
     }
 }
@@ -3747,27 +3803,39 @@ impl<'a> Generator<'a> {
                     self.cfg.emit_signed_scalar_16bit,
                     self.cfg.emit_scalar_16bit_min,
                     self.cfg.emit_scalar_16bit_signed_unary,
+                    self.cfg.emit_scalar_16bit_bitwise,
+                    self.cfg.emit_scalar_16bit_shifts,
                 )?;
                 if self.cfg.emit_predicated_alu
                     && self.cfg.emit_predicated_scalar_16bit
                     && u.arbitrary::<bool>()?
                 {
+                    let b = if op.is_shift() {
+                        Operand::Imm(u.int_in_range(0..=15)?)
+                    } else {
+                        self.pick_cvt_operand(u)?
+                    };
                     return Ok(Inst::PredicatedScalar16 {
                         op,
                         dst: self.pick_dst(u)?,
                         a: self.pick_cvt_operand(u)?,
-                        b: self.pick_cvt_operand(u)?,
+                        b,
                         cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                         ca: self.pick_guard_operand(u)?,
                         cb: self.pick_guard_operand(u)?,
                         pred: self.alloc_inst_pred(u)?,
                     });
                 }
+                let b = if op.is_shift() {
+                    Operand::Imm(u.int_in_range(0..=15)?)
+                } else {
+                    self.pick_cvt_operand(u)?
+                };
                 return Ok(Inst::Scalar16 {
                     op,
                     dst: self.pick_dst(u)?,
                     a: self.pick_cvt_operand(u)?,
-                    b: self.pick_cvt_operand(u)?,
+                    b,
                 });
             }
             let op = pick_binop(
@@ -5255,13 +5323,17 @@ impl<'a> Generator<'a> {
                 write!(s, "    {:<13} %h0, ", op.input_cvt_mnemonic()).unwrap();
                 a.emit(s);
                 writeln!(s, ";").unwrap();
-                if !op.is_unary() {
+                if op.uses_h1() {
                     write!(s, "    {:<13} %h1, ", op.input_cvt_mnemonic()).unwrap();
                     b.emit(s);
                     writeln!(s, ";").unwrap();
                 }
                 if op.is_unary() {
                     writeln!(s, "    {:<13} %h2, %h0;", op.mnemonic()).unwrap();
+                } else if op.is_shift() {
+                    write!(s, "    {:<13} %h2, %h0, ", op.mnemonic()).unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
                 } else {
                     writeln!(s, "    {:<13} %h2, %h0, %h1;", op.mnemonic()).unwrap();
                 }
@@ -5377,13 +5449,23 @@ impl<'a> Generator<'a> {
                 write!(s, "    {:<13} %h0, ", op.input_cvt_mnemonic()).unwrap();
                 a.emit(s);
                 writeln!(s, ";").unwrap();
-                if !op.is_unary() {
+                if op.uses_h1() {
                     write!(s, "    {:<13} %h1, ", op.input_cvt_mnemonic()).unwrap();
                     b.emit(s);
                     writeln!(s, ";").unwrap();
                 }
                 if op.is_unary() {
                     writeln!(s, "    {} {:<8} %h2, %h0;", pred_guard(pred), op.mnemonic()).unwrap();
+                } else if op.is_shift() {
+                    write!(
+                        s,
+                        "    {} {:<8} %h2, %h0, ",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                    b.emit(s);
+                    writeln!(s, ";").unwrap();
                 } else {
                     writeln!(
                         s,
@@ -7817,6 +7899,8 @@ fn pick_scalar_16(
     emit_signed_scalar_16bit: bool,
     emit_scalar_16bit_min: bool,
     emit_scalar_16bit_signed_unary: bool,
+    emit_scalar_16bit_bitwise: bool,
+    emit_scalar_16bit_shifts: bool,
 ) -> Result<Scalar16Op> {
     let mut ops = vec![
         Scalar16Op::AddU16,
@@ -7827,6 +7911,17 @@ fn pick_scalar_16(
     ];
     if emit_scalar_16bit_min {
         ops.push(Scalar16Op::MinU16);
+    }
+    if emit_scalar_16bit_bitwise {
+        ops.extend_from_slice(&[
+            Scalar16Op::AndB16,
+            Scalar16Op::OrB16,
+            Scalar16Op::XorB16,
+            Scalar16Op::NotB16,
+        ]);
+    }
+    if emit_scalar_16bit_shifts {
+        ops.extend_from_slice(&[Scalar16Op::ShlB16, Scalar16Op::ShrU16]);
     }
     if emit_signed_scalar_16bit {
         ops.extend_from_slice(&[
@@ -7841,6 +7936,9 @@ fn pick_scalar_16(
         }
         if emit_scalar_16bit_signed_unary {
             ops.extend_from_slice(&[Scalar16Op::AbsS16, Scalar16Op::NegS16]);
+        }
+        if emit_scalar_16bit_shifts {
+            ops.push(Scalar16Op::ShrS16);
         }
     }
     Ok(*u.choose(&ops)?)
@@ -8570,7 +8668,16 @@ mod tests {
         "mul.hi.s16",
         "abs.s16",
         "neg.s16",
+        "and.b16",
+        "or.b16",
+        "xor.b16",
+        "not.b16",
+        "shl.b16",
+        "shr.u16",
+        "shr.s16",
     ];
+    const SCALAR_16BIT_BITWISE_MNEMONICS: &[&str] = &["and.b16", "or.b16", "xor.b16", "not.b16"];
+    const SCALAR_16BIT_SHIFT_MNEMONICS: &[&str] = &["shl.b16", "shr.u16", "shr.s16"];
     const SCALAR_16BIT_POST_KNOWN_MNEMONICS: &[&str] = &[
         "add.u16",
         "sub.u16",
@@ -8582,6 +8689,13 @@ mod tests {
         "max.s16",
         "mul.lo.s16",
         "mul.hi.s16",
+        "and.b16",
+        "or.b16",
+        "xor.b16",
+        "not.b16",
+        "shl.b16",
+        "shr.u16",
+        "shr.s16",
     ];
     const SIGNED_SCALAR_16BIT_MNEMONICS: &[&str] = &[
         "add.s16",
@@ -8592,6 +8706,7 @@ mod tests {
         "mul.hi.s16",
         "abs.s16",
         "neg.s16",
+        "shr.s16",
     ];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const MAD_HI_MNEMONICS: &[&str] = &["mad.hi.u32", "mad.hi.s32"];
@@ -10429,6 +10544,56 @@ mod tests {
             saw_max |= has_mnemonic(&ptx, "max.u16") || has_mnemonic(&ptx, "max.s16");
         }
         assert!(saw_max, "sample did not retain scalar 16-bit max coverage");
+    }
+
+    #[test]
+    fn scalar_16bit_bitwise_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_bitwise: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_arithmetic = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SCALAR_16BIT_BITWISE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_arithmetic |= has_mnemonic(&ptx, "add.u16") || has_mnemonic(&ptx, "mul.lo.s16");
+        }
+        assert!(
+            saw_arithmetic,
+            "sample did not retain scalar 16-bit arithmetic coverage"
+        );
+    }
+
+    #[test]
+    fn scalar_16bit_shift_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_scalar_16bit_shifts: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut saw_arithmetic = false;
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SCALAR_16BIT_SHIFT_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            saw_arithmetic |= has_mnemonic(&ptx, "add.u16") || has_mnemonic(&ptx, "mul.lo.s16");
+        }
+        assert!(
+            saw_arithmetic,
+            "sample did not retain scalar 16-bit arithmetic coverage"
+        );
     }
 
     #[test]
