@@ -22,8 +22,10 @@ at simplifying code, and simpler code is less likely to hit a backend bug.
 I initially used LLVM HEAD as the primary fuzzing target, but many of the bugs
 I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
 compared to the release.)  Seeing this, I figured I should be fuzzing the
-release instead.  In any case, the table of results below shows which versions
-reproduce which bugs.
+release instead.  After m038, AMD asked us to switch active fuzzing back to
+LLVM HEAD, so the current campaign targets upstream LLVM main again, with
+llvm/llvm-project#198373 applied locally.  In any case, the table of results
+below shows which versions reproduce which bugs.
 
 Everything below this line is AI-generated.  You probably only care about the
 "bugs generated" table.  Good luck.
@@ -117,9 +119,11 @@ Corpus files can be inspected directly with `opt -S corpus-entry -o -`.
 
 ## Run
 
-Build and run the directed C++ GPU differential fuzzer:
+Build the current upstream-HEAD LLVM fuzzing toolchain and run the directed C++
+GPU differential fuzzer:
 
 ```bash
+scripts/build_instrumented_llvm.sh
 scripts/build_directed_fuzzer.sh
 HIP_DEVICE=0 scripts/run_directed_fuzzer.sh -runs=100 -max_len=131072
 ```
@@ -143,8 +147,17 @@ independent corpus directory per worker.
 Fresh corpus directories are seeded with a valid LLVM bitcode module before
 libFuzzer starts.
 
-With an optimized ROCm 7.2.3 LLVM build using sanitizer coverage and no ASan,
-the directed fuzzer currently reaches about 500 exec/s aggregate across 8 GPUs.
+For the current upstream-HEAD campaign, run multiple workers across all GPUs:
+
+```bash
+GPUS="0 1 2 3 4 5 6 7" WORKERS_PER_GPU=12 \
+  FUZZX_REQUIRE_LLVM_INTERPRETER_ORACLE=1 \
+  scripts/run_directed_multigpu_fuzzer.sh \
+    -max_total_time=900 -max_len=131072 -rss_limit_mb=8192 -use_value_profile=1
+```
+
+With an optimized LLVM build using sanitizer coverage and no ASan, the directed
+fuzzer currently reaches about 500 exec/s aggregate across 8 GPUs.
 Keep the corpus, logs, artifacts, findings, and `TMPDIR` on a local filesystem;
 the run scripts default these hot paths to `/tmp/fuzzx-amdgpu-$USER` through
 `FUZZX_RUNTIME_ROOT`. Avoid putting them on WekaFS or another shared filesystem,
@@ -157,13 +170,14 @@ run fuzzer workers through `taskset` on the remaining CPUs. Set
 `FUZZX_CPUSET=none` to disable this or `FUZZX_CPUSET=0-63` to use an explicit
 CPU set.
 
-For ROCm 7.2.3 release fuzzing, use the release wrapper:
+For historical ROCm 7.2.3 release fuzzing, use the release wrapper:
 
 ```bash
 scripts/run_rocm_7_2_3_release_fuzzer.sh -max_total_time=900 -max_len=131072 -rss_limit_mb=8192 -use_value_profile=1
 ```
 
-That wrapper selects the ROCm 7.2.3 fuzzer build.
+That wrapper selects the ROCm 7.2.3 fuzzer build instead of the current
+upstream-HEAD fuzzer build.
 
 Candidate compiler crashes, compile/link failures, or output mismatches are
 saved under `$FUZZX_RUNTIME_ROOT/findings` by default. Generated corpora and
@@ -206,6 +220,7 @@ rediscovering the same issue.
 | Path | Purpose |
 | --- | --- |
 | `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
+| `patches/llvm-pr-198373.diff` | Local patch for the current upstream-HEAD campaign; `scripts/build_instrumented_llvm.sh` applies it by default. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/seed_ir_corpus.sh` | Writes the initial LLVM bitcode corpus seed. |
@@ -230,22 +245,22 @@ Tested toolchains as of 2026-05-18:
 | Column | Toolchain |
 | --- | --- |
 | ROCm release | [ROCm 7.2.3 source tag](https://github.com/ROCm/llvm-project/releases/tag/rocm-7.2.3), commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`; also checked against the matching [ROCm 7.2.3 `rocm-llvm` package](https://repo.radeon.com/rocm/apt/7.2.3/pool/main/r/rocm-llvm/rocm-llvm_22.0.0.26084.70203-90~22.04_amd64.deb), package SHA256 `4c406e184f88949cea60869949454e5392e1cbd9480c4c87274f7b59e9f810e5`. |
-| LLVM HEAD | https://github.com/llvm/llvm-project/commit/10756d32f96154f0889eda159ea9a26bc4188bda (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
+| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), built `Release` with sanitizer coverage, no ASan. |
 | ROCm HEAD | https://github.com/ROCm/llvm-project/commit/9115c466b3577830455f70c4f492429bf6c64b25 (2026-05-16), built with assertions, ASan, and sanitizer coverage. |
 
 | Bug | ROCm 7.2.3 | LLVM HEAD | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
 | [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md) | ❌ | ❌ | ❌ | `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
-| [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result. |
+| [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result; LLVM HEAD passes after llvm/llvm-project#198373. |
 | [m003-shl3-add-chain](known-miscompiles/m003-shl3-add-chain/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `shl3/add` chain through `v_readfirstlane_b32`. |
-| [m004-vector-identity-xor](known-miscompiles/m004-vector-identity-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` loses a lane-0 vector identity before `xor`. |
+| [m004-vector-identity-xor](known-miscompiles/m004-vector-identity-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` loses a lane-0 vector identity before `xor`; LLVM HEAD passes after llvm/llvm-project#198373. |
 | [m005-shl1-add-chain](known-miscompiles/m005-shl1-add-chain/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `shl1/add` chain through the same class of bug as m003. |
-| [m006-i8-xor-clear](known-miscompiles/m006-i8-xor-clear/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers another adjacent `i8` narrow byte-clear xor through the wrong `v_bitop3_b32` result. |
-| [m007-vector-shl-identity-xor](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` loses a vector shift-by-zero lane-0 identity before `xor`. |
-| [m008-i8-separated-clear](known-miscompiles/m008-i8-separated-clear/NOTES.md) | ✅ | ❌ | ❌ | `-O0` miscompiles an `i8` identity byte-clear xor when prior narrow ops are separated by no-op adds. |
-| [m009-i16-clear-xor](known-miscompiles/m009-i16-clear-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` miscompiles an `i16` identity low-16 clear xor through the wrong `v_bitop3_b32` result. |
-| [m010-i16-sext-clear-xor](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` miscompiles an `i16` sign-extended identity clear xor through the wrong `v_bitop3_b32` result. |
-| [m011-i8-sext-clear-xor](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md) | ✅ | ❌ | ❌ | `-O0` miscompiles an `i8` sign-extended masked clear xor through the wrong `v_bitop3_b32` result. |
+| [m006-i8-xor-clear](known-miscompiles/m006-i8-xor-clear/NOTES.md) | ✅ | ✅ | ❌ | `-O0` lowers another adjacent `i8` narrow byte-clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m007-vector-shl-identity-xor](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` loses a vector shift-by-zero lane-0 identity before `xor`; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m008-i8-separated-clear](known-miscompiles/m008-i8-separated-clear/NOTES.md) | ✅ | ✅ | ❌ | `-O0` miscompiles an `i8` identity byte-clear xor when prior narrow ops are separated by no-op adds; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m009-i16-clear-xor](known-miscompiles/m009-i16-clear-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` miscompiles an `i16` identity low-16 clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m010-i16-sext-clear-xor](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` miscompiles an `i16` sign-extended identity clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m011-i8-sext-clear-xor](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md) | ✅ | ✅ | ❌ | `-O0` miscompiles an `i8` sign-extended masked clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD passes after llvm/llvm-project#198373. |
 | [m012-add-shl-ladder](known-miscompiles/m012-add-shl-ladder/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `add/shl` ladder through `v_readfirstlane_b32`. |
 | [m013-private-memory-fshl](known-miscompiles/m013-private-memory-fshl/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers fixed private-memory allocas through a dynamic scratch stack sequence that can return intermittent wrong values. |
 | [m014-shl-add-ctpop](known-miscompiles/m014-shl-add-ctpop/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a four-step `shl/add` chain feeding `ctpop` through lane 0. |
@@ -277,6 +292,12 @@ Tested toolchains as of 2026-05-18:
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.  But then it became clear that the ROCm 7.2.3 release doesn't have most of the bugs that are appearing in upstream.  I'm more interested in bugs that appear in the release, so after this, I started testing against 7.2.3 (built from source).
+
+*Human-written note:* After m038, AMD asked us to switch active fuzzing back to
+upstream LLVM HEAD.  The current LLVM HEAD column uses upstream main at
+`0dd29960cd6102b37651cc3f58f872652099b83b` with llvm/llvm-project#198373
+applied; that PR fixes m002, m004, m006, m007, m008, m009, m010, and m011 in
+the upstream-HEAD build.
 
 ## LLVM Source Builds
 

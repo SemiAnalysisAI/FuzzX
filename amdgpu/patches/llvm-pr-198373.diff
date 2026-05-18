@@ -1,0 +1,228 @@
+diff --git a/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp b/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
+index ecf8d957f..b0023cadc 100644
+--- a/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
++++ b/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
+@@ -4318,8 +4318,8 @@ bool AMDGPUDAGToDAGISel::SelectVOP3PMadMixBF16Mods(SDValue In, SDValue &Src,
+ 
+ // Match BITOP3 operation and return a number of matched instructions plus
+ // truth table.
+-static std::pair<unsigned, uint8_t> BitOp3_Op(SDValue In,
+-                                              SmallVectorImpl<SDValue> &Src) {
++static std::pair<unsigned, uint8_t>
++BitOp3_Op(SDValue In, SmallVectorImpl<SDValue> &Src, SelectionDAG &DAG) {
+   unsigned NumOpcodes = 0;
+   uint8_t LHSBits, RHSBits;
+ 
+@@ -4393,6 +4393,23 @@ static std::pair<unsigned, uint8_t> BitOp3_Op(SDValue In,
+     SDValue LHS = In.getOperand(0);
+     SDValue RHS = In.getOperand(1);
+ 
++    // op(X, X): both sides would share a Src slot, and recursing into X may
++    // replace that slot via the "replace parent operator" path, invalidating
++    // the truth-table bits cached for the other use.
++    if (LHS == RHS) {
++      // XOR(X, X) folds to 0 only when X is well-defined; XOR(undef, undef)
++      // is undef, not 0. AND/OR(X, X) folds to X and propagates undef
++      // correctly.
++      if (In.getOpcode() == ISD::XOR &&
++          !DAG.isGuaranteedNotToBeUndefOrPoison(LHS))
++        return std::make_pair(0, 0);
++      uint8_t Bits;
++      if (!getOperandBits(LHS, Bits))
++        return std::make_pair(0, 0);
++      uint8_t TTbl = In.getOpcode() == ISD::XOR ? 0 : Bits;
++      return std::make_pair(1, TTbl);
++    }
++
+     SmallVector<SDValue, 3> Backup(Src.begin(), Src.end());
+     if (!getOperandBits(LHS, LHSBits) ||
+         !getOperandBits(RHS, RHSBits)) {
+@@ -4401,13 +4418,13 @@ static std::pair<unsigned, uint8_t> BitOp3_Op(SDValue In,
+     }
+ 
+     // Recursion is naturally limited by the size of the operand vector.
+-    auto Op = BitOp3_Op(LHS, Src);
++    auto Op = BitOp3_Op(LHS, Src, DAG);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       LHSBits = Op.second;
+     }
+ 
+-    Op = BitOp3_Op(RHS, Src);
++    Op = BitOp3_Op(RHS, Src, DAG);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       RHSBits = Op.second;
+@@ -4442,7 +4459,7 @@ bool AMDGPUDAGToDAGISel::SelectBITOP3(SDValue In, SDValue &Src0, SDValue &Src1,
+   uint8_t TTbl;
+   unsigned NumOpcodes;
+ 
+-  std::tie(NumOpcodes, TTbl) = BitOp3_Op(In, Src);
++  std::tie(NumOpcodes, TTbl) = BitOp3_Op(In, Src, *CurDAG);
+ 
+   // Src.empty() case can happen if all operands are all zero or all ones.
+   // Normally it shall be optimized out before reaching this.
+diff --git a/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp b/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
+index 4bfd56c0c..23deeedcc 100644
+--- a/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
++++ b/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
+@@ -24,6 +24,7 @@
+ #include "llvm/CodeGen/GlobalISel/GenericMachineInstrs.h"
+ #include "llvm/CodeGen/GlobalISel/MIPatternMatch.h"
+ #include "llvm/CodeGen/GlobalISel/MachineIRBuilder.h"
++#include "llvm/CodeGen/GlobalISel/Utils.h"
+ #include "llvm/CodeGen/MachineFrameInfo.h"
+ #include "llvm/IR/DiagnosticInfo.h"
+ #include "llvm/IR/IntrinsicsAMDGPU.h"
+@@ -4225,6 +4226,23 @@ static std::pair<unsigned, uint8_t> BitOp3_Op(Register R,
+     Register LHS = getSrcRegIgnoringCopies(MI->getOperand(1).getReg(), MRI);
+     Register RHS = getSrcRegIgnoringCopies(MI->getOperand(2).getReg(), MRI);
+ 
++    // op(X, X): both sides would share a Src slot, and recursing into X may
++    // replace that slot via the "replace parent operator" path, invalidating
++    // the truth-table bits cached for the other use.
++    if (LHS == RHS) {
++      // XOR(X, X) folds to 0 only when X is well-defined; XOR(undef, undef)
++      // is undef, not 0. AND/OR(X, X) folds to X and propagates undef
++      // correctly.
++      if (MI->getOpcode() == TargetOpcode::G_XOR &&
++          !isGuaranteedNotToBeUndef(LHS, MRI))
++        return std::make_pair(0, 0);
++      uint8_t Bits;
++      if (!getOperandBits(LHS, Bits))
++        return std::make_pair(0, 0);
++      uint8_t TTbl = MI->getOpcode() == TargetOpcode::G_XOR ? 0 : Bits;
++      return std::make_pair(1, TTbl);
++    }
++
+     SmallVector<Register, 3> Backup(Src.begin(), Src.end());
+     if (!getOperandBits(LHS, LHSBits) ||
+         !getOperandBits(RHS, RHSBits)) {
+diff --git a/llvm/test/CodeGen/AMDGPU/bitop3.ll b/llvm/test/CodeGen/AMDGPU/bitop3.ll
+index 75039e447..45dfbf75a 100644
+--- a/llvm/test/CodeGen/AMDGPU/bitop3.ll
++++ b/llvm/test/CodeGen/AMDGPU/bitop3.ll
+@@ -741,6 +741,123 @@ define amdgpu_ps half @test_and_or_b16(i16 %a, i16 %b, i16 %c) {
+   %ret_cast = bitcast i16 %or1 to half
+   ret half %ret_cast
+ }
++; ========= op(X, X) — verify the BITOP3 matcher does not corrupt cached
++; truth-table bits when both operands of an AND/OR/XOR share the same Src
++; slot. The `optnone` attribute keeps the self-op alive through DAGCombine
++; so selection actually sees the LHS == RHS shape.
++
++define amdgpu_ps i32 @xor_self_complex(i32 %a, i32 %b, i32 %c) #0 {
++; GFX950-SDAG-LABEL: xor_self_complex:
++; GFX950-SDAG:       ; %bb.0:
++; GFX950-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX950-SDAG-NEXT:    v_xor_b32_e64 v0, v0, v0
++; GFX950-SDAG-NEXT:    s_nop 0
++; GFX950-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX950-GISEL-LABEL: xor_self_complex:
++; GFX950-GISEL:       ; %bb.0:
++; GFX950-GISEL-NEXT:    s_mov_b32 s0, 0
++; GFX950-GISEL-NEXT:    v_mov_b32_e32 v0, s0
++; GFX950-GISEL-NEXT:    s_nop 0
++; GFX950-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-GISEL-NEXT:    ; return to shader part epilog
++;
++; GFX1250-SDAG-LABEL: xor_self_complex:
++; GFX1250-SDAG:       ; %bb.0:
++; GFX1250-SDAG-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX1250-SDAG-NEXT:    v_xor_b32_e64 v0, v0, v0
++; GFX1250-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX1250-GISEL-LABEL: xor_self_complex:
++; GFX1250-GISEL:       ; %bb.0:
++; GFX1250-GISEL-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-GISEL-NEXT:    s_mov_b32 s0, 0
++; GFX1250-GISEL-NEXT:    v_mov_b32_e32 v0, s0
++; GFX1250-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-GISEL-NEXT:    ; return to shader part epilog
++  %t1 = and i32 %a, %b
++  %xor1 = xor i32 %t1, %c
++  %res = xor i32 %xor1, %xor1
++  ret i32 %res
++}
++
++define amdgpu_ps i32 @and_self_complex(i32 %a, i32 %b, i32 %c) #0 {
++; GFX950-SDAG-LABEL: and_self_complex:
++; GFX950-SDAG:       ; %bb.0:
++; GFX950-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX950-SDAG-NEXT:    v_and_b32_e64 v0, v0, v0
++; GFX950-SDAG-NEXT:    s_nop 0
++; GFX950-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX950-GISEL-LABEL: and_self_complex:
++; GFX950-GISEL:       ; %bb.0:
++; GFX950-GISEL-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX950-GISEL-NEXT:    s_nop 0
++; GFX950-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-GISEL-NEXT:    ; return to shader part epilog
++;
++; GFX1250-SDAG-LABEL: and_self_complex:
++; GFX1250-SDAG:       ; %bb.0:
++; GFX1250-SDAG-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX1250-SDAG-NEXT:    v_and_b32_e64 v0, v0, v0
++; GFX1250-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX1250-GISEL-LABEL: and_self_complex:
++; GFX1250-GISEL:       ; %bb.0:
++; GFX1250-GISEL-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-GISEL-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX1250-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-GISEL-NEXT:    ; return to shader part epilog
++  %t1 = and i32 %a, %b
++  %xor1 = xor i32 %t1, %c
++  %res = and i32 %xor1, %xor1
++  ret i32 %res
++}
++
++define amdgpu_ps i32 @or_self_complex(i32 %a, i32 %b, i32 %c) #0 {
++; GFX950-SDAG-LABEL: or_self_complex:
++; GFX950-SDAG:       ; %bb.0:
++; GFX950-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX950-SDAG-NEXT:    v_or_b32_e64 v0, v0, v0
++; GFX950-SDAG-NEXT:    s_nop 0
++; GFX950-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX950-GISEL-LABEL: or_self_complex:
++; GFX950-GISEL:       ; %bb.0:
++; GFX950-GISEL-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX950-GISEL-NEXT:    s_nop 0
++; GFX950-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX950-GISEL-NEXT:    ; return to shader part epilog
++;
++; GFX1250-SDAG-LABEL: or_self_complex:
++; GFX1250-SDAG:       ; %bb.0:
++; GFX1250-SDAG-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-SDAG-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX1250-SDAG-NEXT:    v_or_b32_e64 v0, v0, v0
++; GFX1250-SDAG-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-SDAG-NEXT:    ; return to shader part epilog
++;
++; GFX1250-GISEL-LABEL: or_self_complex:
++; GFX1250-GISEL:       ; %bb.0:
++; GFX1250-GISEL-NEXT:    s_setreg_imm32_b32 hwreg(HW_REG_WAVE_MODE, 25, 1), 1 ; msbs: dst=0 src0=0 src1=0 src2=0
++; GFX1250-GISEL-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x6c
++; GFX1250-GISEL-NEXT:    v_readfirstlane_b32 s0, v0
++; GFX1250-GISEL-NEXT:    ; return to shader part epilog
++  %t1 = and i32 %a, %b
++  %xor1 = xor i32 %t1, %c
++  %res = or i32 %xor1, %xor1
++  ret i32 %res
++}
++
++attributes #0 = { optnone noinline }
++
+ ;; NOTE: These prefixes are unused and the list is autogenerated. Do not add tests below this line:
+ ; GCN: {{.*}}
+ ; GFX1250-FAKE16: {{.*}}
