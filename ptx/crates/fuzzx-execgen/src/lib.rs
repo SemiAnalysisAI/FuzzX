@@ -114,6 +114,7 @@ pub struct GenConfig {
     pub emit_predicated_unary: bool,
     pub emit_predicated_cvt: bool,
     pub emit_setp_bool: bool,
+    pub emit_setp_dual: bool,
     pub emit_predicated_mad: bool,
     pub emit_predicated_mad_hi: bool,
     pub emit_predicated_set: bool,
@@ -213,6 +214,7 @@ impl Default for GenConfig {
             emit_predicated_unary: true,
             emit_predicated_cvt: true,
             emit_setp_bool: true,
+            emit_setp_dual: true,
             emit_predicated_mad: true,
             emit_predicated_mad_hi: true,
             emit_predicated_set: true,
@@ -901,6 +903,21 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+    },
+    /// `setp.<cmp> %p|%q` feeding complementary guarded ALU instructions.
+    SetpDualBin {
+        cmp: CmpOp,
+        cmp_a: Operand,
+        cmp_b: Operand,
+        true_pred: u32,
+        false_pred: u32,
+        dst: u32,
+        true_op: BinOp,
+        true_a: Operand,
+        true_b: Operand,
+        false_op: BinOp,
+        false_a: Operand,
+        false_b: Operand,
     },
     /// `setp.<cmp> pred, ca, cb; @pred <shift> dst, src, imm;`.
     PredicatedShift {
@@ -1737,6 +1754,49 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_setp_dual_bin(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let true_op = pick_binop(
+            u,
+            self.cfg.emit_minmax,
+            self.cfg.emit_sub,
+            self.cfg.emit_mul_lo,
+            self.cfg.emit_signed_lo_alu,
+            self.cfg.emit_sat_arith,
+            self.cfg.emit_mulhi,
+            self.cfg.emit_signed_mulhi,
+            self.cfg.emit_bitwise_binops,
+            self.cfg.emit_or,
+            self.cfg.emit_xor,
+        )?;
+        let false_op = pick_binop(
+            u,
+            self.cfg.emit_minmax,
+            self.cfg.emit_sub,
+            self.cfg.emit_mul_lo,
+            self.cfg.emit_signed_lo_alu,
+            self.cfg.emit_sat_arith,
+            self.cfg.emit_mulhi,
+            self.cfg.emit_signed_mulhi,
+            self.cfg.emit_bitwise_binops,
+            self.cfg.emit_or,
+            self.cfg.emit_xor,
+        )?;
+        Ok(Inst::SetpDualBin {
+            cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+            cmp_a: self.pick_guard_operand(u)?,
+            cmp_b: self.pick_guard_operand(u)?,
+            true_pred: self.alloc_pred(),
+            false_pred: self.alloc_pred(),
+            dst: self.pick_dst(u)?,
+            true_op,
+            true_a: self.pick_bin_operand(u, true_op)?,
+            true_b: self.pick_bin_operand(u, true_op)?,
+            false_op,
+            false_a: self.pick_bin_operand(u, false_op)?,
+            false_b: self.pick_bin_operand(u, false_op)?,
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -1779,7 +1839,12 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            if self.cfg.emit_setp_dual && self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+                self.pick_setp_dual_bin(u)
+            } else if self.cfg.emit_setp_bool
+                && self.cfg.emit_predicated_alu
+                && u.arbitrary::<bool>()?
+            {
                 self.pick_setp_bool_bin(u)
             } else if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
                 let op = pick_binop(
@@ -2488,6 +2553,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
+            | Inst::SetpDualBin { dst, .. }
             | Inst::PredicatedShift { dst, .. }
             | Inst::Shift { dst, .. }
             | Inst::RegShift { dst, .. }
@@ -2899,6 +2965,46 @@ impl<'a> Generator<'a> {
                 a.emit(s);
                 write!(s, ", ").unwrap();
                 b.emit(s);
+                writeln!(s, ";").unwrap();
+            }
+            Inst::SetpDualBin {
+                cmp,
+                cmp_a,
+                cmp_b,
+                true_pred,
+                false_pred,
+                dst,
+                true_op,
+                true_a,
+                true_b,
+                false_op,
+                false_a,
+                false_b,
+            } => {
+                write!(
+                    s,
+                    "    {:<13} %p{true_pred}|%p{false_pred}, ",
+                    cmp.mnemonic()
+                )
+                .unwrap();
+                cmp_a.emit(s);
+                write!(s, ", ").unwrap();
+                cmp_b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    @%p{true_pred} {:<8} %r{dst}, ", true_op.mnemonic()).unwrap();
+                true_a.emit(s);
+                write!(s, ", ").unwrap();
+                true_b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(
+                    s,
+                    "    @%p{false_pred} {:<8} %r{dst}, ",
+                    false_op.mnemonic()
+                )
+                .unwrap();
+                false_a.emit(s);
+                write!(s, ", ").unwrap();
+                false_b.emit(s);
                 writeln!(s, ";").unwrap();
             }
             Inst::PredicatedShift {
@@ -4529,6 +4635,13 @@ mod tests {
 
     fn has_setp_bool(ptx: &str) -> bool {
         ptx.lines().any(|line| setp_bool_suffix(line).is_some())
+    }
+
+    fn has_setp_dual(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("setp.") && line.contains("|%p")
+        })
     }
 
     fn has_predicated_shift(ptx: &str) -> bool {
@@ -7703,6 +7816,43 @@ mod tests {
             assert!(
                 !has_setp_bool(&ptx),
                 "seed {seed:x} emitted setp bool combiner"
+            );
+        }
+    }
+
+    #[test]
+    fn setp_dual_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut saw_setp_dual = false;
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            saw_setp_dual |= has_setp_dual(&ptx);
+            if saw_setp_dual {
+                break;
+            }
+        }
+
+        assert!(
+            saw_setp_dual,
+            "no seed in sample emitted setp dual destination"
+        );
+    }
+
+    #[test]
+    fn setp_dual_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_setp_dual: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_setp_dual(&ptx),
+                "seed {seed:x} emitted setp dual destination"
             );
         }
     }
