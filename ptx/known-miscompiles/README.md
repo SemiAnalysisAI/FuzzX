@@ -37,6 +37,5 @@ For `m023-mul-wide-hi-ice`, the `-Xptxas -O2` build itself is the reproducer:
 it is expected to fail in optimized `ptxas` before a runnable binary is
 produced.
 
-The inline reproducers were checked on 2026-05-15 with CUDA Toolkit 13.2.1
-`nvcc`/`ptxas` (`release 13.2, V13.2.78`, build
-`cuda_13.2.r13.2/compiler.37668154_0`) targeting `sm_103`.
+Each bug's `NOTES.md` records the `nvcc`/`ptxas` version used to check that
+standalone reproducer.

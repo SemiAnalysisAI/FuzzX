@@ -60,6 +60,7 @@ pub struct GenConfig {
     pub emit_sub: bool,
     pub emit_mul_lo: bool,
     pub emit_signed_lo_alu: bool,
+    pub emit_sat_arith: bool,
     pub emit_mulhi: bool,
     pub emit_signed_mulhi: bool,
     pub emit_bitwise_binops: bool,
@@ -71,6 +72,7 @@ pub struct GenConfig {
     pub emit_clz: bool,
     pub emit_brev: bool,
     pub emit_cnot: bool,
+    pub emit_popc: bool,
     pub emit_abs: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
@@ -153,6 +155,7 @@ impl Default for GenConfig {
             emit_sub: true,
             emit_mul_lo: true,
             emit_signed_lo_alu: true,
+            emit_sat_arith: true,
             emit_mulhi: true,
             emit_signed_mulhi: true,
             emit_bitwise_binops: true,
@@ -164,6 +167,7 @@ impl Default for GenConfig {
             emit_clz: true,
             emit_brev: true,
             emit_cnot: true,
+            emit_popc: true,
             emit_abs: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
@@ -268,8 +272,10 @@ pub fn input_for_seed(seed: u64) -> Vec<u8> {
 enum BinOp {
     Add,
     AddS,
+    AddSatS,
     Sub,
     SubS,
+    SubSatS,
     Mul,
     MulS,
     MulHi,
@@ -288,8 +294,10 @@ impl BinOp {
         match self {
             BinOp::Add => "add.u32",
             BinOp::AddS => "add.s32",
+            BinOp::AddSatS => "add.sat.s32",
             BinOp::Sub => "sub.u32",
             BinOp::SubS => "sub.s32",
+            BinOp::SubSatS => "sub.sat.s32",
             BinOp::Mul => "mul.lo.u32",
             BinOp::MulS => "mul.lo.s32",
             BinOp::MulHi => "mul.hi.u32",
@@ -1498,6 +1506,16 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn can_emit_unary(&self) -> bool {
+        self.cfg.emit_not
+            || self.cfg.emit_clz
+            || self.cfg.emit_brev
+            || self.cfg.emit_neg
+            || self.cfg.emit_cnot
+            || self.cfg.emit_popc
+            || self.cfg.emit_abs
+    }
+
     fn pick_bin_operand(&mut self, u: &mut Unstructured, op: BinOp) -> Result<Operand> {
         let operand = self.pick_operand(u)?;
         Ok(if op == BinOp::Xor && !self.cfg.emit_not {
@@ -1596,6 +1614,7 @@ impl<'a> Generator<'a> {
                 self.cfg.emit_sub,
                 self.cfg.emit_mul_lo,
                 self.cfg.emit_signed_lo_alu,
+                self.cfg.emit_sat_arith,
                 self.cfg.emit_mulhi,
                 self.cfg.emit_signed_mulhi,
                 self.cfg.emit_bitwise_binops,
@@ -1616,6 +1635,7 @@ impl<'a> Generator<'a> {
                     self.cfg.emit_sub,
                     self.cfg.emit_mul_lo,
                     self.cfg.emit_signed_lo_alu,
+                    self.cfg.emit_sat_arith,
                     self.cfg.emit_mulhi,
                     self.cfg.emit_signed_mulhi,
                     self.cfg.emit_bitwise_binops,
@@ -1737,6 +1757,9 @@ impl<'a> Generator<'a> {
                 })
             }
         } else if pick < 160 {
+            if !self.can_emit_unary() {
+                return self.pick_mad_or_add(u);
+            }
             let op = pick_unary(
                 u,
                 self.cfg.emit_not,
@@ -1744,6 +1767,7 @@ impl<'a> Generator<'a> {
                 self.cfg.emit_brev,
                 self.cfg.emit_neg,
                 self.cfg.emit_cnot,
+                self.cfg.emit_popc,
                 self.cfg.emit_abs,
             )?;
             if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
@@ -3539,6 +3563,7 @@ fn pick_binop(
     emit_sub: bool,
     emit_mul_lo: bool,
     emit_signed_lo_alu: bool,
+    emit_sat_arith: bool,
     emit_mulhi: bool,
     emit_signed_mulhi: bool,
     emit_bitwise_binops: bool,
@@ -3548,6 +3573,9 @@ fn pick_binop(
     let mut ops = vec![BinOp::Add];
     if emit_signed_lo_alu {
         ops.push(BinOp::AddS);
+        if emit_sat_arith {
+            ops.push(BinOp::AddSatS);
+        }
     }
     if emit_mul_lo {
         ops.push(BinOp::Mul);
@@ -3559,6 +3587,9 @@ fn pick_binop(
         ops.push(BinOp::Sub);
         if emit_signed_lo_alu {
             ops.push(BinOp::SubS);
+            if emit_sat_arith {
+                ops.push(BinOp::SubSatS);
+            }
         }
     }
     if emit_bitwise_binops {
@@ -3646,6 +3677,7 @@ fn pick_unary(
     emit_brev: bool,
     emit_neg: bool,
     emit_cnot: bool,
+    emit_popc: bool,
     emit_abs: bool,
 ) -> Result<UnaryOp> {
     let ops_all = [
@@ -3666,7 +3698,7 @@ fn pick_unary(
             UnaryOp::AbsS => emit_abs,
             UnaryOp::Clz => emit_clz,
             UnaryOp::Brev => emit_brev,
-            UnaryOp::Popc => true,
+            UnaryOp::Popc => emit_popc,
         })
         .collect::<Vec<_>>();
     Ok(*u.choose(&ops)?)
@@ -3961,8 +3993,10 @@ mod tests {
     const BIN_MNEMONICS: &[&str] = &[
         "add.u32",
         "add.s32",
+        "add.sat.s32",
         "sub.u32",
         "sub.s32",
+        "sub.sat.s32",
         "mul.lo.u32",
         "mul.lo.s32",
         "mul.hi.u32",
@@ -3975,7 +4009,14 @@ mod tests {
         "min.s32",
         "max.s32",
     ];
-    const SIGNED_LO_BIN_MNEMONICS: &[&str] = &["add.s32", "sub.s32", "mul.lo.s32"];
+    const SIGNED_LO_BIN_MNEMONICS: &[&str] = &[
+        "add.s32",
+        "add.sat.s32",
+        "sub.s32",
+        "sub.sat.s32",
+        "mul.lo.s32",
+    ];
+    const SAT_ARITH_MNEMONICS: &[&str] = &["add.sat.s32", "sub.sat.s32"];
     const MAD_LO_MNEMONICS: &[&str] = &["mad.lo.u32", "mad.lo.s32"];
     const POST_KNOWN_BIN_MNEMONICS: &[&str] = &["add.u32", "sub.u32", "and.b32"];
     const SHIFT_MNEMONICS: &[&str] = &["shl.b32", "shr.u32", "shr.s32"];
@@ -4495,6 +4536,7 @@ mod tests {
             emit_minmax: false,
             emit_selp: false,
             emit_mul_lo: false,
+            emit_sat_arith: false,
             emit_mulhi: false,
             emit_or: false,
             emit_xor: false,
@@ -4825,6 +4867,10 @@ mod tests {
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("sub.u32"), "seed {seed:x} emitted sub.u32");
             assert!(!ptx.contains("sub.s32"), "seed {seed:x} emitted sub.s32");
+            assert!(
+                !ptx.contains("sub.sat.s32"),
+                "seed {seed:x} emitted sub.sat.s32"
+            );
         }
     }
 
@@ -4880,7 +4926,36 @@ mod tests {
         for seed in 0..512 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in ["add.s32", "sub.s32", "mul.lo.s32", "mad.lo.s32"] {
+            for mnemonic in [
+                "add.s32",
+                "add.sat.s32",
+                "sub.s32",
+                "sub.sat.s32",
+                "mul.lo.s32",
+                "mad.lo.s32",
+            ] {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
+        }
+    }
+
+    #[test]
+    fn sat_arith_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        assert_mnemonic_coverage(&cfg, 32768, 2048, SAT_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn sat_arith_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_sat_arith: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SAT_ARITH_MNEMONICS {
                 assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
             }
         }
@@ -5190,6 +5265,42 @@ mod tests {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             assert!(!ptx.contains("cnot.b32"), "seed {seed:x} emitted cnot.b32");
+        }
+    }
+
+    #[test]
+    fn popc_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_popc: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(!ptx.contains("popc.b32"), "seed {seed:x} emitted popc.b32");
+        }
+    }
+
+    #[test]
+    fn all_unary_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_not: false,
+            emit_clz: false,
+            emit_brev: false,
+            emit_neg: false,
+            emit_cnot: false,
+            emit_popc: false,
+            emit_abs: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..256 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in UNARY_MNEMONICS {
+                assert!(!ptx.contains(mnemonic), "seed {seed:x} emitted {mnemonic}");
+            }
         }
     }
 

@@ -82,6 +82,7 @@ Version | Description |
 | 13.2.78 | [m001-seed-050f](known-miscompiles/m001-seed-050f/NOTES.md): Uniform loop-latch optimization mishandles divergent loop-header entry. |
 | 13.2.78 | [m002-structured-lop3](known-miscompiles/m002-structured-lop3/NOTES.md): `selp` / `lop3` / `xor` fold computes the wrong truth-table result. |
 | 13.2.78 | [m003-no-lop3-max-chain](known-miscompiles/m003-no-lop3-max-chain/NOTES.md): `sub.u32` plus `max.s32` chain fold incorrectly includes the pre-subtract value. |
+| 13.0.88 | [m051-sat-sub-add-fold](known-miscompiles/m051-sat-sub-add-fold/NOTES.md): `sub.sat.s32` followed by adding back the subtrahend folds as if saturation cannot occur. |
 | 13.2.78 | [m004-mulhi-loop-tripcount](known-miscompiles/m004-mulhi-loop-tripcount/NOTES.md): Loop removal drops two `mul.hi.s32` accumulator updates. |
 | 13.2.78 | [m005-prmt-ifconvert-mask](known-miscompiles/m005-prmt-ifconvert-mask/NOTES.md): If-converted `prmt.b32` mask fold drops a source operand. |
 | 13.2.78 | [m006-ifconvert-not-xor](known-miscompiles/m006-ifconvert-not-xor/NOTES.md): If-converted `not.b32` plus `xor.b32` fold uses the wrong truth table. |
@@ -220,7 +221,8 @@ that feature.
 | `DIV_DISABLE_SELP` | `selp.b32`. |
 | `DIV_DISABLE_SUB` | Random `sub.u32` ALU instructions. |
 | `DIV_DISABLE_MUL_LO` | `mul.lo.u32` and `mad.lo.u32`. |
-| `DIV_DISABLE_SIGNED_LO_ALU` | Signed `add`, `sub`, `mul.lo`, and `mad.lo` spellings. |
+| `DIV_DISABLE_SIGNED_LO_ALU` | Signed low-ALU spellings, including saturating add/sub. |
+| `DIV_DISABLE_SAT_ARITH` | `add.sat.s32` and `sub.sat.s32`. |
 | `DIV_DISABLE_MULHI` | `mul.hi.u32` and `mul.hi.s32`. |
 | `DIV_DISABLE_SIGNED_MULHI` | `mul.hi.s32` only. |
 | `DIV_DISABLE_BITWISE_BINOPS` | `and.b32`, `or.b32`, `xor.b32`. |
@@ -232,6 +234,7 @@ that feature.
 | `DIV_DISABLE_CLZ` | `clz.b32`. |
 | `DIV_DISABLE_BREV` | `brev.b32`. |
 | `DIV_DISABLE_CNOT` | `cnot.b32`. |
+| `DIV_DISABLE_POPC` | `popc.b32`. |
 | `DIV_DISABLE_ABS` | `abs.s32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
