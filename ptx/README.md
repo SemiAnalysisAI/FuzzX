@@ -233,11 +233,13 @@ that feature.
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
 | `DIV_DISABLE_FUNNEL` | `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
+| `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.l.wrap.b32` and `shf.r.wrap.b32`. |
 | `DIV_DISABLE_NEG` | `neg.s32`. |
 | `DIV_DISABLE_SHL` | `shl.b32`. |
 | `DIV_DISABLE_SHR` | `shr.u32`. |
 | `DIV_DISABLE_SIGNED_SHR` | `shr.s32`. |
 | `DIV_DISABLE_REG_SHIFTS` | Masked register-count shifts. |
+| `DIV_DISABLE_PREDICATED_SHIFTS` | Predicated immediate-count shifts. |
 | `DIV_DISABLE_BFIND` | `bfind.u32` and `bfind.shiftamt.u32`. |
 | `DIV_DISABLE_BFI` | `bfi.b32`. |
 | `DIV_DISABLE_BMSK` | `bmsk.clamp.b32`. |
@@ -250,6 +252,7 @@ that feature.
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.u32.u32`. |
 | `DIV_DISABLE_PREDICATED_ALU` | Predicated ALU instructions. |
+| `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
 | `DIV_DISABLE_SET` | `set.{cmp}.u32.{u32,s32}`. |
 | `DIV_DISABLE_S32_SLCT` | `slct.s32.s32`. |
 | `DIV_DISABLE_VIDEO` | PTX video instructions. |
