@@ -2710,6 +2710,152 @@ Value *emitRandomWideningMulIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *extractByteAsI32(IRBuilder<NoFolder> &B, Value *V, unsigned Byte,
+                        const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Shifted = V;
+  if (Byte != 0)
+    Shifted = B.CreateLShr(V, ci32(Ctx, Byte * 8), Name + ".shr");
+  return B.CreateZExt(B.CreateTrunc(Shifted, I8, Name + ".trunc"), I32,
+                      Name + ".zext");
+}
+
+Value *extractHalfAsI32(IRBuilder<NoFolder> &B, Value *V, unsigned Half,
+                        bool Signed, const Twine &Name) {
+  LLVMContext &Ctx = V->getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *Shifted = V;
+  if (Half != 0)
+    Shifted = B.CreateLShr(V, ci32(Ctx, 16), Name + ".shr");
+  Value *Truncated = B.CreateTrunc(Shifted, I16, Name + ".trunc");
+  if (Signed)
+    return B.CreateSExt(Truncated, I32, Name + ".sext");
+  return B.CreateZExt(Truncated, I32, Name + ".zext");
+}
+
+Value *packFourBytesAsI32(IRBuilder<NoFolder> &B, ArrayRef<Value *> Bytes,
+                          bool UseAdd, const Twine &Name) {
+  LLVMContext &Ctx = Bytes[0]->getContext();
+  Value *Result = ci32(Ctx, 0);
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *Lane = B.CreateAnd(Bytes[I], ci32(Ctx, 0xff), Name + ".mask");
+    if (I != 0)
+      Lane = B.CreateShl(Lane, ci32(Ctx, I * 8), Name + ".shift");
+    Result = UseAdd ? B.CreateAdd(Result, Lane, Name + ".add")
+                    : B.CreateOr(Result, Lane, Name + ".or");
+  }
+  return Result;
+}
+
+Value *emitRandomPackUnpackIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                 std::minstd_rand &Gen,
+                                 StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  auto AByte = [&](unsigned Byte, const Twine &Name) {
+    return extractByteAsI32(B, A, Byte, Name);
+  };
+  auto BByte = [&](unsigned Byte, const Twine &Name) {
+    return extractByteAsI32(B, Bv, Byte, Name);
+  };
+
+  switch (Gen() % 8) {
+  case 0: {
+    Value *A0 = AByte(0, Twine(NamePrefix) + ".a0");
+    Value *A1 = AByte(1, Twine(NamePrefix) + ".a1");
+    Value *A2 = AByte(2, Twine(NamePrefix) + ".a2");
+    Value *A3 = AByte(3, Twine(NamePrefix) + ".a3");
+    return packFourBytesAsI32(B, {A3, A2, A1, A0}, (Gen() % 2) == 0,
+                              Twine(NamePrefix) + ".bswap");
+  }
+  case 1: {
+    Value *A0 = AByte(0, Twine(NamePrefix) + ".a0");
+    Value *A1 = AByte(1, Twine(NamePrefix) + ".a1");
+    Value *B0 = BByte(0, Twine(NamePrefix) + ".b0");
+    Value *B1 = BByte(1, Twine(NamePrefix) + ".b1");
+    return packFourBytesAsI32(B, {A0, B0, A1, B1}, (Gen() % 2) == 0,
+                              Twine(NamePrefix) + ".interleave.lo");
+  }
+  case 2: {
+    Value *A2 = AByte(2, Twine(NamePrefix) + ".a2");
+    Value *A3 = AByte(3, Twine(NamePrefix) + ".a3");
+    Value *B2 = BByte(2, Twine(NamePrefix) + ".b2");
+    Value *B3 = BByte(3, Twine(NamePrefix) + ".b3");
+    return packFourBytesAsI32(B, {A2, B2, A3, B3}, (Gen() % 2) == 0,
+                              Twine(NamePrefix) + ".interleave.hi");
+  }
+  case 3: {
+    Value *Lo =
+        B.CreateAnd(A, ci32(Ctx, 0xffff), Twine(NamePrefix) + ".lo16");
+    Value *Hi =
+        B.CreateAnd(Bv, ci32(Ctx, 0xffff), Twine(NamePrefix) + ".hi16");
+    Hi = B.CreateShl(Hi, ci32(Ctx, 16), Twine(NamePrefix) + ".hi16.shift");
+    return B.CreateOr(Lo, Hi, Twine(NamePrefix) + ".half.merge");
+  }
+  case 4: {
+    Value *A0 = AByte(0, Twine(NamePrefix) + ".a0");
+    Value *A2 = AByte(2, Twine(NamePrefix) + ".a2");
+    Value *B1 = BByte(1, Twine(NamePrefix) + ".b1");
+    Value *B3 = BByte(3, Twine(NamePrefix) + ".b3");
+    Value *Packed = packFourBytesAsI32(B, {B3, A0, B1, A2}, false,
+                                       Twine(NamePrefix) + ".pack");
+    Value *Half = extractHalfAsI32(B, Packed, Gen() & 1u, (Gen() % 2) == 0,
+                                   Twine(NamePrefix) + ".half");
+    return B.CreateXor(Half, A, Twine(NamePrefix) + ".half.xor");
+  }
+  case 5: {
+    Value *A0 = AByte(0, Twine(NamePrefix) + ".a0");
+    Value *A1 = AByte(1, Twine(NamePrefix) + ".a1");
+    Value *A2 = AByte(2, Twine(NamePrefix) + ".a2");
+    Value *B0 = BByte(0, Twine(NamePrefix) + ".b0");
+    Value *B1 = BByte(1, Twine(NamePrefix) + ".b1");
+    Value *B2 = BByte(2, Twine(NamePrefix) + ".b2");
+    Value *P0 = B.CreateMul(A0, B0, Twine(NamePrefix) + ".byte.mul0");
+    Value *P1 = B.CreateMul(A1, B1, Twine(NamePrefix) + ".byte.mul1");
+    Value *P2 = B.CreateMul(A2, B2, Twine(NamePrefix) + ".byte.mul2");
+    return B.CreateAdd(B.CreateAdd(P0, P1, Twine(NamePrefix) + ".byte.sum01"),
+                       P2, Twine(NamePrefix) + ".byte.sum");
+  }
+  case 6: {
+    Value *LoNibbles =
+        B.CreateAnd(A, ci32(Ctx, 0x0f0f0f0fu), Twine(NamePrefix) + ".lo.nib");
+    Value *HiNibbles =
+        B.CreateLShr(B.CreateAnd(Bv, ci32(Ctx, 0xf0f0f0f0u),
+                                 Twine(NamePrefix) + ".hi.nib.mask"),
+                     ci32(Ctx, 4), Twine(NamePrefix) + ".hi.nib");
+    Value *Merged =
+        B.CreateOr(LoNibbles, HiNibbles, Twine(NamePrefix) + ".nib.merge");
+    Value *E0 = extractByteAsI32(B, Merged, 0, Twine(NamePrefix) + ".nib.e0");
+    Value *E2 = extractByteAsI32(B, Merged, 2, Twine(NamePrefix) + ".nib.e2");
+    Value *B0 = BByte(0, Twine(NamePrefix) + ".b0");
+    Value *B2 = BByte(2, Twine(NamePrefix) + ".b2");
+    return packFourBytesAsI32(B, {E2, B0, E0, B2}, true,
+                              Twine(NamePrefix) + ".nib.repack");
+  }
+  default: {
+    Value *Lo64 = B.CreateZExt(A, I64, Twine(NamePrefix) + ".lo64");
+    Value *Hi64 = B.CreateShl(B.CreateZExt(Bv, I64,
+                                           Twine(NamePrefix) + ".hi64"),
+                              ConstantInt::get(I64, 32),
+                              Twine(NamePrefix) + ".hi64.shift");
+    Value *Pair = B.CreateOr(Lo64, Hi64, Twine(NamePrefix) + ".pair");
+    Value *Lane =
+        B.CreateLShr(Pair, ConstantInt::get(I64, (Gen() & 1u) ? 32 : 0),
+                     Twine(NamePrefix) + ".pair.extract");
+    Value *Lane32 = B.CreateTrunc(Lane, I32, Twine(NamePrefix) + ".lane32");
+    Value *A0 = AByte(0, Twine(NamePrefix) + ".a0");
+    Value *B3 = BByte(3, Twine(NamePrefix) + ".b3");
+    return B.CreateAdd(Lane32, B.CreateXor(A0, B3,
+                                           Twine(NamePrefix) + ".byte.xor"),
+                       Twine(NamePrefix) + ".pair.mix");
+  }
+  }
+}
+
 Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
                                      Value *Bv, std::minstd_rand &Gen,
                                      StringRef NamePrefix) {
@@ -3955,7 +4101,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 138) {
+  switch (Gen() % 146) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -4179,6 +4325,16 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 120:
   case 121:
     return emitRandomWideningMulIdiom(B, A, Bv, Gen, "fuzz.widemul.idiom");
+  case 122:
+  case 123:
+  case 124:
+  case 125:
+  case 126:
+  case 127:
+  case 128:
+  case 129:
+    return emitRandomPackUnpackIdiom(B, A, Bv, Gen,
+                                     "fuzz.packunpack.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4213,7 +4369,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 122) {
+  switch (Gen() % 130) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4430,6 +4586,16 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 113:
     return emitRandomWideningMulIdiom(B, A, Bv, Gen,
                                       "fuzz.cfg.widemul.idiom");
+  case 114:
+  case 115:
+  case 116:
+  case 117:
+  case 118:
+  case 119:
+  case 120:
+  case 121:
+    return emitRandomPackUnpackIdiom(B, A, Bv, Gen,
+                                     "fuzz.cfg.packunpack.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
