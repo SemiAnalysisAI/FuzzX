@@ -2524,6 +2524,59 @@ Value *emitRandomBoolI32Instruction(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *buildPredicateMask(IRBuilder<NoFolder> &B, Value *Pred,
+                          std::minstd_rand &Gen, const Twine &NamePrefix) {
+  LLVMContext &Ctx = Pred->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  if ((Gen() % 2) == 0)
+    return B.CreateSExt(Pred, I32, Twine(NamePrefix) + ".sext");
+  return B.CreateSelect(Pred, ci32(Ctx, 0xffffffffu), ci32(Ctx, 0),
+                        Twine(NamePrefix) + ".select");
+}
+
+Value *emitRandomPredicateMaskIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                    Value *Bv, std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *Cmp =
+      B.CreateICmp(randomICmpPredicate(Gen), A, Bv, Twine(NamePrefix) + ".cmp");
+  Value *Mask = buildPredicateMask(B, Cmp, Gen, Twine(NamePrefix) + ".mask");
+  Value *NotMask =
+      B.CreateXor(Mask, ci32(Ctx, 0xffffffffu), Twine(NamePrefix) + ".not");
+
+  switch (Gen() % 7) {
+  case 0: {
+    Value *LHS = B.CreateAnd(A, Mask, Twine(NamePrefix) + ".blend.a");
+    Value *RHS = B.CreateAnd(Bv, NotMask, Twine(NamePrefix) + ".blend.b");
+    return B.CreateOr(LHS, RHS, Twine(NamePrefix) + ".blend.or");
+  }
+  case 1: {
+    Value *LHS = B.CreateAnd(A, NotMask, Twine(NamePrefix) + ".blend.a");
+    Value *RHS = B.CreateAnd(Bv, Mask, Twine(NamePrefix) + ".blend.b");
+    return B.CreateAdd(LHS, RHS, Twine(NamePrefix) + ".blend.add");
+  }
+  case 2:
+    return B.CreateAnd(A, Mask, Twine(NamePrefix) + ".clear");
+  case 3:
+    return B.CreateOr(A, Mask, Twine(NamePrefix) + ".set");
+  case 4:
+    return B.CreateXor(A, Mask, Twine(NamePrefix) + ".toggle");
+  case 5: {
+    Value *Sign = B.CreateAShr(A, ci32(Ctx, 31), Twine(NamePrefix) + ".sign");
+    Value *Flipped = B.CreateXor(A, Sign, Twine(NamePrefix) + ".abs.flip");
+    Value *Abs = B.CreateSub(Flipped, Sign, Twine(NamePrefix) + ".abs");
+    return B.CreateSelect(Cmp, Abs, A, Twine(NamePrefix) + ".abs.select");
+  }
+  default: {
+    Value *Sign = B.CreateAShr(A, ci32(Ctx, 31), Twine(NamePrefix) + ".sign");
+    Value *Adjusted = B.CreateSub(B.CreateXor(A, Sign,
+                                              Twine(NamePrefix) + ".sign.xor"),
+                                  Sign, Twine(NamePrefix) + ".sign.sub");
+    return B.CreateXor(Adjusted, Mask, Twine(NamePrefix) + ".sign.mask.xor");
+  }
+  }
+}
+
 Value *emitRandomUnsignedSelectIdiom(IRBuilder<NoFolder> &B, Value *A,
                                      Value *Bv, std::minstd_rand &Gen,
                                      StringRef NamePrefix) {
@@ -3769,7 +3822,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 120) {
+  switch (Gen() % 126) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -3972,6 +4025,13 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 103:
     return emitRandomSignedOverflowSelectIdiom(B, A, Bv, Gen,
                                                "fuzz.soverflow.idiom");
+  case 104:
+  case 105:
+  case 106:
+  case 107:
+  case 108:
+  case 109:
+    return emitRandomPredicateMaskIdiom(B, A, Bv, Gen, "fuzz.predmask.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -4006,7 +4066,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 104) {
+  switch (Gen() % 110) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -4199,6 +4259,14 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 95:
     return emitRandomSignedOverflowSelectIdiom(B, A, Bv, Gen,
                                                "fuzz.cfg.soverflow.idiom");
+  case 96:
+  case 97:
+  case 98:
+  case 99:
+  case 100:
+  case 101:
+    return emitRandomPredicateMaskIdiom(B, A, Bv, Gen,
+                                        "fuzz.cfg.predmask.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
