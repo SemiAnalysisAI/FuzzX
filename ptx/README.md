@@ -271,6 +271,7 @@ that feature.
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips. |
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips. |
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded memory loads and store/load roundtrips. |
+| `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/fma/min/max.f32` arithmetic. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized `set.*.u32.f32` and `setp.*.f32` comparisons. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
