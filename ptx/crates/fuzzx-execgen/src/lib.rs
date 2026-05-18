@@ -15,9 +15,9 @@
 //!   * Loops use a per-edge countdown register, decremented on each back-edge
 //!     firing. Counters initialize once in entry and only decrease, so
 //!     total back-edge firings ≤ sum of initial counter values.
-//!   * Each thread writes only to its own disjoint output slice and private
-//!     local memory; no shared memory, no atomics, no warp intrinsics, no
-//!     `bar.sync`.
+//!   * Each thread writes only to its own disjoint output slice, private local
+//!     memory, and private shared-memory slot; no atomics, no warp intrinsics,
+//!     no `bar.sync`.
 //!   * Variable shift counts are masked or use `.wrap` semantics. Divisors are
 //!     nonzero. Floating-point inputs are sanitized to a small finite range.
 
@@ -41,6 +41,8 @@ pub const fn input_len() -> usize {
 }
 
 const LOCAL_MEM_BYTES: u32 = 64;
+const SHARED_SLOT_BYTES: u32 = 4;
+const SHARED_MEM_BYTES: u32 = N_THREADS * SHARED_SLOT_BYTES;
 const F32_INPUT_MASK: u32 = 1023;
 
 #[derive(Debug, Clone)]
@@ -102,6 +104,7 @@ pub struct GenConfig {
     pub emit_predicated_special_regs: bool,
     pub emit_global_loads: bool,
     pub emit_local_memory: bool,
+    pub emit_shared_memory: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
@@ -296,6 +299,7 @@ impl Default for GenConfig {
             emit_predicated_special_regs: true,
             emit_global_loads: true,
             emit_local_memory: true,
+            emit_shared_memory: true,
             emit_f32_arith: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
@@ -736,6 +740,43 @@ impl LocalMemOp {
             LocalMemOp::U8 | LocalMemOp::S8 => 1,
             LocalMemOp::U16 | LocalMemOp::S16 => 2,
             LocalMemOp::U32 => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SharedMemOp {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+}
+
+impl SharedMemOp {
+    fn load_mnemonic(self) -> &'static str {
+        match self {
+            SharedMemOp::U8 => "ld.shared.u8",
+            SharedMemOp::S8 => "ld.shared.s8",
+            SharedMemOp::U16 => "ld.shared.u16",
+            SharedMemOp::S16 => "ld.shared.s16",
+            SharedMemOp::U32 => "ld.shared.u32",
+        }
+    }
+
+    fn store_mnemonic(self) -> &'static str {
+        match self {
+            SharedMemOp::U8 | SharedMemOp::S8 => "st.shared.u8",
+            SharedMemOp::U16 | SharedMemOp::S16 => "st.shared.u16",
+            SharedMemOp::U32 => "st.shared.u32",
+        }
+    }
+
+    fn width(self) -> u32 {
+        match self {
+            SharedMemOp::U8 | SharedMemOp::S8 => 1,
+            SharedMemOp::U16 | SharedMemOp::S16 => 2,
+            SharedMemOp::U32 => 4,
         }
     }
 }
@@ -1958,6 +1999,13 @@ enum Inst {
     /// Store to and reload from private per-thread local memory.
     LocalMem {
         op: LocalMemOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+    },
+    /// Store to and reload from this thread's private shared-memory slot.
+    SharedMem {
+        op: SharedMemOp,
         dst: u32,
         src: u32,
         offset: u32,
@@ -4015,6 +4063,26 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_shared_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            SharedMemOp::U8,
+            SharedMemOp::S8,
+            SharedMemOp::U16,
+            SharedMemOp::S16,
+            SharedMemOp::U32,
+        ];
+        let op = *u.choose(&ops)?;
+        let width = op.width();
+        let max_offset = SHARED_SLOT_BYTES - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        Ok(Inst::SharedMem {
+            op,
+            dst: self.pick_dst(u)?,
+            src: self.pick_safe_reg(u)?,
+            offset,
+        })
+    }
+
     fn pick_f32_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [
             F32ArithOp::Add,
@@ -4079,6 +4147,13 @@ impl<'a> Generator<'a> {
             }
             if self.cfg.emit_local_memory && u.int_in_range(0..=7)? == 0 {
                 return self.pick_local_mem(u);
+            }
+            if self.cfg.emit_shared_memory
+                && self.cfg.emit_mul_wide
+                && self.cfg.emit_wide_int
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_shared_mem(u);
             }
             if self.cfg.emit_f32_arith
                 && self.cfg.emit_bitwise_binops
@@ -5330,6 +5405,7 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
             | Inst::LocalMem { dst, .. }
+            | Inst::SharedMem { dst, .. }
             | Inst::F32Arith { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::Sel { dst, .. }
@@ -5565,6 +5641,11 @@ impl<'a> Generator<'a> {
         writeln!(s, "    .reg .b64   %rd<10>;").unwrap();
         writeln!(s, "    .reg .f32   %f<4>;").unwrap();
         writeln!(s, "    .local .align 4 .b8 fuzzx_local[{LOCAL_MEM_BYTES}];").unwrap();
+        writeln!(
+            s,
+            "    .shared .align 4 .b8 fuzzx_shared[{SHARED_MEM_BYTES}];"
+        )
+        .unwrap();
         writeln!(s).unwrap();
 
         // Prologue: load params; compute tid into the reserved tid reg; load
@@ -5831,6 +5912,33 @@ impl<'a> Generator<'a> {
                 offset,
             } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} [%rd6 + {offset}], %r{src};",
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, [%rd6 + {offset}];",
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::SharedMem {
+                op,
+                dst,
+                src,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
                 writeln!(
                     s,
                     "    {:<13} [%rd6 + {offset}], %r{src};",
@@ -9323,6 +9431,14 @@ mod tests {
         "ld.local.u32",
     ];
     const LOCAL_MEM_STORE_MNEMONICS: &[&str] = &["st.local.u8", "st.local.u16", "st.local.u32"];
+    const SHARED_MEM_LOAD_MNEMONICS: &[&str] = &[
+        "ld.shared.u8",
+        "ld.shared.s8",
+        "ld.shared.u16",
+        "ld.shared.s16",
+        "ld.shared.u32",
+    ];
+    const SHARED_MEM_STORE_MNEMONICS: &[&str] = &["st.shared.u8", "st.shared.u16", "st.shared.u32"];
     const F32_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f32",
         "sub.rn.f32",
@@ -9666,6 +9782,8 @@ mod tests {
             GLOBAL_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
+            SHARED_MEM_LOAD_MNEMONICS,
+            SHARED_MEM_STORE_MNEMONICS,
             F32_ARITH_MNEMONICS,
             F32_COMPARE_MNEMONICS,
             F32_SETP_MNEMONICS,
@@ -9721,6 +9839,8 @@ mod tests {
             GLOBAL_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
+            SHARED_MEM_LOAD_MNEMONICS,
+            SHARED_MEM_STORE_MNEMONICS,
             F32_ARITH_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
@@ -9810,6 +9930,33 @@ mod tests {
     fn has_body_local_mem_access(ptx: &str, mnemonic: &str) -> bool {
         ptx.lines()
             .filter_map(body_local_mem_access)
+            .any(|(op, _)| op == mnemonic)
+    }
+
+    fn body_shared_mem_access(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd6 + ") {
+            return None;
+        }
+        let mnemonic = line.split_whitespace().next()?;
+        if !SHARED_MEM_LOAD_MNEMONICS.contains(&mnemonic)
+            && !SHARED_MEM_STORE_MNEMONICS.contains(&mnemonic)
+        {
+            return None;
+        }
+        let offset = line
+            .split("[%rd6 + ")
+            .nth(1)?
+            .split(']')
+            .next()?
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_shared_mem_access(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_shared_mem_access)
             .any(|(op, _)| op == mnemonic)
     }
 
@@ -12243,6 +12390,91 @@ mod tests {
                 assert!(
                     offset + width <= LOCAL_MEM_BYTES,
                     "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut loads = vec![false; SHARED_MEM_LOAD_MNEMONICS.len()];
+        let mut stores = vec![false; SHARED_MEM_STORE_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in SHARED_MEM_LOAD_MNEMONICS.iter().enumerate() {
+                loads[i] |= has_body_shared_mem_access(&ptx, mnemonic);
+            }
+            for (i, mnemonic) in SHARED_MEM_STORE_MNEMONICS.iter().enumerate() {
+                stores[i] |= has_body_shared_mem_access(&ptx, mnemonic);
+            }
+            if loads.iter().all(|seen| *seen) && stores.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_loads: Vec<_> = SHARED_MEM_LOAD_MNEMONICS
+            .iter()
+            .zip(loads)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        let missing_stores: Vec<_> = SHARED_MEM_STORE_MNEMONICS
+            .iter()
+            .zip(stores)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing_loads.is_empty() && missing_stores.is_empty(),
+            "sample missed shared loads {missing_loads:?} stores {missing_stores:?}"
+        );
+    }
+
+    #[test]
+    fn shared_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shared_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SHARED_MEM_LOAD_MNEMONICS
+                .iter()
+                .chain(SHARED_MEM_STORE_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_body_shared_mem_access(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_memory_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_shared_mem_access) {
+                let width = match mnemonic {
+                    "ld.shared.u8" | "ld.shared.s8" | "st.shared.u8" => 1,
+                    "ld.shared.u16" | "ld.shared.s16" | "st.shared.u16" => 2,
+                    "ld.shared.u32" | "st.shared.u32" => 4,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= SHARED_SLOT_BYTES,
+                    "seed {seed:x} emitted out-of-slot {mnemonic} offset {offset}"
                 );
             }
         }
