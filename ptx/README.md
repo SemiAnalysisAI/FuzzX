@@ -273,6 +273,9 @@ that feature.
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded memory loads and store/load roundtrips. |
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 memory loads and store/load roundtrips. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/fma/min/max.f32` arithmetic. |
+| `DIV_DISABLE_F32_ROUNDING` | Sanitized `.rz/.rm/.rp` f32 add/sub/mul/fma arithmetic. |
+| `DIV_DISABLE_F32_UNARY` | Sanitized `abs.f32` and `neg.f32`. |
+| `DIV_DISABLE_F32_CVT` | Sanitized f32/int conversion chains. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized `set.*.u32.f32` and `setp.*.f32` comparisons. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |

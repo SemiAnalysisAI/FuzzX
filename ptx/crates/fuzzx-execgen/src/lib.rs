@@ -111,6 +111,9 @@ pub struct GenConfig {
     pub emit_predicated_memory: bool,
     pub emit_vector_memory: bool,
     pub emit_f32_arith: bool,
+    pub emit_f32_rounding: bool,
+    pub emit_f32_unary: bool,
+    pub emit_f32_cvt: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
     pub emit_signed_cmp: bool,
@@ -310,6 +313,9 @@ impl Default for GenConfig {
             emit_predicated_memory: true,
             emit_vector_memory: true,
             emit_f32_arith: true,
+            emit_f32_rounding: true,
+            emit_f32_unary: true,
+            emit_f32_cvt: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
             emit_signed_cmp: true,
@@ -948,6 +954,105 @@ impl F32ArithOp {
 
     fn uses_c(self) -> bool {
         matches!(self, F32ArithOp::Fma)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F32RoundingArithOp {
+    AddRz,
+    AddRm,
+    AddRp,
+    SubRz,
+    SubRm,
+    SubRp,
+    MulRz,
+    MulRm,
+    MulRp,
+    FmaRz,
+    FmaRm,
+    FmaRp,
+}
+
+impl F32RoundingArithOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32RoundingArithOp::AddRz => "add.rz.f32",
+            F32RoundingArithOp::AddRm => "add.rm.f32",
+            F32RoundingArithOp::AddRp => "add.rp.f32",
+            F32RoundingArithOp::SubRz => "sub.rz.f32",
+            F32RoundingArithOp::SubRm => "sub.rm.f32",
+            F32RoundingArithOp::SubRp => "sub.rp.f32",
+            F32RoundingArithOp::MulRz => "mul.rz.f32",
+            F32RoundingArithOp::MulRm => "mul.rm.f32",
+            F32RoundingArithOp::MulRp => "mul.rp.f32",
+            F32RoundingArithOp::FmaRz => "fma.rz.f32",
+            F32RoundingArithOp::FmaRm => "fma.rm.f32",
+            F32RoundingArithOp::FmaRp => "fma.rp.f32",
+        }
+    }
+
+    fn uses_c(self) -> bool {
+        matches!(
+            self,
+            F32RoundingArithOp::FmaRz | F32RoundingArithOp::FmaRm | F32RoundingArithOp::FmaRp
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F32UnaryOp {
+    Abs,
+    Neg,
+}
+
+impl F32UnaryOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32UnaryOp::Abs => "abs.f32",
+            F32UnaryOp::Neg => "neg.f32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F32FromIntCvtOp {
+    Rz,
+    Rm,
+    Rp,
+}
+
+impl F32FromIntCvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32FromIntCvtOp::Rz => "cvt.rz.f32.u32",
+            F32FromIntCvtOp::Rm => "cvt.rm.f32.u32",
+            F32FromIntCvtOp::Rp => "cvt.rp.f32.u32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F32ToIntCvtOp {
+    S32Rni,
+    S32Rmi,
+    S32Rpi,
+    U32Rzi,
+    U32Rni,
+    U32Rmi,
+    U32Rpi,
+}
+
+impl F32ToIntCvtOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32ToIntCvtOp::S32Rni => "cvt.rni.s32.f32",
+            F32ToIntCvtOp::S32Rmi => "cvt.rmi.s32.f32",
+            F32ToIntCvtOp::S32Rpi => "cvt.rpi.s32.f32",
+            F32ToIntCvtOp::U32Rzi => "cvt.rzi.u32.f32",
+            F32ToIntCvtOp::U32Rni => "cvt.rni.u32.f32",
+            F32ToIntCvtOp::U32Rmi => "cvt.rmi.u32.f32",
+            F32ToIntCvtOp::U32Rpi => "cvt.rpi.u32.f32",
+        }
     }
 }
 
@@ -2259,6 +2364,27 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+    },
+    /// Sanitized f32 arithmetic with explicit non-default rounding modes.
+    F32RoundingArith {
+        op: F32RoundingArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Sanitized single-precision unary arithmetic.
+    F32Unary {
+        op: F32UnaryOp,
+        dst: u32,
+        src: Operand,
+    },
+    /// Sanitized f32/int conversion chain.
+    F32Cvt {
+        from_int: F32FromIntCvtOp,
+        to_int: F32ToIntCvtOp,
+        dst: u32,
+        src: Operand,
     },
     /// Sanitized single-precision floating-point compare materialized as u32.
     F32Set {
@@ -4555,6 +4681,62 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_f32_rounding_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F32RoundingArithOp::AddRz,
+            F32RoundingArithOp::AddRm,
+            F32RoundingArithOp::AddRp,
+            F32RoundingArithOp::SubRz,
+            F32RoundingArithOp::SubRm,
+            F32RoundingArithOp::SubRp,
+            F32RoundingArithOp::MulRz,
+            F32RoundingArithOp::MulRm,
+            F32RoundingArithOp::MulRp,
+            F32RoundingArithOp::FmaRz,
+            F32RoundingArithOp::FmaRm,
+            F32RoundingArithOp::FmaRp,
+        ];
+        Ok(Inst::F32RoundingArith {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            c: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f32_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [F32UnaryOp::Abs, F32UnaryOp::Neg];
+        Ok(Inst::F32Unary {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f32_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let from_ops = [
+            F32FromIntCvtOp::Rz,
+            F32FromIntCvtOp::Rm,
+            F32FromIntCvtOp::Rp,
+        ];
+        let to_ops = [
+            F32ToIntCvtOp::S32Rni,
+            F32ToIntCvtOp::S32Rmi,
+            F32ToIntCvtOp::S32Rpi,
+            F32ToIntCvtOp::U32Rzi,
+            F32ToIntCvtOp::U32Rni,
+            F32ToIntCvtOp::U32Rmi,
+            F32ToIntCvtOp::U32Rpi,
+        ];
+        Ok(Inst::F32Cvt {
+            from_int: *u.choose(&from_ops)?,
+            to_int: *u.choose(&to_ops)?,
+            dst: self.pick_dst(u)?,
+            src: self.pick_cvt_operand(u)?,
+        })
+    }
+
     fn pick_f32_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         Ok(Inst::F32Set {
             cmp: pick_f32_cmp(u)?,
@@ -4627,6 +4809,23 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f32_arith(u);
+            }
+            if self.cfg.emit_f32_arith
+                && self.cfg.emit_f32_rounding
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f32_rounding_arith(u);
+            }
+            if self.cfg.emit_f32_unary
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f32_unary(u);
+            }
+            if self.cfg.emit_f32_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f32_cvt(u);
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -5890,6 +6089,9 @@ impl<'a> Generator<'a> {
             | Inst::SharedMem { dst, .. }
             | Inst::PredicatedSharedMem { dst, .. }
             | Inst::F32Arith { dst, .. }
+            | Inst::F32RoundingArith { dst, .. }
+            | Inst::F32Unary { dst, .. }
+            | Inst::F32Cvt { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
@@ -6707,6 +6909,35 @@ impl<'a> Generator<'a> {
                     writeln!(s, "    {:<13} %f3, %f0, %f1;", op.mnemonic()).unwrap();
                 }
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+            }
+            Inst::F32RoundingArith { op, dst, a, b, c } => {
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                if op.uses_c() {
+                    self.emit_sanitized_f32_operand(s, 2, c);
+                    writeln!(s, "    {:<13} %f3, %f0, %f1, %f2;", op.mnemonic()).unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %f3, %f0, %f1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+            }
+            Inst::F32Unary { op, dst, src } => {
+                self.emit_sanitized_f32_operand(s, 0, src);
+                writeln!(s, "    {:<13} %f1, %f0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
+            }
+            Inst::F32Cvt {
+                from_int,
+                to_int,
+                dst,
+                src,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                src.emit(s);
+                writeln!(s, ", {F32_INPUT_MASK};").unwrap();
+                writeln!(s, "    {:<13} %f0, %r{scratch};", from_int.mnemonic()).unwrap();
+                writeln!(s, "    {:<13} %r{dst}, %f0;", to_int.mnemonic()).unwrap();
             }
             Inst::F32Set { cmp, dst, a, b } => {
                 self.emit_sanitized_f32_operand(s, 0, a);
@@ -10216,6 +10447,33 @@ mod tests {
         "min.f32",
         "max.f32",
     ];
+    const F32_ROUNDING_MNEMONICS: &[&str] = &[
+        "add.rz.f32",
+        "add.rm.f32",
+        "add.rp.f32",
+        "sub.rz.f32",
+        "sub.rm.f32",
+        "sub.rp.f32",
+        "mul.rz.f32",
+        "mul.rm.f32",
+        "mul.rp.f32",
+        "fma.rz.f32",
+        "fma.rm.f32",
+        "fma.rp.f32",
+    ];
+    const F32_UNARY_MNEMONICS: &[&str] = &["abs.f32", "neg.f32"];
+    const F32_CVT_MNEMONICS: &[&str] = &[
+        "cvt.rz.f32.u32",
+        "cvt.rm.f32.u32",
+        "cvt.rp.f32.u32",
+        "cvt.rni.s32.f32",
+        "cvt.rmi.s32.f32",
+        "cvt.rpi.s32.f32",
+        "cvt.rzi.u32.f32",
+        "cvt.rni.u32.f32",
+        "cvt.rmi.u32.f32",
+        "cvt.rpi.u32.f32",
+    ];
     const F32_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f32",
         "set.ne.u32.f32",
@@ -10557,6 +10815,9 @@ mod tests {
             SHARED_MEM_STORE_MNEMONICS,
             VECTOR_MEMORY_MNEMONICS,
             F32_ARITH_MNEMONICS,
+            F32_ROUNDING_MNEMONICS,
+            F32_UNARY_MNEMONICS,
+            F32_CVT_MNEMONICS,
             F32_COMPARE_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
@@ -10617,6 +10878,9 @@ mod tests {
             SHARED_MEM_STORE_MNEMONICS,
             VECTOR_MEMORY_MNEMONICS,
             F32_ARITH_MNEMONICS,
+            F32_ROUNDING_MNEMONICS,
+            F32_UNARY_MNEMONICS,
+            F32_CVT_MNEMONICS,
             F32_SETP_MNEMONICS,
             F32_SELP_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
@@ -13648,7 +13912,82 @@ mod tests {
         for seed in 0..1024 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
-            for mnemonic in F32_ARITH_MNEMONICS {
+            for mnemonic in F32_ARITH_MNEMONICS
+                .iter()
+                .chain(F32_ROUNDING_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f32_rounding_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F32_ROUNDING_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_rounding_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_rounding: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_ROUNDING_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f32_unary_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F32_UNARY_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_unary_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_unary: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_UNARY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f32_cvt_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 8192, 4096, F32_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_cvt: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_CVT_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
