@@ -298,6 +298,9 @@ that feature.
 | `DIV_DISABLE_WIDE_MINMAX` | 64-bit scratch-register `min/max.{u64,s64}` instructions. |
 | `DIV_DISABLE_WIDE_MULHI` | 64-bit scratch-register `mul.hi.{u64,s64}` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_INT` | Predicated 64-bit scratch-register ALU generation. |
+| `DIV_DISABLE_WIDE_MAD64` | 64-bit operand `mad.{lo,hi}.{u64,s64}` instructions. |
+| `DIV_DISABLE_SIGNED_WIDE_MAD64` | 64-bit operand `mad.{lo,hi}.s64` instructions. |
+| `DIV_DISABLE_PREDICATED_WIDE_MAD64` | Predicated 64-bit operand `mad` instructions. |
 | `DIV_DISABLE_WIDE_SET` | 64-bit scratch-register `set.{cmp}.u32.{u64,s64}` materialization. |
 | `DIV_DISABLE_PREDICATED_WIDE_SET` | Predicated 64-bit scratch-register `set` materialization. |
 | `DIV_DISABLE_WIDE_SETP` | 64-bit scratch-register `setp`-fed guarded ALU instructions. |
@@ -314,6 +317,9 @@ that feature.
 | `DIV_DISABLE_REG_WIDE_DIVREM` | Register-divisor 64-bit scratch-register `div/rem.{u64,s64}` instructions with sanitized divisors. |
 | `DIV_DISABLE_PREDICATED_REG_WIDE_DIVREM` | Predicated register-divisor 64-bit scratch-register `div/rem` instructions. |
 | `DIV_DISABLE_PREDICATED_WIDE_DIVREM` | Predicated 64-bit scratch-register `div/rem` instructions. |
+| `DIV_DISABLE_WIDE_ADDC` | 64-bit scratch-register `add.cc.u64` / `addc.u64` pairs. |
+| `DIV_DISABLE_WIDE_SUBC` | 64-bit scratch-register `sub.cc.u64` / `subc.u64` pairs. |
+| `DIV_DISABLE_PREDICATED_WIDE_CARRY` | Predicated 64-bit scratch-register carry pairs. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_PREDICATED_CARRY` | Predicated `add.cc` / `addc` and `sub.cc` / `subc` pairs. |

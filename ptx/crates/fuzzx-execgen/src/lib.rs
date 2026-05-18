@@ -130,6 +130,9 @@ pub struct GenConfig {
     pub emit_wide_minmax: bool,
     pub emit_wide_mulhi: bool,
     pub emit_predicated_wide_int: bool,
+    pub emit_wide_mad64: bool,
+    pub emit_signed_wide_mad64: bool,
+    pub emit_predicated_wide_mad64: bool,
     pub emit_wide_set: bool,
     pub emit_predicated_wide_set: bool,
     pub emit_wide_setp: bool,
@@ -146,6 +149,9 @@ pub struct GenConfig {
     pub emit_reg_wide_divrem: bool,
     pub emit_predicated_reg_wide_divrem: bool,
     pub emit_predicated_wide_divrem: bool,
+    pub emit_wide_addc: bool,
+    pub emit_wide_subc: bool,
+    pub emit_predicated_wide_carry: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_predicated_carry: bool,
@@ -277,6 +283,9 @@ impl Default for GenConfig {
             emit_wide_minmax: true,
             emit_wide_mulhi: true,
             emit_predicated_wide_int: true,
+            emit_wide_mad64: true,
+            emit_signed_wide_mad64: true,
+            emit_predicated_wide_mad64: true,
             emit_wide_set: true,
             emit_predicated_wide_set: true,
             emit_wide_setp: true,
@@ -293,6 +302,9 @@ impl Default for GenConfig {
             emit_reg_wide_divrem: true,
             emit_predicated_reg_wide_divrem: true,
             emit_predicated_wide_divrem: true,
+            emit_wide_addc: true,
+            emit_wide_subc: true,
+            emit_predicated_wide_carry: true,
             emit_addc: true,
             emit_subc: true,
             emit_predicated_carry: true,
@@ -873,6 +885,32 @@ impl WideIntOp {
 }
 
 #[derive(Clone, Copy)]
+enum WideMad64Op {
+    LoU64,
+    HiU64,
+    LoS64,
+    HiS64,
+}
+
+impl WideMad64Op {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WideMad64Op::LoU64 => "mad.lo.u64",
+            WideMad64Op::HiU64 => "mad.hi.u64",
+            WideMad64Op::LoS64 => "mad.lo.s64",
+            WideMad64Op::HiS64 => "mad.hi.s64",
+        }
+    }
+
+    fn cvt_mnemonic(self) -> &'static str {
+        match self {
+            WideMad64Op::LoU64 | WideMad64Op::HiU64 => "cvt.u64.u32",
+            WideMad64Op::LoS64 | WideMad64Op::HiS64 => "cvt.s64.s32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 enum WideShiftOp {
     ShlB64,
     ShrU64,
@@ -964,6 +1002,22 @@ enum WideDivisor {
 enum AddCarryOp {
     Add,
     Sub,
+}
+
+impl AddCarryOp {
+    fn mnemonic_pair(self) -> (&'static str, &'static str) {
+        match self {
+            AddCarryOp::Add => ("add.cc.u32", "addc.u32"),
+            AddCarryOp::Sub => ("sub.cc.u32", "subc.u32"),
+        }
+    }
+
+    fn wide_mnemonic_pair(self) -> (&'static str, &'static str) {
+        match self {
+            AddCarryOp::Add => ("add.cc.u64", "addc.u64"),
+            AddCarryOp::Sub => ("sub.cc.u64", "subc.u64"),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1696,6 +1750,26 @@ enum Inst {
         cb: Operand,
         pred: u32,
     },
+    /// 64-bit operand `mad.{lo,hi}.{u64,s64}` through scratch b64 registers.
+    WideMad64 {
+        op: WideMad64Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Predicated 64-bit operand MAD.
+    PredicatedWideMad64 {
+        op: WideMad64Op,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// 64-bit `setp` through scratch b64 registers, feeding a guarded ALU op.
     WideSetpBin {
         cmp: CmpOp,
@@ -1816,6 +1890,30 @@ enum Inst {
         dst: u32,
         src: Operand,
         divisor: WideDivisor,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// 64-bit add/sub carry chain through scratch b64 registers.
+    WideCarry {
+        op: AddCarryOp,
+        dst_lo: u32,
+        dst_hi: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
+    },
+    /// Predicated 64-bit add/sub carry chain.
+    PredicatedWideCarry {
+        op: AddCarryOp,
+        dst_lo: u32,
+        dst_hi: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        d: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -2641,6 +2739,31 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_wide_mad64(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_wide_mad64(u, self.cfg.emit_signed_wide_mad64)?;
+        if self.cfg.emit_predicated_wide_mad64 && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedWideMad64 {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideMad64 {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+            })
+        }
+    }
+
     fn pick_wide_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let predicated = self.cfg.emit_predicated_wide_set
             && self.cfg.emit_predicated_set
@@ -2662,6 +2785,35 @@ impl<'a> Generator<'a> {
                 cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                 a: self.pick_operand(u)?,
                 b: self.pick_operand(u)?,
+            })
+        }
+    }
+
+    fn pick_wide_carry(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let op = pick_add_carry(u, self.cfg.emit_wide_addc, self.cfg.emit_wide_subc)?;
+        if self.cfg.emit_predicated_wide_carry && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedWideCarry {
+                op,
+                dst_lo: self.pick_dst(u)?,
+                dst_hi: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::WideCarry {
+                op,
+                dst_lo: self.pick_dst(u)?,
+                dst_hi: self.pick_dst(u)?,
+                a: self.pick_operand(u)?,
+                b: self.pick_operand(u)?,
+                c: self.pick_operand(u)?,
+                d: self.pick_operand(u)?,
             })
         }
     }
@@ -3410,7 +3562,7 @@ impl<'a> Generator<'a> {
                 self.pick_mad_or_add(u)
             }
         } else if pick < 253 {
-            let wide_pick: u8 = u.int_in_range(0..=11)?;
+            let wide_pick: u8 = u.int_in_range(0..=13)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
                 let op = pick_wide_int(u, self.cfg.emit_wide_minmax, self.cfg.emit_wide_mulhi)?;
                 if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
@@ -3482,6 +3634,8 @@ impl<'a> Generator<'a> {
                         keep_high,
                     })
                 }
+            } else if self.cfg.emit_wide_mad64 && wide_pick == 10 {
+                self.pick_wide_mad64(u)
             } else if self.cfg.emit_wide_shifts && wide_pick == 2 {
                 let op = pick_wide_shift(u)?;
                 if self.cfg.emit_wide_reg_shifts
@@ -3539,6 +3693,8 @@ impl<'a> Generator<'a> {
                 self.pick_wide_unary(u)
             } else if self.cfg.emit_wide_divrem && wide_pick == 7 {
                 self.pick_wide_divrem(u)
+            } else if (self.cfg.emit_wide_addc || self.cfg.emit_wide_subc) && wide_pick == 11 {
+                self.pick_wide_carry(u)
             } else {
                 let can_emit_reg_divrem =
                     self.cfg.emit_reg_divrem && self.cfg.emit_bitwise_binops && self.cfg.emit_or;
@@ -3750,7 +3906,9 @@ impl<'a> Generator<'a> {
                 self.remember_prmt_write(*dst);
             }
             Inst::AddCarry { dst_lo, dst_hi, .. }
-            | Inst::PredicatedAddCarry { dst_lo, dst_hi, .. } => {
+            | Inst::PredicatedAddCarry { dst_lo, dst_hi, .. }
+            | Inst::WideCarry { dst_lo, dst_hi, .. }
+            | Inst::PredicatedWideCarry { dst_lo, dst_hi, .. } => {
                 self.forget_tracked_write(*dst_lo);
                 self.forget_tracked_write(*dst_hi);
             }
@@ -3793,6 +3951,8 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedMadWide { dst, .. }
             | Inst::WideInt { dst, .. }
             | Inst::PredicatedWideInt { dst, .. }
+            | Inst::WideMad64 { dst, .. }
+            | Inst::PredicatedWideMad64 { dst, .. }
             | Inst::WideSetpBin { dst, .. }
             | Inst::WideSetpBoolBin { dst, .. }
             | Inst::WideSelp { dst, .. }
@@ -4840,6 +5000,56 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
+            Inst::WideMad64 { op, dst, a, b, c } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                write!(s, "    {:<13} %rd4, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd5, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {:<13} %rd6, %rd4, %rd5, %rd6;", op.mnemonic()).unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideMad64 {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd4, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd5, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd4, %rd5, %rd6;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::WideSetpBin {
                 cmp,
                 ca,
@@ -5175,6 +5385,77 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
             }
+            Inst::WideCarry {
+                op,
+                dst_lo,
+                dst_hi,
+                a,
+                b,
+                c,
+                d,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                let (first, second) = op.wide_mnemonic_pair();
+                write!(s, "    cvt.u64.u32  %rd4, ").unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd5, ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {first:<13} %rd4, %rd4, %rd5;").unwrap();
+                writeln!(s, "    {second:<13} %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst_lo}, %r{scratch_hi}}}, %rd4;").unwrap();
+                writeln!(s, "    mov.b64       {{%r{dst_hi}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideCarry {
+                op,
+                dst_lo,
+                dst_hi,
+                a,
+                b,
+                c,
+                d,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                let (first, second) = op.wide_mnemonic_pair();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    cvt.u64.u32  %rd4, ").unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd5, ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd6, ").unwrap();
+                c.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    cvt.u64.u32  %rd7, ").unwrap();
+                d.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(s, "    {} {first:<8} %rd4, %rd4, %rd5;", pred_guard(pred)).unwrap();
+                writeln!(s, "    {} {second:<8} %rd6, %rd6, %rd7;", pred_guard(pred)).unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst_lo}, %r{scratch_hi}}}, %rd4;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst_hi}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::AddCarry {
                 op,
                 dst_lo,
@@ -5184,10 +5465,7 @@ impl<'a> Generator<'a> {
                 c,
                 d,
             } => {
-                let (first, second) = match op {
-                    AddCarryOp::Add => ("add.cc.u32", "addc.u32"),
-                    AddCarryOp::Sub => ("sub.cc.u32", "subc.u32"),
-                };
+                let (first, second) = op.mnemonic_pair();
                 write!(s, "    {first:<13} %r{dst_lo}, ").unwrap();
                 a.emit(s);
                 write!(s, ", ").unwrap();
@@ -5212,10 +5490,7 @@ impl<'a> Generator<'a> {
                 cb,
                 pred,
             } => {
-                let (first, second) = match op {
-                    AddCarryOp::Add => ("add.cc.u32", "addc.u32"),
-                    AddCarryOp::Sub => ("sub.cc.u32", "subc.u32"),
-                };
+                let (first, second) = op.mnemonic_pair();
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 write!(s, "    {} {first:<8} %r{dst_lo}, ", pred_guard(pred)).unwrap();
                 a.emit(s);
@@ -6240,6 +6515,22 @@ fn pick_wide_int(
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_wide_mad64(u: &mut Unstructured, emit_signed_wide_mad64: bool) -> Result<WideMad64Op> {
+    let unsigned_ops = [WideMad64Op::LoU64, WideMad64Op::HiU64];
+    let all_ops = [
+        WideMad64Op::LoU64,
+        WideMad64Op::HiU64,
+        WideMad64Op::LoS64,
+        WideMad64Op::HiS64,
+    ];
+    let ops: &[WideMad64Op] = if emit_signed_wide_mad64 {
+        &all_ops
+    } else {
+        &unsigned_ops
+    };
+    Ok(*u.choose(ops)?)
+}
+
 fn pick_wide_shift(u: &mut Unstructured) -> Result<WideShiftOp> {
     let ops = [
         WideShiftOp::ShlB64,
@@ -6651,6 +6942,8 @@ mod tests {
     ];
     const WIDE_MINMAX_MNEMONICS: &[&str] = &["min.u64", "max.u64", "min.s64", "max.s64"];
     const WIDE_MULHI_MNEMONICS: &[&str] = &["mul.hi.u64", "mul.hi.s64"];
+    const WIDE_MAD64_MNEMONICS: &[&str] = &["mad.lo.u64", "mad.hi.u64", "mad.lo.s64", "mad.hi.s64"];
+    const SIGNED_WIDE_MAD64_MNEMONICS: &[&str] = &["mad.lo.s64", "mad.hi.s64"];
     const WIDE_SET_MNEMONICS: &[&str] = &[
         "set.eq.u32.u64",
         "set.ne.u32.u64",
@@ -6714,6 +7007,9 @@ mod tests {
     const WIDE_DIVREM_MNEMONICS: &[&str] = &["div.u64", "rem.u64", "div.s64", "rem.s64"];
     const SIGNED_WIDE_DIVREM_MNEMONICS: &[&str] = &["div.s64", "rem.s64"];
     const CARRY_MNEMONICS: &[&str] = &["add.cc.u32", "addc.u32", "sub.cc.u32", "subc.u32"];
+    const WIDE_ADDC_MNEMONICS: &[&str] = &["add.cc.u64", "addc.u64"];
+    const WIDE_SUBC_MNEMONICS: &[&str] = &["sub.cc.u64", "subc.u64"];
+    const WIDE_CARRY_MNEMONICS: &[&str] = &["add.cc.u64", "addc.u64", "sub.cc.u64", "subc.u64"];
     const UNSIGNED_SETP_MNEMONICS: &[&str] = &[
         "setp.eq.u32",
         "setp.ne.u32",
@@ -6821,6 +7117,7 @@ mod tests {
             MUL_WIDE_MNEMONICS,
             MAD_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_MAD64_MNEMONICS,
             WIDE_SET_MNEMONICS,
             WIDE_SETP_MNEMONICS,
             WIDE_SETP_BOOL_MNEMONICS,
@@ -6829,6 +7126,7 @@ mod tests {
             WIDE_SHIFT_MNEMONICS,
             WIDE_DIVREM_MNEMONICS,
             CARRY_MNEMONICS,
+            WIDE_CARRY_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SIGNED_SETP_MNEMONICS,
             SET_MNEMONICS,
@@ -6863,7 +7161,9 @@ mod tests {
             MUL_WIDE_MNEMONICS,
             MAD_WIDE_MNEMONICS,
             WIDE_INT_MNEMONICS,
+            WIDE_MAD64_MNEMONICS,
             WIDE_SHIFT_MNEMONICS,
+            WIDE_CARRY_MNEMONICS,
             WIDE_DIVREM_MNEMONICS,
             UNSIGNED_SETP_MNEMONICS,
             SAD_MNEMONICS,
@@ -7153,6 +7453,12 @@ mod tests {
             .any(|op| WIDE_INT_MNEMONICS.contains(&op))
     }
 
+    fn has_predicated_wide_mad64(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_MAD64_MNEMONICS.contains(&op))
+    }
+
     fn has_predicated_wide_set(ptx: &str) -> bool {
         ptx.lines()
             .filter_map(predicated_mnemonic)
@@ -7239,6 +7545,12 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| CARRY_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_carry(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_CARRY_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_sad(ptx: &str) -> bool {
@@ -9652,6 +9964,114 @@ mod tests {
     }
 
     #[test]
+    fn wide_mad64_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            emit_wide_addc: false,
+            emit_wide_subc: false,
+            emit_predicated_wide_mad64: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_MAD64_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_mad64_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_mad64: false,
+            emit_predicated_wide_mad64: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_MAD64_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_predicated_wide_mad64(&ptx),
+                "seed {seed:x} emitted predicated wide mad64"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_wide_mad64_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_signed_wide_mad64: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SIGNED_WIDE_MAD64_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_mad64_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            emit_wide_addc: false,
+            emit_wide_subc: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_mad64(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated wide mad64");
+    }
+
+    #[test]
+    fn predicated_wide_mad64_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_mad64: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_mad64(&ptx),
+                "seed {seed:x} emitted predicated wide mad64"
+            );
+        }
+    }
+
+    #[test]
     fn wide_high_result_generation_is_reachable() {
         let cfg = GenConfig {
             emit_wide_int: false,
@@ -10543,6 +10963,107 @@ mod tests {
             assert!(
                 !has_predicated_wide_reg_divrem(&ptx),
                 "seed {seed:x} emitted predicated register-divisor wide div/rem"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_carry_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_mad64: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            emit_predicated_wide_carry: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 32768, 8192, WIDE_CARRY_MNEMONICS);
+    }
+
+    #[test]
+    fn wide_addc_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_addc: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_ADDC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn wide_subc_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_subc: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WIDE_SUBC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_wide_carry_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_mad_wide: false,
+            emit_wide_int: false,
+            emit_wide_mad64: false,
+            emit_wide_setp: false,
+            emit_wide_setp_bool: false,
+            emit_wide_selp: false,
+            emit_wide_unary: false,
+            emit_wide_shifts: false,
+            emit_wide_divrem: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_wide_carry(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated wide carry");
+    }
+
+    #[test]
+    fn predicated_wide_carry_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_wide_carry: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_carry(&ptx),
+                "seed {seed:x} emitted predicated wide carry"
             );
         }
     }
