@@ -214,6 +214,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT=1` | unset | Re-enable byte-masked `x*x + (x*x & C)` shapes for [m037](known-miscompiles/m037-dot4-square-lowbit/NOTES.md). |
 | `FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR=1` | unset | Re-enable masked integer-to-FP round-trips added back to one masked operand after nested xor loops for [m038](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md). |
 | `FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE=1` | unset | Re-enable `sext i8 to i32` values feeding high-byte extraction for [m039](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md). |
+| `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -292,6 +293,7 @@ Tested toolchains as of 2026-05-18:
 | [m037-dot4-square-lowbit](known-miscompiles/m037-dot4-square-lowbit/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a byte-masked `x*x + (x*x & 1)` expression to `v_perm_b32` / `v_dot4_u32_u8` with an extra constant accumulator. |
 | [m038-loop-fp-mask-xor](known-miscompiles/m038-loop-fp-mask-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O2` unrolls nested xor loops and folds a masked integer-to-FP round-trip into a byte-dot sequence that adds `1023` for input zero. |
 | [m039-sext-i8-highbyte-pack](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` packs bytes after an `i8` sign-extension but clears the byte lanes contributed by the sign bits. |
+| [m040-sdivrem24-boundary](known-miscompiles/m040-sdivrem24-boundary/NOTES.md) | ❌ | ❌ | ❌ | `-O2` applies the signed 24-bit reciprocal division lowering when the positive numerator has bit 23 set, returning a quotient one too large. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

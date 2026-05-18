@@ -565,6 +565,22 @@ bool isKnownUnsignedI32AtMost(const Value *V, uint64_t Limit) {
   return false;
 }
 
+bool isM040SmallOddPositiveDenominator(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+
+  for (unsigned Idx = 0; Idx != 2; ++Idx) {
+    const auto *C = dyn_cast<ConstantInt>(BO->getOperand(Idx));
+    if (!C || C->isZero() || C->getValue().ugt(255))
+      continue;
+    if (isKnownUnsignedI32AtMost(BO->getOperand(1 - Idx), 255))
+      return true;
+  }
+  return false;
+}
+
 unsigned integerScalarWidth(Type *Ty) {
   if (Ty->isIntegerTy())
     return Ty->getIntegerBitWidth();
@@ -1065,6 +1081,17 @@ bool triggersM027XorAndOr(const Instruction &I) {
     return false;
   return isM027AndOfXorWithMaskedBase(BO->getOperand(0), BO->getOperand(1)) ||
          isM027AndOfXorWithMaskedBase(BO->getOperand(1), BO->getOperand(0));
+}
+
+bool triggersM040SignedDivRem24(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || !BO->getType()->isIntegerTy(32))
+    return false;
+  if (BO->getOpcode() != Instruction::SDiv &&
+      BO->getOpcode() != Instruction::SRem)
+    return false;
+  return isM040SmallOddPositiveDenominator(BO->getOperand(1)) &&
+         !isKnownUnsignedI32AtMost(BO->getOperand(0), 0x7fffff);
 }
 
 bool isUnsignedMaxWithOperand(const Value *MaybeMax, const Value *Operand) {
@@ -1774,6 +1801,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM037 = envFlag("FUZZX_ALLOW_M037_DOT4_SQUARE_LOWBIT", false);
   bool AllowM038 = envFlag("FUZZX_ALLOW_M038_LOOP_FP_MASK_XOR", false);
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
+  bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1815,6 +1843,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM037 && triggersM037Dot4SquareLowbit(I)) ||
               (!AllowM038 && triggersM038LoopFPMaskXor(I)) ||
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
+              (!AllowM040 && triggersM040SignedDivRem24(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
@@ -3984,12 +4013,16 @@ Value *emitSafeSignedDivRemInstruction(IRBuilder<NoFolder> &B, Value *A,
                                        Value *Bv, bool IsRem,
                                        StringRef NamePrefix) {
   LLVMContext &Ctx = A->getContext();
+  Value *Num = A;
+  if (!envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false))
+    Num = B.CreateAnd(A, ci32(Ctx, 0x7fffff),
+                      Twine(NamePrefix) + ".num.mask");
   Value *DenMask =
       B.CreateAnd(Bv, ci32(Ctx, 255), Twine(NamePrefix) + ".den.mask");
   Value *Den = B.CreateOr(DenMask, ci32(Ctx, 1), Twine(NamePrefix) + ".den");
   if (IsRem)
-    return B.CreateSRem(A, Den, Twine(NamePrefix) + ".op");
-  return B.CreateSDiv(A, Den, Twine(NamePrefix) + ".op");
+    return B.CreateSRem(Num, Den, Twine(NamePrefix) + ".op");
+  return B.CreateSDiv(Num, Den, Twine(NamePrefix) + ".op");
 }
 
 Value *emitSafeInputLoadInstruction(IRBuilder<NoFolder> &B, Module &M,
