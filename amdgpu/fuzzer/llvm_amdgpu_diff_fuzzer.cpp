@@ -642,6 +642,18 @@ bool isValidVectorLaneIndex(Type *VecTy, const Value *Index) {
 }
 
 bool isValidVectorInstruction(const Instruction &I) {
+  if (const auto *Shuffle = dyn_cast<ShuffleVectorInst>(&I)) {
+    auto *ResultTy = dyn_cast<FixedVectorType>(Shuffle->getType());
+    auto *OpTy = dyn_cast<FixedVectorType>(Shuffle->getOperand(0)->getType());
+    if (!ResultTy || !OpTy || Shuffle->getOperand(1)->getType() != OpTy ||
+        !isAllowedVectorValueType(ResultTy) || !isAllowedVectorValueType(OpTy))
+      return false;
+    unsigned MaxLane = 2 * OpTy->getNumElements();
+    for (int Lane : Shuffle->getShuffleMask())
+      if (Lane < 0 || static_cast<unsigned>(Lane) >= MaxLane)
+        return false;
+    return true;
+  }
   if (const auto *Insert = dyn_cast<InsertElementInst>(&I)) {
     auto *VT = dyn_cast<FixedVectorType>(Insert->getType());
     return VT && isAllowedVectorValueType(Insert->getType()) &&
@@ -743,7 +755,8 @@ bool isValidFPConversionInstruction(const Instruction &I) {
 }
 
 bool isAllowedIRInstruction(const Instruction &I) {
-  if (isa<InsertElementInst, ExtractElementInst, ExtractValueInst>(&I))
+  if (isa<InsertElementInst, ExtractElementInst, ShuffleVectorInst,
+          ExtractValueInst>(&I))
     return true;
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
@@ -2003,6 +2016,14 @@ Value *emitVectorBuild(IRBuilder<NoFolder> &B, Type *VecTy,
   return Result;
 }
 
+SmallVector<int, 8> randomShuffleMask(unsigned Lanes, std::minstd_rand &Gen) {
+  SmallVector<int, 8> Mask;
+  Mask.reserve(Lanes);
+  for (unsigned I = 0; I != Lanes; ++I)
+    Mask.push_back(Gen() % (2 * Lanes));
+  return Mask;
+}
+
 Value *emitRandomVectorIntrinsic(IRBuilder<NoFolder> &B, Module &M, Type *VecTy,
                                  Value *VA, Value *VB,
                                  std::minstd_rand &Gen,
@@ -2092,7 +2113,7 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Value *VA = emitVectorBuild(B, VecTy, AElements);
   Value *VB = emitVectorBuild(B, VecTy, BElements);
   Value *Result = nullptr;
-  switch (Gen() % 18) {
+  switch (Gen() % 21) {
   case 0:
     Result = B.CreateAdd(VA, VB, "fuzz.vec.add");
     break;
@@ -2131,6 +2152,11 @@ Value *emitRandomVectorInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 14:
   case 15:
     Result = emitRandomVectorIntrinsic(B, M, VecTy, VA, VB, Gen, "fuzz.vec");
+    break;
+  case 16:
+  case 17:
+    Result = B.CreateShuffleVector(VA, VB, randomShuffleMask(Lanes, Gen),
+                                   "fuzz.vec.shuffle");
     break;
   default: {
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
@@ -2184,7 +2210,7 @@ Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
   Value *VA = emitVectorBuild(B, VecTy, AElements);
   Value *VB = emitVectorBuild(B, VecTy, BElements);
   Value *Result = nullptr;
-  switch (Gen() % 17) {
+  switch (Gen() % 20) {
   case 0:
     Result = B.CreateAdd(VA, VB, "fuzz.vec.narrow.add");
     break;
@@ -2223,6 +2249,11 @@ Value *emitRandomNarrowVectorInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 14:
     Result = emitRandomVectorIntrinsic(B, M, VecTy, VA, VB, Gen,
                                        "fuzz.vec.narrow");
+    break;
+  case 15:
+  case 16:
+    Result = B.CreateShuffleVector(VA, VB, randomShuffleMask(Lanes, Gen),
+                                   "fuzz.vec.narrow.shuffle");
     break;
   default: {
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), VA, VB,
