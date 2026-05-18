@@ -15,10 +15,11 @@
 //!   * Loops use a per-edge countdown register, decremented on each back-edge
 //!     firing. Counters initialize once in entry and only decrease, so
 //!     total back-edge firings ≤ sum of initial counter values.
-//!   * Each thread writes only to its own disjoint output slice; no shared
-//!     memory, no atomics, no warp intrinsics, no `bar.sync`.
-//!   * Integer ops only. Variable shift counts are masked or use `.wrap`
-//!     semantics. Divisors are nonzero. No FP.
+//!   * Each thread writes only to its own disjoint output slice and private
+//!     local memory; no shared memory, no atomics, no warp intrinsics, no
+//!     `bar.sync`.
+//!   * Variable shift counts are masked or use `.wrap` semantics. Divisors are
+//!     nonzero. Floating-point inputs are sanitized to a small finite range.
 
 use std::fmt::Write;
 
@@ -38,6 +39,9 @@ pub const fn output_len() -> usize {
 pub const fn input_len() -> usize {
     (N_THREADS as usize) * 4
 }
+
+const LOCAL_MEM_BYTES: u32 = 64;
+const F32_INPUT_MASK: u32 = 1023;
 
 #[derive(Debug, Clone)]
 pub struct GenConfig {
@@ -97,6 +101,10 @@ pub struct GenConfig {
     pub emit_special_regs: bool,
     pub emit_predicated_special_regs: bool,
     pub emit_global_loads: bool,
+    pub emit_local_memory: bool,
+    pub emit_f32_arith: bool,
+    pub emit_f32_compare: bool,
+    pub emit_f32_selp: bool,
     pub emit_signed_cmp: bool,
     pub emit_signed_divrem: bool,
     pub emit_reg_divrem: bool,
@@ -287,6 +295,10 @@ impl Default for GenConfig {
             emit_special_regs: true,
             emit_predicated_special_regs: true,
             emit_global_loads: true,
+            emit_local_memory: true,
+            emit_f32_arith: true,
+            emit_f32_compare: true,
+            emit_f32_selp: true,
             emit_signed_cmp: true,
             emit_signed_divrem: true,
             emit_reg_divrem: true,
@@ -688,6 +700,70 @@ impl GlobalLoadOp {
             GlobalLoadOp::U16 | GlobalLoadOp::S16 => 2,
             GlobalLoadOp::U32 => 4,
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LocalMemOp {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+}
+
+impl LocalMemOp {
+    fn load_mnemonic(self) -> &'static str {
+        match self {
+            LocalMemOp::U8 => "ld.local.u8",
+            LocalMemOp::S8 => "ld.local.s8",
+            LocalMemOp::U16 => "ld.local.u16",
+            LocalMemOp::S16 => "ld.local.s16",
+            LocalMemOp::U32 => "ld.local.u32",
+        }
+    }
+
+    fn store_mnemonic(self) -> &'static str {
+        match self {
+            LocalMemOp::U8 | LocalMemOp::S8 => "st.local.u8",
+            LocalMemOp::U16 | LocalMemOp::S16 => "st.local.u16",
+            LocalMemOp::U32 => "st.local.u32",
+        }
+    }
+
+    fn width(self) -> u32 {
+        match self {
+            LocalMemOp::U8 | LocalMemOp::S8 => 1,
+            LocalMemOp::U16 | LocalMemOp::S16 => 2,
+            LocalMemOp::U32 => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum F32ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Fma,
+    Min,
+    Max,
+}
+
+impl F32ArithOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            F32ArithOp::Add => "add.rn.f32",
+            F32ArithOp::Sub => "sub.rn.f32",
+            F32ArithOp::Mul => "mul.rn.f32",
+            F32ArithOp::Fma => "fma.rn.f32",
+            F32ArithOp::Min => "min.f32",
+            F32ArithOp::Max => "max.f32",
+        }
+    }
+
+    fn uses_c(self) -> bool {
+        matches!(self, F32ArithOp::Fma)
     }
 }
 
@@ -1567,6 +1643,30 @@ impl CmpOp {
         }
     }
 
+    fn f32_set_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "set.eq.u32.f32",
+            CmpOp::Ne => "set.ne.u32.f32",
+            CmpOp::Lt => "set.lt.u32.f32",
+            CmpOp::Le => "set.le.u32.f32",
+            CmpOp::Gt => "set.gt.u32.f32",
+            CmpOp::Ge => "set.ge.u32.f32",
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => unreachable!(),
+        }
+    }
+
+    fn f32_setp_mnemonic(self) -> &'static str {
+        match self {
+            CmpOp::Eq => "setp.eq.f32",
+            CmpOp::Ne => "setp.ne.f32",
+            CmpOp::Lt => "setp.lt.f32",
+            CmpOp::Le => "setp.le.f32",
+            CmpOp::Gt => "setp.gt.f32",
+            CmpOp::Ge => "setp.ge.f32",
+            CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => unreachable!(),
+        }
+    }
+
     fn scalar16_input_cvt_mnemonic(self) -> &'static str {
         match self {
             CmpOp::LtS | CmpOp::LeS | CmpOp::GtS | CmpOp::GeS => "cvt.s16.s32",
@@ -1854,6 +1954,36 @@ enum Inst {
         op: GlobalLoadOp,
         dst: u32,
         offset: u32,
+    },
+    /// Store to and reload from private per-thread local memory.
+    LocalMem {
+        op: LocalMemOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+    },
+    /// Sanitized single-precision floating-point arithmetic.
+    F32Arith {
+        op: F32ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
+    /// Sanitized single-precision floating-point compare materialized as u32.
+    F32Set {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Sanitized single-precision compare feeding `selp.f32`.
+    F32Selp {
+        cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
     },
     Sel {
         dst: u32,
@@ -3150,6 +3280,15 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_safe_reg(&mut self, u: &mut Unstructured) -> Result<u32> {
+        let reg = self.pick_dst(u)?;
+        Ok(if self.set_result_regs.contains(&reg) {
+            0
+        } else {
+            reg
+        })
+    }
+
     fn can_emit_unary(&self) -> bool {
         self.cfg.emit_not
             || self.cfg.emit_clz
@@ -3856,6 +3995,63 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_local_mem(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            LocalMemOp::U8,
+            LocalMemOp::S8,
+            LocalMemOp::U16,
+            LocalMemOp::S16,
+            LocalMemOp::U32,
+        ];
+        let op = *u.choose(&ops)?;
+        let width = op.width();
+        let max_offset = LOCAL_MEM_BYTES - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        Ok(Inst::LocalMem {
+            op,
+            dst: self.pick_dst(u)?,
+            src: self.pick_safe_reg(u)?,
+            offset,
+        })
+    }
+
+    fn pick_f32_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F32ArithOp::Add,
+            F32ArithOp::Sub,
+            F32ArithOp::Mul,
+            F32ArithOp::Fma,
+            F32ArithOp::Min,
+            F32ArithOp::Max,
+        ];
+        Ok(Inst::F32Arith {
+            op: *u.choose(&ops)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            c: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f32_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F32Set {
+            cmp: pick_f32_cmp(u)?,
+            dst: self.pick_non_output_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+        })
+    }
+
+    fn pick_f32_selp(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        Ok(Inst::F32Selp {
+            cmp: pick_f32_cmp(u)?,
+            dst: self.pick_dst(u)?,
+            a: self.pick_cvt_operand(u)?,
+            b: self.pick_cvt_operand(u)?,
+            pred: self.alloc_pred(),
+        })
+    }
+
     fn gen_inst(&mut self, u: &mut Unstructured) -> Result<Inst> {
         // Distribution (out of 256). Lop3 gets disproportionate weight because
         // it's both novel coverage and the biggest constant-folding hotspot in
@@ -3880,6 +4076,15 @@ impl<'a> Generator<'a> {
         if pick < 90 {
             if self.cfg.emit_global_loads && u.int_in_range(0..=7)? == 0 {
                 return self.pick_global_load(u);
+            }
+            if self.cfg.emit_local_memory && u.int_in_range(0..=7)? == 0 {
+                return self.pick_local_mem(u);
+            }
+            if self.cfg.emit_f32_arith
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f32_arith(u);
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -3995,7 +4200,20 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_scalar_16bit
+            if self.cfg.emit_f32_compare
+                && self.cfg.emit_bitwise_binops
+                && (self.cfg.emit_f32_selp || self.cfg.emit_set)
+                && u.int_in_range(0..=3)? == 0
+            {
+                let use_selp = self.cfg.emit_f32_selp && u.arbitrary::<bool>()?;
+                if use_selp {
+                    self.pick_f32_selp(u)
+                } else if self.cfg.emit_set {
+                    self.pick_f32_set(u)
+                } else {
+                    self.pick_f32_selp(u)
+                }
+            } else if self.cfg.emit_scalar_16bit
                 && self.cfg.emit_scalar_16bit_compare
                 && (self.cfg.emit_set || self.cfg.emit_selp || self.cfg.emit_scalar_16bit_selp)
                 && u.int_in_range(0..=3)? == 0
@@ -5066,6 +5284,7 @@ impl<'a> Generator<'a> {
         match inst {
             Inst::Set { dst, .. }
             | Inst::Scalar16Set { dst, .. }
+            | Inst::F32Set { dst, .. }
             | Inst::PredicatedSet { dst, .. }
             | Inst::WideSet { dst, .. }
             | Inst::PredicatedWideSet { dst, .. } => {
@@ -5110,6 +5329,9 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
+            | Inst::LocalMem { dst, .. }
+            | Inst::F32Arith { dst, .. }
+            | Inst::F32Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
             | Inst::PredicatedBin { dst, .. }
@@ -5341,6 +5563,8 @@ impl<'a> Generator<'a> {
         writeln!(s, "    .reg .b16   %h<4>;").unwrap();
         writeln!(s, "    .reg .b32   %r<{total_regs}>;").unwrap();
         writeln!(s, "    .reg .b64   %rd<10>;").unwrap();
+        writeln!(s, "    .reg .f32   %f<4>;").unwrap();
+        writeln!(s, "    .local .align 4 .b8 fuzzx_local[{LOCAL_MEM_BYTES}];").unwrap();
         writeln!(s).unwrap();
 
         // Prologue: load params; compute tid into the reserved tid reg; load
@@ -5474,6 +5698,14 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn emit_sanitized_f32_operand(&self, s: &mut String, freg: u32, operand: Operand) {
+        let scratch = self.wide_scratch_hi_reg();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ", {F32_INPUT_MASK};").unwrap();
+        writeln!(s, "    cvt.rn.f32.u32 %f{freg}, %r{scratch};").unwrap();
+    }
+
     fn emit_inst(&self, s: &mut String, inst: &Inst) {
         match *inst {
             Inst::Bin { op, dst, a, b } => {
@@ -5591,6 +5823,55 @@ impl<'a> Generator<'a> {
             Inst::GlobalLoad { op, dst, offset } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 writeln!(s, "    {:<13} %r{dst}, [%rd6 + {offset}];", op.mnemonic()).unwrap();
+            }
+            Inst::LocalMem {
+                op,
+                dst,
+                src,
+                offset,
+            } => {
+                writeln!(s, "    mov.u64       %rd6, fuzzx_local;").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} [%rd6 + {offset}], %r{src};",
+                    op.store_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, [%rd6 + {offset}];",
+                    op.load_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::F32Arith { op, dst, a, b, c } => {
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                if op.uses_c() {
+                    self.emit_sanitized_f32_operand(s, 2, c);
+                    writeln!(s, "    {:<13} %f3, %f0, %f1, %f2;", op.mnemonic()).unwrap();
+                } else {
+                    writeln!(s, "    {:<13} %f3, %f0, %f1;", op.mnemonic()).unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+            }
+            Inst::F32Set { cmp, dst, a, b } => {
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                writeln!(s, "    {:<13} %r{dst}, %f0, %f1;", cmp.f32_set_mnemonic()).unwrap();
+            }
+            Inst::F32Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                writeln!(s, "    {:<13} %p{pred}, %f0, %f1;", cmp.f32_setp_mnemonic()).unwrap();
+                writeln!(s, "    selp.f32      %f2, %f0, %f1, %p{pred};").unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f2;").unwrap();
             }
             Inst::Sel {
                 dst,
@@ -8226,6 +8507,18 @@ fn pick_cmp(u: &mut Unstructured, emit_signed_cmp: bool) -> Result<CmpOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_f32_cmp(u: &mut Unstructured) -> Result<CmpOp> {
+    let ops = [
+        CmpOp::Eq,
+        CmpOp::Ne,
+        CmpOp::Lt,
+        CmpOp::Le,
+        CmpOp::Gt,
+        CmpOp::Ge,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_narrow_cvt(u: &mut Unstructured, emit_signed_narrow_cvt: bool) -> Result<NarrowCvtOp> {
     let unsigned_ops = [NarrowCvtOp::U32ToU8, NarrowCvtOp::U32ToU16];
     let all_ops = [
@@ -9022,6 +9315,39 @@ mod tests {
         "ld.global.s16",
         "ld.global.u32",
     ];
+    const LOCAL_MEM_LOAD_MNEMONICS: &[&str] = &[
+        "ld.local.u8",
+        "ld.local.s8",
+        "ld.local.u16",
+        "ld.local.s16",
+        "ld.local.u32",
+    ];
+    const LOCAL_MEM_STORE_MNEMONICS: &[&str] = &["st.local.u8", "st.local.u16", "st.local.u32"];
+    const F32_ARITH_MNEMONICS: &[&str] = &[
+        "add.rn.f32",
+        "sub.rn.f32",
+        "mul.rn.f32",
+        "fma.rn.f32",
+        "min.f32",
+        "max.f32",
+    ];
+    const F32_COMPARE_MNEMONICS: &[&str] = &[
+        "set.eq.u32.f32",
+        "set.ne.u32.f32",
+        "set.lt.u32.f32",
+        "set.le.u32.f32",
+        "set.gt.u32.f32",
+        "set.ge.u32.f32",
+    ];
+    const F32_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.f32",
+        "setp.ne.f32",
+        "setp.lt.f32",
+        "setp.le.f32",
+        "setp.gt.f32",
+        "setp.ge.f32",
+    ];
+    const F32_SELP_MNEMONICS: &[&str] = &["selp.f32"];
     const SPECIAL_REG_NAMES: &[&str] = &[
         "%tid.x",
         "%tid.y",
@@ -9338,6 +9664,12 @@ mod tests {
             SCALAR_16BIT_COMPARE_MNEMONICS,
             SCALAR_16BIT_SELP_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
+            LOCAL_MEM_LOAD_MNEMONICS,
+            LOCAL_MEM_STORE_MNEMONICS,
+            F32_ARITH_MNEMONICS,
+            F32_COMPARE_MNEMONICS,
+            F32_SETP_MNEMONICS,
+            F32_SELP_MNEMONICS,
             SHIFT_MNEMONICS,
             UNARY_MNEMONICS,
             CVT_MNEMONICS,
@@ -9387,6 +9719,11 @@ mod tests {
             PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_POST_KNOWN_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
+            LOCAL_MEM_LOAD_MNEMONICS,
+            LOCAL_MEM_STORE_MNEMONICS,
+            F32_ARITH_MNEMONICS,
+            F32_SETP_MNEMONICS,
+            F32_SELP_MNEMONICS,
             POST_KNOWN_UNARY_MNEMONICS,
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
@@ -9446,6 +9783,33 @@ mod tests {
     fn has_body_global_load(ptx: &str, mnemonic: &str) -> bool {
         ptx.lines()
             .filter_map(body_global_load)
+            .any(|(op, _)| op == mnemonic)
+    }
+
+    fn body_local_mem_access(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd6 + ") {
+            return None;
+        }
+        let mnemonic = line.split_whitespace().next()?;
+        if !LOCAL_MEM_LOAD_MNEMONICS.contains(&mnemonic)
+            && !LOCAL_MEM_STORE_MNEMONICS.contains(&mnemonic)
+        {
+            return None;
+        }
+        let offset = line
+            .split("[%rd6 + ")
+            .nth(1)?
+            .split(']')
+            .next()?
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_local_mem_access(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_local_mem_access)
             .any(|(op, _)| op == mnemonic)
     }
 
@@ -11794,6 +12158,183 @@ mod tests {
                 assert!(
                     offset + width <= input_len() as u32,
                     "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut loads = vec![false; LOCAL_MEM_LOAD_MNEMONICS.len()];
+        let mut stores = vec![false; LOCAL_MEM_STORE_MNEMONICS.len()];
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in LOCAL_MEM_LOAD_MNEMONICS.iter().enumerate() {
+                loads[i] |= has_body_local_mem_access(&ptx, mnemonic);
+            }
+            for (i, mnemonic) in LOCAL_MEM_STORE_MNEMONICS.iter().enumerate() {
+                stores[i] |= has_body_local_mem_access(&ptx, mnemonic);
+            }
+            if loads.iter().all(|seen| *seen) && stores.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing_loads: Vec<_> = LOCAL_MEM_LOAD_MNEMONICS
+            .iter()
+            .zip(loads)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        let missing_stores: Vec<_> = LOCAL_MEM_STORE_MNEMONICS
+            .iter()
+            .zip(stores)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing_loads.is_empty() && missing_stores.is_empty(),
+            "sample missed local loads {missing_loads:?} stores {missing_stores:?}"
+        );
+    }
+
+    #[test]
+    fn local_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_local_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in LOCAL_MEM_LOAD_MNEMONICS
+                .iter()
+                .chain(LOCAL_MEM_STORE_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_body_local_mem_access(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn local_memory_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_local_mem_access) {
+                let width = match mnemonic {
+                    "ld.local.u8" | "ld.local.s8" | "st.local.u8" => 1,
+                    "ld.local.u16" | "ld.local.s16" | "st.local.u16" => 2,
+                    "ld.local.u32" | "st.local.u32" => 4,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= LOCAL_MEM_BYTES,
+                    "seed {seed:x} emitted out-of-bounds {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f32_arith_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F32_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_arith_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_arith: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_ARITH_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f32_compare_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_selp: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_COMPARE_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_compare_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_compare: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in F32_COMPARE_MNEMONICS
+                .iter()
+                .chain(F32_SETP_MNEMONICS.iter())
+            {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !has_mnemonic(&ptx, "selp.f32"),
+                "seed {seed:x} emitted selp.f32"
+            );
+        }
+    }
+
+    #[test]
+    fn f32_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_set: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_SETP_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 4096, 2048, F32_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn f32_selp_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f32_selp: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "selp.f32"),
+                "seed {seed:x} emitted selp.f32"
+            );
+            for mnemonic in F32_SETP_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
                 );
             }
         }

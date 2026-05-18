@@ -266,6 +266,10 @@ that feature.
 | `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
 | `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
 | `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32}` loads from the input buffer. |
+| `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips. |
+| `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/fma/min/max.f32` arithmetic. |
+| `DIV_DISABLE_F32_COMPARE` | Sanitized `set.*.u32.f32` and `setp.*.f32` comparisons. |
+| `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32` feeding `selp.f32`. |
 | `DIV_DISABLE_SIGNED_CMP` | Signed predicate comparisons. |
 | `DIV_DISABLE_SIGNED_DIVREM` | `div.s32` and `rem.s32`. |
 | `DIV_DISABLE_REG_DIVREM` | Register-divisor `div.u32` and `rem.u32` with sanitized divisors. |
