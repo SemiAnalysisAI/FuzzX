@@ -53,10 +53,11 @@ reduced back to `i32`, explicit `i1` boolean subexpressions reduced back to
 integer overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
-explicit `bitop3`, and integer dot-product operations, plus bounded AMDGPU
-FP/packing intrinsics such as `fmed3`, `frexp`, `fract`, `class`, and packed
-FP/int conversions. Known `sudot*` and `fma.legacy` instruction-selection
-crashes are gated off by default. It also emits a finite
+explicit `bitop3`, `readfirstlane`, wave reductions, and integer dot-product
+operations, plus bounded AMDGPU FP/packing intrinsics such as
+`fmed3`, `frexp`, `fract`, `class`, and packed FP/int conversions. Known
+`sudot*` and `fma.legacy` instruction-selection crashes are gated off by
+default. It also emits a finite
 scalar FP subset by masking
 inputs to small nonnegative integers, converting with `uitofp`, using exact
 `fadd` / `fmul` / `fcmp` / `select` shapes, and converting back with in-range

@@ -451,6 +451,15 @@ bool isAllowedIRIntrinsic(Intrinsic::ID ID) {
   case Intrinsic::amdgcn_mbcnt_hi:
   case Intrinsic::amdgcn_perm:
   case Intrinsic::amdgcn_bitop3:
+  case Intrinsic::amdgcn_readfirstlane:
+  case Intrinsic::amdgcn_wave_reduce_umin:
+  case Intrinsic::amdgcn_wave_reduce_min:
+  case Intrinsic::amdgcn_wave_reduce_umax:
+  case Intrinsic::amdgcn_wave_reduce_max:
+  case Intrinsic::amdgcn_wave_reduce_add:
+  case Intrinsic::amdgcn_wave_reduce_and:
+  case Intrinsic::amdgcn_wave_reduce_or:
+  case Intrinsic::amdgcn_wave_reduce_xor:
   case Intrinsic::amdgcn_sdot2:
   case Intrinsic::amdgcn_udot2:
   case Intrinsic::amdgcn_sdot4:
@@ -2774,6 +2783,56 @@ Value *emitRandomAMDGPUFPIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Intrinsic::ID randomWaveReduceIntrinsic(std::minstd_rand &Gen) {
+  static constexpr std::array<Intrinsic::ID, 8> IDs = {
+      Intrinsic::amdgcn_wave_reduce_umin, Intrinsic::amdgcn_wave_reduce_min,
+      Intrinsic::amdgcn_wave_reduce_umax, Intrinsic::amdgcn_wave_reduce_max,
+      Intrinsic::amdgcn_wave_reduce_add,  Intrinsic::amdgcn_wave_reduce_and,
+      Intrinsic::amdgcn_wave_reduce_or,   Intrinsic::amdgcn_wave_reduce_xor};
+  return IDs[Gen() % IDs.size()];
+}
+
+Value *emitRandomAMDGPUWaveInstruction(IRBuilder<NoFolder> &B, Module &M,
+                                       Value *A, Value *Bv,
+                                       std::minstd_rand &Gen,
+                                       StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  switch (Gen() % 2) {
+  case 0: {
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_readfirstlane,
+                                          {I32}),
+        {A}, Twine(NamePrefix) + ".readfirstlane");
+    return mixI32IntrinsicResult(B, R, A, Bv, Gen,
+                                 Twine(NamePrefix) + ".readfirstlane");
+  }
+  default: {
+    Value *Input = A;
+    switch (Gen() % 4) {
+    case 0:
+      Input = B.CreateXor(A, Bv, Twine(NamePrefix) + ".wave.input.xor");
+      break;
+    case 1:
+      Input = B.CreateAdd(A, Bv, Twine(NamePrefix) + ".wave.input.add");
+      break;
+    case 2:
+      Input = B.CreateAnd(A, Bv, Twine(NamePrefix) + ".wave.input.and");
+      break;
+    default:
+      break;
+    }
+    Value *Strategy = ci32(Ctx, Gen() % 3);
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, randomWaveReduceIntrinsic(Gen),
+                                          {I32}),
+        {Input, Strategy}, Twine(NamePrefix) + ".wave.reduce");
+    return mixI32IntrinsicResult(B, R, A, Bv, Gen,
+                                 Twine(NamePrefix) + ".wave.reduce");
+  }
+  }
+}
+
 Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
                                             Value *A, Value *Bv,
                                             std::minstd_rand &Gen,
@@ -2786,7 +2845,7 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
   Value *C = interestingI32(Ctx, Gen);
   Value *Clamp = ConstantInt::getFalse(Ctx);
   bool AllowSUDot = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
-  switch (Gen() % (AllowSUDot ? 40 : 38)) {
+  switch (Gen() % (AllowSUDot ? 52 : 50)) {
   case 0: {
     unsigned Offset = Gen() % 32;
     unsigned Width = Gen() % (33 - Offset);
@@ -2961,6 +3020,19 @@ Value *emitRandomAMDGPUIntrinsicInstruction(IRBuilder<NoFolder> &B, Module &M,
     return emitRandomAMDGPUFPIntrinsicInstruction(B, M, A, Bv, Gen,
                                                   NamePrefix);
   case 38:
+  case 39:
+  case 40:
+  case 41:
+  case 42:
+  case 43:
+  case 44:
+  case 45:
+  case 46:
+  case 47:
+  case 48:
+  case 49:
+    return emitRandomAMDGPUWaveInstruction(B, M, A, Bv, Gen, NamePrefix);
+  case 50:
     return B.CreateCall(
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::amdgcn_sudot4),
         {ConstantInt::get(I1, Gen() & 1), A,
