@@ -92,7 +92,9 @@ pub struct GenConfig {
     pub emit_mul24: bool,
     pub emit_predicated_24bit: bool,
     pub emit_mul_wide: bool,
+    pub emit_predicated_mul_wide: bool,
     pub emit_wide_int: bool,
+    pub emit_predicated_wide_int: bool,
     pub emit_addc: bool,
     pub emit_subc: bool,
     pub emit_i32_boundary_immediates: bool,
@@ -177,7 +179,9 @@ impl Default for GenConfig {
             emit_mul24: true,
             emit_predicated_24bit: true,
             emit_mul_wide: true,
+            emit_predicated_mul_wide: true,
             emit_wide_int: true,
+            emit_predicated_wide_int: true,
             emit_addc: true,
             emit_subc: true,
             emit_i32_boundary_immediates: true,
@@ -925,12 +929,34 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// `setp.<cmp> pred, ca, cb; @pred mul.wide.* ...; @pred mov.b64 ...;`.
+    PredicatedMulWide {
+        op: MulWideOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// 64-bit integer ALU through scratch b64 registers, low 32 bits kept.
     WideInt {
         op: WideIntOp,
         dst: u32,
         a: Operand,
         b: Operand,
+    },
+    /// 64-bit integer ALU through scratch b64 registers behind a predicate.
+    PredicatedWideInt {
+        op: WideIntOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// `add/sub.cc.u32` followed by `addc/subc.u32`, keeping carry dataflow explicit.
     AddCarry {
@@ -1888,19 +1914,47 @@ impl<'a> Generator<'a> {
         } else if pick < 253 {
             let wide_pick: u8 = u.int_in_range(0..=2)?;
             if self.cfg.emit_wide_int && wide_pick == 0 {
-                Ok(Inst::WideInt {
-                    op: pick_wide_int(u)?,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                })
+                let op = pick_wide_int(u)?;
+                if self.cfg.emit_predicated_wide_int && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedWideInt {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::WideInt {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                    })
+                }
             } else if self.cfg.emit_mul_wide && wide_pick <= 1 {
-                Ok(Inst::MulWide {
-                    op: pick_mul_wide(u)?,
-                    dst: self.pick_dst(u)?,
-                    a: self.pick_operand(u)?,
-                    b: self.pick_operand(u)?,
-                })
+                let op = pick_mul_wide(u)?;
+                if self.cfg.emit_predicated_mul_wide && u.arbitrary::<bool>()? {
+                    Ok(Inst::PredicatedMulWide {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                        cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                        ca: self.pick_guard_operand(u)?,
+                        cb: self.pick_guard_operand(u)?,
+                        pred: self.alloc_inst_pred(u)?,
+                    })
+                } else {
+                    Ok(Inst::MulWide {
+                        op,
+                        dst: self.pick_dst(u)?,
+                        a: self.pick_operand(u)?,
+                        b: self.pick_operand(u)?,
+                    })
+                }
             } else {
                 let op = pick_divrem(u, self.cfg.emit_signed_divrem)?;
                 let divisor = self.pick_divisor(u, op)?;
@@ -2095,7 +2149,9 @@ impl<'a> Generator<'a> {
             | Inst::Mul24 { dst, .. }
             | Inst::PredicatedMul24 { dst, .. }
             | Inst::MulWide { dst, .. }
+            | Inst::PredicatedMulWide { dst, .. }
             | Inst::WideInt { dst, .. }
+            | Inst::PredicatedWideInt { dst, .. }
             | Inst::Sad { dst, .. }
             | Inst::PredicatedSad { dst, .. }
             | Inst::Slct { dst, .. }
@@ -2658,6 +2714,30 @@ impl<'a> Generator<'a> {
                 writeln!(s, ";").unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
             }
+            Inst::PredicatedMulWide {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {} {:<8} %rd6, ", pred_guard(pred), op.mnemonic()).unwrap();
+                a.emit(s);
+                write!(s, ", ").unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
+            }
             Inst::WideInt { op, dst, a, b } => {
                 let scratch_hi = self.wide_scratch_hi_reg();
                 write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
@@ -2668,6 +2748,38 @@ impl<'a> Generator<'a> {
                 writeln!(s, ";").unwrap();
                 writeln!(s, "    {:<13} %rd6, %rd6, %rd7;", op.mnemonic()).unwrap();
                 writeln!(s, "    mov.b64       {{%r{dst}, %r{scratch_hi}}}, %rd6;").unwrap();
+            }
+            Inst::PredicatedWideInt {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let scratch_hi = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                write!(s, "    {:<13} %rd6, ", op.cvt_mnemonic()).unwrap();
+                a.emit(s);
+                writeln!(s, ";").unwrap();
+                write!(s, "    {:<13} %rd7, ", op.cvt_mnemonic()).unwrap();
+                b.emit(s);
+                writeln!(s, ";").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %rd6, %rd6, %rd7;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    {} mov.b64 {{%r{dst}, %r{scratch_hi}}}, %rd6;",
+                    pred_guard(pred)
+                )
+                .unwrap();
             }
             Inst::AddCarry {
                 op,
@@ -3843,6 +3955,18 @@ mod tests {
         ptx.lines()
             .filter_map(predicated_mnemonic)
             .any(|op| MAD24_MNEMONICS.contains(&op) || MUL24_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_mul_wide(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| MUL_WIDE_MNEMONICS.contains(&op))
+    }
+
+    fn has_predicated_wide_int(ptx: &str) -> bool {
+        ptx.lines()
+            .filter_map(predicated_mnemonic)
+            .any(|op| WIDE_INT_MNEMONICS.contains(&op))
     }
 
     fn has_predicated_sad(ptx: &str) -> bool {
@@ -5305,6 +5429,56 @@ mod tests {
     }
 
     #[test]
+    fn predicated_mul_wide_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; MUL_WIDE_MNEMONICS.len()];
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in MUL_WIDE_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = MUL_WIDE_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_mul_wide_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_wide_int: false,
+            emit_predicated_mul_wide: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_mul_wide(&ptx),
+                "seed {seed:x} emitted predicated mul.wide"
+            );
+        }
+    }
+
+    #[test]
     fn wide_int_generation_is_reachable() {
         let mnemonics = [
             "add.u64",
@@ -5376,6 +5550,56 @@ mod tests {
                 .filter(|line| line.trim_start().starts_with("add.s64"))
                 .count();
             assert_eq!(add_s64_count, 2, "seed {seed:x} emitted body add.s64");
+        }
+    }
+
+    #[test]
+    fn predicated_wide_int_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            ..coverage_heavy_config()
+        };
+        let mut found = vec![false; WIDE_INT_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in WIDE_INT_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = WIDE_INT_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_wide_int_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_mul_wide: false,
+            emit_predicated_wide_int: false,
+            ..GenConfig::default()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_wide_int(&ptx),
+                "seed {seed:x} emitted predicated wide int"
+            );
         }
     }
 

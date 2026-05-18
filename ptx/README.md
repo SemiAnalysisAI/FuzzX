@@ -254,7 +254,9 @@ that feature.
 | `DIV_DISABLE_MUL24` | `mul24.{lo,hi}.{u32,s32}`. |
 | `DIV_DISABLE_PREDICATED_24BIT` | Predicated `mad24` and `mul24` instructions. |
 | `DIV_DISABLE_MUL_WIDE` | `mul.wide.{u32,s32}`. |
+| `DIV_DISABLE_PREDICATED_MUL_WIDE` | Predicated `mul.wide.{u32,s32}` instructions. |
 | `DIV_DISABLE_WIDE_INT` | 64-bit scratch-register ALU generation. |
+| `DIV_DISABLE_PREDICATED_WIDE_INT` | Predicated 64-bit scratch-register ALU generation. |
 | `DIV_DISABLE_ADDC` | `add.cc.u32` / `addc.u32` pairs. |
 | `DIV_DISABLE_SUBC` | `sub.cc.u32` / `subc.u32` pairs. |
 | `DIV_DISABLE_I32_BOUNDARY_IMMS` | Immediate `0x7fffffff` / `0x80000000` generation. |
