@@ -327,9 +327,10 @@
 //!   DIV_DISABLE_NEGATED_PREDICATES default: false; set 1/true/yes/on to suppress
 //!                         @!%p instruction predicates
 //!   DIV_DISABLE_PREDICATED_ALU default: false; set 1/true/yes/on to suppress
-//!                         predicated integer and floating-point ALU instruction generation
+//!                         predicated integer ALU and floating-point arithmetic generation
 //!   DIV_DISABLE_PREDICATED_UNARY default: false; set 1/true/yes/on to suppress
-//!                         predicated unary instruction generation
+//!                         predicated integer unary, floating-point unary, and floating-point
+//!                         special-math generation
 //!   DIV_DISABLE_CVT default: false; set 1/true/yes/on to suppress
 //!                         base cvt generation
 //!   DIV_DISABLE_PREDICATED_CVT default: false; set 1/true/yes/on to suppress

@@ -374,8 +374,8 @@ that feature.
 | `DIV_DISABLE_DP4A` | `dp4a.{u32,s32}.{u32,s32}`. |
 | `DIV_DISABLE_DP2A` | `dp2a.{lo,hi}.{u32,s32}.{u32,s32}`. |
 | `DIV_DISABLE_NEGATED_PREDICATES` | Negated `@!%p` instruction predicates. |
-| `DIV_DISABLE_PREDICATED_ALU` | Predicated integer and floating-point ALU instructions. |
-| `DIV_DISABLE_PREDICATED_UNARY` | Predicated unary instructions. |
+| `DIV_DISABLE_PREDICATED_ALU` | Predicated integer ALU and floating-point arithmetic instructions. |
+| `DIV_DISABLE_PREDICATED_UNARY` | Predicated integer unary, floating-point unary, and floating-point special-math instructions. |
 | `DIV_DISABLE_CVT` | Direct base `cvt.{u32,s32}.{u8,u16,s8,s16}` instructions; narrow and wide round-trips have separate flags. |
 | `DIV_DISABLE_PREDICATED_CVT` | Predicated `cvt` instructions. |
 | `DIV_DISABLE_NARROW_CVT` | Narrow `cvt` round-trips through 8/16-bit destination types. |

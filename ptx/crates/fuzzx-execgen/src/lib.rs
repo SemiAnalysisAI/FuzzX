@@ -2842,11 +2842,33 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// Predicated sanitized f32 arithmetic with explicit non-default rounding modes.
+    PredicatedF32RoundingArith {
+        op: F32RoundingArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Sanitized single-precision unary arithmetic.
     F32Unary {
         op: F32UnaryOp,
         dst: u32,
         src: Operand,
+    },
+    /// Predicated sanitized single-precision unary arithmetic.
+    PredicatedF32Unary {
+        op: F32UnaryOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized f32/int conversion chain.
     F32Cvt {
@@ -2866,6 +2888,16 @@ enum Inst {
         op: F32SpecialMathOp,
         dst: u32,
         src: Operand,
+    },
+    /// Predicated sanitized single-precision special math.
+    PredicatedF32SpecialMath {
+        op: F32SpecialMathOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized single-precision floating-point compare materialized as u32.
     F32Set {
@@ -2930,11 +2962,33 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// Predicated sanitized f64 arithmetic with explicit non-default rounding modes.
+    PredicatedF64RoundingArith {
+        op: F64RoundingArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
     /// Sanitized double-precision unary arithmetic.
     F64Unary {
         op: F64UnaryOp,
         dst: u32,
         src: Operand,
+    },
+    /// Predicated sanitized double-precision unary arithmetic.
+    PredicatedF64Unary {
+        op: F64UnaryOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized f64/int conversion chain.
     F64Cvt {
@@ -2954,6 +3008,16 @@ enum Inst {
         op: F64SpecialMathOp,
         dst: u32,
         src: Operand,
+    },
+    /// Predicated sanitized double-precision special math.
+    PredicatedF64SpecialMath {
+        op: F64SpecialMathOp,
+        dst: u32,
+        src: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
     },
     /// Sanitized double-precision compare materialized as u32.
     F64Set {
@@ -5307,22 +5371,50 @@ impl<'a> Generator<'a> {
             F32RoundingArithOp::FmaRm,
             F32RoundingArithOp::FmaRp,
         ];
-        Ok(Inst::F32RoundingArith {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            c: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32RoundingArith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32RoundingArith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f32_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [F32UnaryOp::Abs, F32UnaryOp::Neg];
-        Ok(Inst::F32Unary {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            src: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32Unary {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32Unary {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f32_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -5393,11 +5485,24 @@ impl<'a> Generator<'a> {
             F32SpecialMathOp::SinApprox,
             F32SpecialMathOp::CosApprox,
         ];
-        Ok(Inst::F32SpecialMath {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            src: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF32SpecialMath {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F32SpecialMath {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_float_testp_op(&mut self, u: &mut Unstructured) -> Result<FloatTestpOp> {
@@ -5508,22 +5613,50 @@ impl<'a> Generator<'a> {
             F64RoundingArithOp::FmaRm,
             F64RoundingArithOp::FmaRp,
         ];
-        Ok(Inst::F64RoundingArith {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            a: self.pick_cvt_operand(u)?,
-            b: self.pick_cvt_operand(u)?,
-            c: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64RoundingArith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64RoundingArith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f64_unary(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [F64UnaryOp::Abs, F64UnaryOp::Neg];
-        Ok(Inst::F64Unary {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            src: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64Unary {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64Unary {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f64_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -5582,11 +5715,24 @@ impl<'a> Generator<'a> {
             F64SpecialMathOp::RcpRm,
             F64SpecialMathOp::RcpRp,
         ];
-        Ok(Inst::F64SpecialMath {
-            op: *u.choose(&ops)?,
-            dst: self.pick_dst(u)?,
-            src: self.pick_cvt_operand(u)?,
-        })
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_unary && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF64SpecialMath {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F64SpecialMath {
+                op,
+                dst: self.pick_dst(u)?,
+                src: self.pick_cvt_operand(u)?,
+            })
+        }
     }
 
     fn pick_f64_set(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -7045,18 +7191,24 @@ impl<'a> Generator<'a> {
             | Inst::F32Arith { dst, .. }
             | Inst::PredicatedF32Arith { dst, .. }
             | Inst::F32RoundingArith { dst, .. }
+            | Inst::PredicatedF32RoundingArith { dst, .. }
             | Inst::F32Unary { dst, .. }
+            | Inst::PredicatedF32Unary { dst, .. }
             | Inst::F32Cvt { dst, .. }
             | Inst::F32FloatCvt { dst, .. }
             | Inst::F32SpecialMath { dst, .. }
+            | Inst::PredicatedF32SpecialMath { dst, .. }
             | Inst::F32Selp { dst, .. }
             | Inst::F64Arith { dst, .. }
             | Inst::PredicatedF64Arith { dst, .. }
             | Inst::F64RoundingArith { dst, .. }
+            | Inst::PredicatedF64RoundingArith { dst, .. }
             | Inst::F64Unary { dst, .. }
+            | Inst::PredicatedF64Unary { dst, .. }
             | Inst::F64Cvt { dst, .. }
             | Inst::F64FloatCvt { dst, .. }
             | Inst::F64SpecialMath { dst, .. }
+            | Inst::PredicatedF64SpecialMath { dst, .. }
             | Inst::F64Selp { dst, .. }
             | Inst::Sel { dst, .. }
             | Inst::PredicatedSel { dst, .. }
@@ -7996,9 +8148,63 @@ impl<'a> Generator<'a> {
                 }
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
             }
+            Inst::PredicatedF32RoundingArith {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f32_operand(s, 0, a);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f32_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f32_operand(s, 1, b);
+                }
+                writeln!(s, "    mov.f32       %f3, %f0;").unwrap();
+                if op.uses_c() {
+                    self.emit_sanitized_f32_operand(s, 2, c);
+                    writeln!(
+                        s,
+                        "    {} {:<8} %f3, %f0, %f1, %f2;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %f3, %f0, %f1;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f3;").unwrap();
+            }
             Inst::F32Unary { op, dst, src } => {
                 self.emit_sanitized_f32_operand(s, 0, src);
                 writeln!(s, "    {:<13} %f1, %f0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
+            }
+            Inst::PredicatedF32Unary {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f32_operand(s, 0, src);
+                writeln!(s, "    mov.f32       %f1, %f0;").unwrap();
+                writeln!(s, "    {} {:<8} %f1, %f0;", pred_guard(pred), op.mnemonic()).unwrap();
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
             }
             Inst::F32Cvt {
@@ -8022,6 +8228,21 @@ impl<'a> Generator<'a> {
             Inst::F32SpecialMath { op, dst, src } => {
                 self.emit_sanitized_f32_math_operand(s, 0, src, op.input_domain());
                 writeln!(s, "    {:<13} %f1, %f0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
+            }
+            Inst::PredicatedF32SpecialMath {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f32_math_operand(s, 0, src, op.input_domain());
+                writeln!(s, "    mov.f32       %f1, %f0;").unwrap();
+                writeln!(s, "    {} {:<8} %f1, %f0;", pred_guard(pred), op.mnemonic()).unwrap();
                 writeln!(s, "    cvt.rzi.s32.f32 %r{dst}, %f1;").unwrap();
             }
             Inst::F32Set { cmp, dst, a, b } => {
@@ -8157,9 +8378,69 @@ impl<'a> Generator<'a> {
                 }
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
             }
+            Inst::PredicatedF64RoundingArith {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f64_operand(s, 0, a);
+                if op.needs_positive_b() {
+                    self.emit_sanitized_f64_math_operand(s, 1, b, FloatInputDomain::Positive);
+                } else {
+                    self.emit_sanitized_f64_operand(s, 1, b);
+                }
+                writeln!(s, "    mov.f64       %fd3, %fd0;").unwrap();
+                if op.uses_c() {
+                    self.emit_sanitized_f64_operand(s, 2, c);
+                    writeln!(
+                        s,
+                        "    {} {:<8} %fd3, %fd0, %fd1, %fd2;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %fd3, %fd0, %fd1;",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd3;").unwrap();
+            }
             Inst::F64Unary { op, dst, src } => {
                 self.emit_sanitized_f64_operand(s, 0, src);
                 writeln!(s, "    {:<13} %fd1, %fd0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
+            }
+            Inst::PredicatedF64Unary {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f64_operand(s, 0, src);
+                writeln!(s, "    mov.f64       %fd1, %fd0;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %fd1, %fd0;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
             }
             Inst::F64Cvt {
@@ -8183,6 +8464,27 @@ impl<'a> Generator<'a> {
             Inst::F64SpecialMath { op, dst, src } => {
                 self.emit_sanitized_f64_math_operand(s, 0, src, op.input_domain());
                 writeln!(s, "    {:<13} %fd1, %fd0;", op.mnemonic()).unwrap();
+                writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
+            }
+            Inst::PredicatedF64SpecialMath {
+                op,
+                dst,
+                src,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f64_math_operand(s, 0, src, op.input_domain());
+                writeln!(s, "    mov.f64       %fd1, %fd0;").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} %fd1, %fd0;",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
                 writeln!(s, "    cvt.rzi.s32.f64 %r{dst}, %fd1;").unwrap();
             }
             Inst::F64Set { cmp, dst, a, b } => {
@@ -12848,7 +13150,9 @@ mod tests {
                 || PACKED_MINMAX_MNEMONICS.contains(&op)
                 || SCALAR_16BIT_MNEMONICS.contains(&op)
                 || F32_ARITH_MNEMONICS.contains(&op)
+                || F32_ROUNDING_MNEMONICS.contains(&op)
                 || F64_ARITH_MNEMONICS.contains(&op)
+                || F64_ROUNDING_MNEMONICS.contains(&op)
         })
     }
 
@@ -12923,9 +13227,13 @@ mod tests {
     }
 
     fn has_predicated_unary(ptx: &str) -> bool {
-        ptx.lines()
-            .filter_map(predicated_mnemonic)
-            .any(|op| UNARY_MNEMONICS.contains(&op))
+        ptx.lines().filter_map(predicated_mnemonic).any(|op| {
+            UNARY_MNEMONICS.contains(&op)
+                || F32_UNARY_MNEMONICS.contains(&op)
+                || F32_SPECIAL_MATH_MNEMONICS.contains(&op)
+                || F64_UNARY_MNEMONICS.contains(&op)
+                || F64_SPECIAL_MATH_MNEMONICS.contains(&op)
+        })
     }
 
     fn has_predicated_cvt(ptx: &str) -> bool {
@@ -15612,6 +15920,16 @@ mod tests {
     }
 
     #[test]
+    fn predicated_f32_rounding_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_arith: false,
+            emit_f64_rounding: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 16384, 8192, F32_ROUNDING_MNEMONICS);
+    }
+
+    #[test]
     fn f32_rounding_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_f32_rounding: false,
@@ -15633,6 +15951,15 @@ mod tests {
     #[test]
     fn f32_unary_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F32_UNARY_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_f32_unary_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_unary: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 4096, 2048, F32_UNARY_MNEMONICS);
     }
 
     #[test]
@@ -15702,6 +16029,15 @@ mod tests {
             4096,
             F32_SPECIAL_MATH_MNEMONICS,
         );
+    }
+
+    #[test]
+    fn predicated_f32_special_math_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f64_special_math: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 32768, 8192, F32_SPECIAL_MATH_MNEMONICS);
     }
 
     #[test]
@@ -15842,6 +16178,16 @@ mod tests {
     }
 
     #[test]
+    fn predicated_f64_rounding_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_arith: false,
+            emit_f32_rounding: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 16384, 8192, F64_ROUNDING_MNEMONICS);
+    }
+
+    #[test]
     fn f64_rounding_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_f64_rounding: false,
@@ -15863,6 +16209,15 @@ mod tests {
     #[test]
     fn f64_unary_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 2048, F64_UNARY_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_f64_unary_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_unary: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 4096, 2048, F64_UNARY_MNEMONICS);
     }
 
     #[test]
@@ -15932,6 +16287,15 @@ mod tests {
             2048,
             F64_SPECIAL_MATH_MNEMONICS,
         );
+    }
+
+    #[test]
+    fn predicated_f64_special_math_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f32_special_math: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 16384, 4096, F64_SPECIAL_MATH_MNEMONICS);
     }
 
     #[test]
