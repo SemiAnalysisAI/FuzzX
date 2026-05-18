@@ -1273,7 +1273,7 @@ impl<'a> Generator<'a> {
                     cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
                     ca: self.pick_operand(u)?,
                     cb: self.pick_operand(u)?,
-                    pred: self.alloc_pred(),
+                    pred: self.alloc_inst_pred(u)?,
                 })
             } else {
                 Ok(Inst::Mad {
