@@ -76,13 +76,14 @@ Everything below this line is AI-written slop.  Good luck!
 ## `ptxas` Bugs Found
 
 Except where otherwise noted, these have been tested on `sm_103` (i.e. B300).
+The primary table lists reproducers still observed on the latest tested `ptxas`.
 
 Version | Description |
 | --- | --- |
 | 13.2.78 | [m001-seed-050f](known-miscompiles/m001-seed-050f/NOTES.md): Uniform loop-latch optimization mishandles divergent loop-header entry. |
 | 13.2.78 | [m002-structured-lop3](known-miscompiles/m002-structured-lop3/NOTES.md): `selp` / `lop3` / `xor` fold computes the wrong truth-table result. |
 | 13.2.78 | [m003-no-lop3-max-chain](known-miscompiles/m003-no-lop3-max-chain/NOTES.md): `sub.u32` plus `max.s32` chain fold incorrectly includes the pre-subtract value. |
-| 13.0.88 | [m051-sat-sub-add-fold](known-miscompiles/m051-sat-sub-add-fold/NOTES.md): `sub.sat.s32` followed by adding back the subtrahend folds as if saturation cannot occur. |
+| 13.2.78 | [m051-sat-sub-add-fold](known-miscompiles/m051-sat-sub-add-fold/NOTES.md): `sub.sat.s32` followed by adding back the subtrahend folds as if saturation cannot occur. |
 | 13.2.78 | [m004-mulhi-loop-tripcount](known-miscompiles/m004-mulhi-loop-tripcount/NOTES.md): Loop removal drops two `mul.hi.s32` accumulator updates. |
 | 13.2.78 | [m005-prmt-ifconvert-mask](known-miscompiles/m005-prmt-ifconvert-mask/NOTES.md): If-converted `prmt.b32` mask fold drops a source operand. |
 | 13.2.78 | [m006-ifconvert-not-xor](known-miscompiles/m006-ifconvert-not-xor/NOTES.md): If-converted `not.b32` plus `xor.b32` fold uses the wrong truth table. |
@@ -108,16 +109,14 @@ Version | Description |
 | 13.2.78 | [m022-neg-funnel-left-add](known-miscompiles/m022-neg-funnel-left-add/NOTES.md): `neg.s32` plus `shf.l.wrap.b32` fold produces a sign-extension-shaped error. |
 | 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/NOTES.md): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
 | 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/NOTES.md): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
-| 13.0.88 | [m055-prmt-reg-control-eq-fold](known-miscompiles/m055-prmt-reg-control-eq-fold/NOTES.md): Register-control `prmt.b32` feeding an equality fold selects the wrong arm. |
-| 13.0.88 | [m054-packed-add-cvt-fold](known-miscompiles/m054-packed-add-cvt-fold/NOTES.md): `add.s16x2` feeding `cvt.u16` and another packed add drops the first packed-add contribution. |
-| 13.0.88 | [m056-packed-add-cvt-s16-fold](known-miscompiles/m056-packed-add-cvt-s16-fold/NOTES.md): Likely same root cause as m054; `add.u16x2` feeding `cvt.s16` drops the packed-add contribution. |
-| 13.0.88 | [m057-s16-unary-intmin-fold](known-miscompiles/m057-s16-unary-intmin-fold/NOTES.md): `abs.s16` / `neg.s16` of `INT16_MIN` feeding `cvt.s32.s16` is treated as a positive value. |
-| 13.0.88 | [m058-scalar16-min-cvt-fold](known-miscompiles/m058-scalar16-min-cvt-fold/NOTES.md): Scalar `min.{u16,s16}` through `.b16` scratch registers folds a following equality predicate incorrectly. |
-| 13.0.88 | [m060-scalar16-sub-intmin-fold](known-miscompiles/m060-scalar16-sub-intmin-fold/NOTES.md): Scalar `sub.s16 0, INT16_MIN` feeding `cvt.s32.s16` is zero-extended by optimized ptxas. |
-| 13.0.88 | [m061-f32-div-pred-neg-cvt-fold](known-miscompiles/m061-f32-div-pred-neg-cvt-fold/NOTES.md): `div.approx.ftz.f32` feeding `cvt.rzi.s32.f32` and a skipped predicated `neg.f32` loses the fallback move at `-O0`. |
-| 13.0.88 | [m062-packed-max-u16x2-liveout-fold](known-miscompiles/m062-packed-max-u16x2-liveout-fold/NOTES.md): `max.u16x2` in a live-range-heavy block corrupts later global roundtrip live-outs under optimized ptxas. |
-| 13.0.88 | [m063-f32-approx-div-cvt-boundary](known-miscompiles/m063-f32-approx-div-cvt-boundary/NOTES.md): `div.approx.ftz.f32` can legally straddle an integer boundary before `cvt.rzi.s32.f32`, producing an exact-output oracle mismatch. |
-| 13.0.88 | [m064-scalar16-max-cvt-predicate-fold](known-miscompiles/m064-scalar16-max-cvt-predicate-fold/NOTES.md): Scalar `max.u16` through `.b16` scratch registers folds a following zero predicate incorrectly. |
+| 13.2.78 | [m055-prmt-reg-control-eq-fold](known-miscompiles/m055-prmt-reg-control-eq-fold/NOTES.md): Register-control `prmt.b32` feeding an equality fold selects the wrong arm. |
+| 13.2.78 | [m057-s16-unary-intmin-fold](known-miscompiles/m057-s16-unary-intmin-fold/NOTES.md): `abs.s16` / `neg.s16` of `INT16_MIN` feeding `cvt.s32.s16` is treated as a positive value. |
+| 13.2.78 | [m058-scalar16-min-cvt-fold](known-miscompiles/m058-scalar16-min-cvt-fold/NOTES.md): Scalar `min.{u16,s16}` through `.b16` scratch registers folds a following equality predicate incorrectly. |
+| 13.2.78 | [m060-scalar16-sub-intmin-fold](known-miscompiles/m060-scalar16-sub-intmin-fold/NOTES.md): Scalar `sub.s16 0, INT16_MIN` feeding `cvt.s32.s16` is zero-extended by optimized ptxas. |
+| 13.2.78 | [m061-f32-div-pred-neg-cvt-fold](known-miscompiles/m061-f32-div-pred-neg-cvt-fold/NOTES.md): `div.approx.ftz.f32` feeding `cvt.rzi.s32.f32` and a skipped predicated `neg.f32` loses the fallback move at `-O0`. |
+| 13.2.78 | [m062-packed-max-u16x2-liveout-fold](known-miscompiles/m062-packed-max-u16x2-liveout-fold/NOTES.md): `max.u16x2` in a live-range-heavy block corrupts later global roundtrip live-outs under optimized ptxas. |
+| 13.2.78 | [m063-f32-approx-div-cvt-boundary](known-miscompiles/m063-f32-approx-div-cvt-boundary/NOTES.md): `div.approx.ftz.f32` can legally straddle an integer boundary before `cvt.rzi.s32.f32`, producing an exact-output oracle mismatch. |
+| 13.2.78 | [m064-scalar16-max-cvt-predicate-fold](known-miscompiles/m064-scalar16-max-cvt-predicate-fold/NOTES.md): Scalar `max.u16` through `.b16` scratch registers folds a following zero predicate incorrectly. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
@@ -140,9 +139,16 @@ Version | Description |
 | 13.2.78 | [m042-vsub4-else-ifconvert-fold](known-miscompiles/m042-vsub4-else-ifconvert-fold/NOTES.md): If-converted else arm using `vsub4` computes the wrong value for the one lane that takes it. |
 | 13.2.78 | [m043-shr-sub-branch-fold](known-miscompiles/m043-shr-sub-branch-fold/NOTES.md): Branch-sensitive unsigned shift after wrapped subtraction loses the shifted high bit. |
 | 13.2.78 | [m050-reg-shl-mask-fold](known-miscompiles/m050-reg-shl-mask-fold/NOTES.md): Masked register-count `shl.b32` chains fold to the wrong shifted value. |
-| 13.0.88 | [m052-bfe-reg-pos-fold](known-miscompiles/m052-bfe-reg-pos-fold/NOTES.md): Register-position `bfe.s32` with an out-of-range start folds to the wrong sign-filled value. |
-| 13.0.88 | [m053-bfi-reg-len-fold](known-miscompiles/m053-bfi-reg-len-fold/NOTES.md): Likely related to m052; register-length `bfi.b32` preserves high base bits that should be overwritten. |
+| 13.2.78 | [m052-bfe-reg-pos-fold](known-miscompiles/m052-bfe-reg-pos-fold/NOTES.md): Register-position `bfe.s32` with an out-of-range start folds to the wrong sign-filled value. |
+| 13.2.78 | [m053-bfi-reg-len-fold](known-miscompiles/m053-bfi-reg-len-fold/NOTES.md): Likely related to m052; register-length `bfi.b32` preserves high base bits that should be overwritten. |
 | 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
+
+### Bugs Found in 13.0.88 and Fixed in 13.2.78
+
+Found In | Fixed In | Description |
+| --- | --- | --- |
+| 13.0.88 | 13.2.78 | [m054-packed-add-cvt-fold](known-miscompiles/m054-packed-add-cvt-fold/NOTES.md): `add.s16x2` feeding `cvt.u16` and another packed add drops the first packed-add contribution. |
+| 13.0.88 | 13.2.78 | [m056-packed-add-cvt-s16-fold](known-miscompiles/m056-packed-add-cvt-s16-fold/NOTES.md): Likely same root cause as m054; `add.u16x2` feeding `cvt.s16` drops the packed-add contribution. |
 
 ## Running
 
