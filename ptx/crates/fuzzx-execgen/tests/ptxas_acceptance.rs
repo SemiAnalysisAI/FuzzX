@@ -171,6 +171,47 @@ fn ptxas_accepts_cta_barriers_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_cta_barrier_reductions_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry cta_barrier_reduction_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .pred %p<3>;
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    setp.lt.u32 %p0, %r0, 16;
+    bar.red.popc.u32 %r1, 0, %p0;
+    bar.red.and.pred %p1, 0, %p0;
+    bar.red.or.pred %p2, 0, %p0;
+    selp.u32 %r2, 1, 0, %p1;
+    selp.u32 %r3, 2, 0, %p2;
+    add.u32 %r1, %r1, %r2;
+    add.u32 %r1, %r1, %r3;
+    barrier.red.popc.u32 %r2, 0, %p0;
+    barrier.red.and.pred %p1, 0, %p0;
+    barrier.red.or.pred %p2, 0, %p0;
+    add.u32 %r1, %r1, %r2;
+    st.global.u32 [%rd0], %r1;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_shared_atomic_reduction_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

@@ -132,6 +132,7 @@ pub struct GenConfig {
     pub emit_memory_fences: bool,
     pub emit_warp_barriers: bool,
     pub emit_cta_barriers: bool,
+    pub emit_cta_barrier_reductions: bool,
     pub emit_prefetch: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
@@ -370,6 +371,7 @@ impl Default for GenConfig {
             emit_memory_fences: true,
             emit_warp_barriers: true,
             emit_cta_barriers: true,
+            emit_cta_barrier_reductions: true,
             emit_prefetch: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
@@ -10242,6 +10244,11 @@ impl<'a> Generator<'a> {
     fn emit_prologue(&self, s: &mut String) {
         let tid_reg = self.tid_reg();
         let total_regs = (self.wide_scratch_hi_reg() + 1).max(1);
+        let total_pred = if self.cfg.emit_cta_barrier_reductions {
+            self.n_pred.max(3)
+        } else {
+            self.n_pred
+        };
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -10266,8 +10273,8 @@ impl<'a> Generator<'a> {
         writeln!(s, ")").unwrap();
         writeln!(s, "{{").unwrap();
 
-        if self.n_pred > 0 {
-            writeln!(s, "    .reg .pred  %p<{}>;", self.n_pred).unwrap();
+        if total_pred > 0 {
+            writeln!(s, "    .reg .pred  %p<{total_pred}>;").unwrap();
         }
         writeln!(s, "    .reg .b16   %h<4>;").unwrap();
         writeln!(s, "    .reg .b32   %r<{total_regs}>;").unwrap();
@@ -10319,6 +10326,25 @@ impl<'a> Generator<'a> {
             writeln!(s, "    bar.sync        0, {N_THREADS};").unwrap();
             writeln!(s, "    barrier.sync    0;").unwrap();
             writeln!(s, "    barrier.sync    0, {N_THREADS};").unwrap();
+        }
+        if self.cfg.emit_cta_barrier_reductions {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    setp.lt.u32     %p0, %r{tid_reg}, 16;").unwrap();
+            writeln!(s, "    bar.red.popc.u32 %r0, 0, %p0;").unwrap();
+            writeln!(s, "    bar.red.and.pred %p1, 0, %p0;").unwrap();
+            writeln!(s, "    bar.red.or.pred %p2, 0, %p0;").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    barrier.red.popc.u32 %r{scratch}, 0, %p0;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    barrier.red.and.pred %p1, 0, %p0;").unwrap();
+            writeln!(s, "    barrier.red.or.pred %p2, 0, %p0;").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 4, 0, %p1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 8, 0, %p2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         writeln!(s).unwrap();
     }
@@ -16360,6 +16386,14 @@ mod tests {
     ];
     const WARP_BARRIER_MNEMONICS: &[&str] = &["bar.warp.sync"];
     const CTA_BARRIER_MNEMONICS: &[&str] = &["bar.sync", "barrier.sync"];
+    const CTA_BARRIER_REDUCTION_MNEMONICS: &[&str] = &[
+        "bar.red.popc.u32",
+        "bar.red.and.pred",
+        "bar.red.or.pred",
+        "barrier.red.popc.u32",
+        "barrier.red.and.pred",
+        "barrier.red.or.pred",
+    ];
     const PREFETCH_MNEMONICS: &[&str] = &[
         "prefetch.global.L1",
         "prefetch.global.L2",
@@ -17673,6 +17707,10 @@ mod tests {
             GLOBAL_LOAD_MNEMONICS,
             GLOBAL_STORE_MNEMONICS,
             GENERIC_MEMORY_MNEMONICS,
+            MEMORY_FENCE_MNEMONICS,
+            WARP_BARRIER_MNEMONICS,
+            CTA_BARRIER_MNEMONICS,
+            CTA_BARRIER_REDUCTION_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
             SHARED_ATOMIC_MNEMONICS,
@@ -17758,6 +17796,7 @@ mod tests {
             MEMORY_FENCE_MNEMONICS,
             WARP_BARRIER_MNEMONICS,
             CTA_BARRIER_MNEMONICS,
+            CTA_BARRIER_REDUCTION_MNEMONICS,
             PREFETCH_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
@@ -21598,6 +21637,33 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in CTA_BARRIER_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cta_barrier_reduction_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in CTA_BARRIER_REDUCTION_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+    }
+
+    #[test]
+    fn cta_barrier_reduction_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_cta_barrier_reductions: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in CTA_BARRIER_REDUCTION_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
