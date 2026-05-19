@@ -11947,6 +11947,15 @@ impl<'a> Generator<'a> {
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    cvt.rn.f16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            // Non-default rounding modes for f32->f16. f16x2 only supports
+            // .rn and .rz per the ISA, so only emit f16x2 with .rz.
+            for rm in ["rz", "rm", "rp"] {
+                writeln!(s, "    cvt.{rm}.f16.f32  %h2, %f0;").unwrap();
+                writeln!(s, "    cvt.u32.u16     %r{scratch}, %h2;").unwrap();
+                writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            }
+            writeln!(s, "    cvt.rz.f16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_bf16_tf32_cvt {
             let scratch = self.wide_scratch_hi_reg();
@@ -19920,6 +19929,13 @@ mod tests {
         "setp.num.f16",
         "setp.nan.f16",
         "selp.b16",
+    ];
+    #[allow(dead_code)]
+    const F16_CVT_RZ_RM_RP_MNEMONICS: &[&str] = &[
+        "cvt.rz.f16.f32",
+        "cvt.rm.f16.f32",
+        "cvt.rp.f16.f32",
+        "cvt.rz.f16x2.f32",
     ];
     const F16_CVT_MNEMONICS: &[&str] = &[
         "cvt.f32.f16",
