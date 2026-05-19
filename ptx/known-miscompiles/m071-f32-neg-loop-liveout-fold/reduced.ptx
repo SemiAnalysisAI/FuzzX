@@ -1,0 +1,142 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.const .align 16 .b8 fuzzx_const[64] = {3,20,37,54,71,88,105,122,139,156,173,190,207,224,241,2,19,36,53,70,87,104,121,138,155,172,189,206,223,240,1,18,35,52,69,86,103,120,137,154,171,188,205,222,239,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255,16,33,50};
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<19>;
+    .reg .b16   %h<4>;
+    .reg .b32   %r<13>;
+    .reg .b64   %rd<10>;
+    .reg .f32   %f<4>;
+    .reg .f64   %fd<4>;
+    .local .align 16 .b8 fuzzx_local[64];
+    .shared .align 16 .b8 fuzzx_shared[512];
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r8, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r8, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r8;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r8;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r9, 13;
+    mov.u32         %r10, 15;
+    mov.u32         %r11, 14;
+
+    bra             block_0;
+
+block_0:
+    setp.lt.s32   %p0, %r2, %r0;
+    and.b32       %r12, 268435456, 1023;
+    cvt.rn.f64.u32 %fd0, %r12;
+    and.b32       %r12, %r3, 1023;
+    cvt.rn.f64.u32 %fd1, %r12;
+    @!%p0 set.geu.u32.f64 %r7, %fd0, %fd1;
+    setp.ne.u32   %p1, 23, 134217728;
+    and.b32       %r12, %r0, 1023;
+    cvt.rn.f32.u32 %f0, %r12;
+    and.b32       %r12, %r6, 1023;
+    cvt.rn.f32.u32 %f1, %r12;
+    setp.geu.ftz.or.f32 %p2, %f0, %f1, %p1;
+    bra             block_1;
+
+block_1:
+    cvta.to.global.u64 %rd6, %rd0;
+    ld.global.cs.s64 %rd7, [%rd6 + 0];
+    mov.b64       {%r1, %r12}, %rd7;
+    setp.ne.u32   %p4, %r0, %r5;
+    mov.u64       %rd6, fuzzx_const;
+    @%p4 ld.const.b64 %rd7, [%rd6 + 56];
+    @%p4 mov.b64 {%r3, %r12}, %rd7;
+    bra             block_4;
+
+block_2:
+    and.b32       %r12, %r7, 1023;
+    cvt.rn.f32.u32 %f0, %r12;
+    neg.f32       %f1, %f0;
+    cvt.rzi.s32.f32 %r2, %f1;
+    bra             block_6;
+
+block_3:
+    setp.ge.u32   %p7, %r0, %r4;
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32  %rd9, %r8, 16;
+    add.s64       %rd8, %rd8, %rd9;
+    @!%p7 st.global.u32 [%rd8 + 8], %r1;
+    @!%p7 ld.global.u32 %r0, [%rd8 + 8];
+    setp.eq.u32   %p8, %r9, 0;
+    @%p8 bra   loop_done_9;
+    sub.u32         %r9, %r9, 1;
+    bra             block_2;
+loop_done_9:
+    bra             block_5;
+
+block_4:
+    setp.lt.u32   %p9, %r5, 14;
+    @%p9 bra   block_6;
+    bra             block_5;
+
+block_5:
+    cvt.u16.u32   %h0, %r3;
+    cvt.u16.u32   %h1, %r3;
+    setp.ne.u16   %p10, %h0, %h1;
+    setp.lt.s32   %p11, 3, %r0;
+    and.b32       %r12, 17, 1023;
+    add.u32       %r12, %r12, 1;
+    cvt.rn.f32.u32 %f0, %r12;
+    mov.f32       %f1, %f0;
+    @%p11 rcp.approx.ftz.f32 %f1, %f0;
+    cvt.rzi.s32.f32 %r1, %f1;
+    mov.u64       %rd6, fuzzx_const;
+    ld.const.s64  %rd7, [%rd6 + 8];
+    mov.b64       {%r5, %r12}, %rd7;
+    setp.eq.u32   %p13, %r10, 0;
+    @%p13 bra   loop_done_10;
+    sub.u32         %r10, %r10, 1;
+    bra             block_2;
+loop_done_10:
+    bra             block_8;
+
+block_6:
+    setp.eq.u32   %p14, %r11, 0;
+    @%p14 bra   loop_done_11;
+    sub.u32         %r11, %r11, 1;
+    bra             block_2;
+loop_done_11:
+    bra             block_8;
+
+block_7:
+    setp.lt.u32   %p17, 65535, %r2;
+    setp.ge.s32   %p15, %r6, %r6;
+    and.b32       %r12, %r0, 1023;
+    cvt.rn.f32.u32 %f0, %r12;
+    and.b32       %r12, %r7, 1023;
+    cvt.rn.f32.u32 %f1, %r12;
+    setp.ne.u32   %p16, 0, 0;
+    @%p17 setp.ge.and.f32 %p16, %f0, %f1, %p15;
+    bra             block_8;
+
+block_8:
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r8, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    st.global.u32   [%rd4 + 8], %r2;
+    ret;
+}
