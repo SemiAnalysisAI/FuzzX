@@ -19741,6 +19741,211 @@ Value *emitRandomLongIntFPRoundTripIdiom(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomI8MulSaturateAccumIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  FunctionCallee SAddSatI8 = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::sadd_sat, {I8});
+  FunctionCallee SSubSatI8 = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::ssub_sat, {I8});
+  FunctionCallee UAddSatI8 = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::uadd_sat, {I8});
+  // Per-byte saturating arithmetic chain at i8 width.  Targets v_pk_add_sat
+  // / per-byte saturated lowering and SDWA byte-mode operations.
+  SmallVector<Value *, 4> Bytes;
+  Value *Acc = ConstantInt::get(I8, 0);
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *AB = B.CreateTrunc(extractByteAsI32(B, A, I,
+                                                Twine(NamePrefix) + ".a.byte"),
+                               I8, Twine(NamePrefix) + ".a.trunc");
+    Value *BB = B.CreateTrunc(extractByteAsI32(B, Bv, (I + 1u) & 3u,
+                                                Twine(NamePrefix) + ".b.byte"),
+                               I8, Twine(NamePrefix) + ".b.trunc");
+    Value *Sum =
+        B.CreateCall(SAddSatI8, {AB, BB},
+                     Twine(NamePrefix) + ".sadd.sat");
+    Value *Diff =
+        B.CreateCall(SSubSatI8, {Sum, Acc},
+                     Twine(NamePrefix) + ".ssub.sat");
+    Value *Combined =
+        B.CreateCall(UAddSatI8, {Diff,
+                                 B.CreateMul(BB, ConstantInt::get(I8,
+                                                                  (I * 3u) | 1u),
+                                             Twine(NamePrefix) + ".b.mul")},
+                     Twine(NamePrefix) + ".uadd.sat");
+    Acc = Combined;
+    Bytes.push_back(B.CreateZExt(Acc, I32,
+                                  Twine(NamePrefix) + ".acc.zext"));
+  }
+  Value *Packed = packFourBytesAsI32(B, Bytes, (Gen() & 1u) != 0,
+                                     Twine(NamePrefix) + ".pack");
+  switch (Gen() % 4) {
+  case 0:
+    return Packed;
+  case 1:
+    return B.CreateXor(Packed, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Packed, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Bv, Packed, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
+Value *emitRandomI16BitFieldExtractIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                         Value *Bv,
+                                         std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  // i16 BFE patterns — V_BFE on 16-bit data.  Chain extracts of
+  // different widths from the two halfwords of A, combine, and pack.
+  Value *Lo16 = B.CreateTrunc(A, I16, Twine(NamePrefix) + ".a.lo16");
+  Value *Hi16 = B.CreateTrunc(B.CreateLShr(A, ci32(Ctx, 16),
+                                            Twine(NamePrefix) + ".a.shr"),
+                               I16, Twine(NamePrefix) + ".a.hi16");
+  Value *Bv16 = B.CreateTrunc(Bv, I16, Twine(NamePrefix) + ".b.lo16");
+
+  SmallVector<Value *, 4> Slices;
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *Src = (I & 1u) ? Bv16 : ((I & 2u) ? Hi16 : Lo16);
+    unsigned Off = (Gen() + I * 3u) & 0xfu;
+    unsigned Width = 1u + ((Gen() + I * 5u) % 12u);
+    if (Off + Width > 15)
+      Width = 15 - Off;
+    if (Width == 0)
+      Width = 1;
+    unsigned Mask = (1u << Width) - 1u;
+    // BFE_U16: (a >> off) & mask
+    Value *BfeU = B.CreateAnd(B.CreateLShr(Src,
+                                            ConstantInt::get(I16, Off),
+                                            Twine(NamePrefix) + ".bfe.u.shr"),
+                              ConstantInt::get(I16, Mask),
+                              Twine(NamePrefix) + ".bfe.u.mask");
+    // BFE_S16: shift+ashr style
+    Value *BfeS =
+        B.CreateAShr(B.CreateShl(Src,
+                                 ConstantInt::get(I16, 16u - Off - Width),
+                                 Twine(NamePrefix) + ".bfe.s.shl"),
+                     ConstantInt::get(I16, 16u - Width),
+                     Twine(NamePrefix) + ".bfe.s.ashr");
+    Value *Mixed = B.CreateXor(BfeU, BfeS,
+                                Twine(NamePrefix) + ".mix.xor");
+    Slices.push_back(B.CreateZExt(Mixed, I32,
+                                   Twine(NamePrefix) + ".slice.zext"));
+  }
+  Value *Combined = B.CreateXor(
+      B.CreateOr(B.CreateShl(Slices[0], ci32(Ctx, 0),
+                              Twine(NamePrefix) + ".s0"),
+                  B.CreateShl(Slices[1], ci32(Ctx, 8),
+                              Twine(NamePrefix) + ".s1"),
+                  Twine(NamePrefix) + ".s01"),
+      B.CreateOr(B.CreateShl(Slices[2], ci32(Ctx, 16),
+                              Twine(NamePrefix) + ".s2"),
+                  B.CreateShl(Slices[3], ci32(Ctx, 24),
+                              Twine(NamePrefix) + ".s3"),
+                  Twine(NamePrefix) + ".s23"),
+      Twine(NamePrefix) + ".s.combined");
+  switch (Gen() % 4) {
+  case 0:
+    return Combined;
+  case 1:
+    return B.CreateXor(Combined, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Combined, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Bv, Combined, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
+Value *emitRandomI32SignedMin3Max3Idiom(IRBuilder<NoFolder> &B, Module &M,
+                                        Value *A, Value *Bv,
+                                        std::minstd_rand &Gen,
+                                        StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  FunctionCallee SMin = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::smin, {I32});
+  FunctionCallee SMax = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::smax, {I32});
+  FunctionCallee UMin = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umin, {I32});
+  FunctionCallee UMax = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umax, {I32});
+  // Nested smin/smax/umin/umax patterns producing V_MIN3_I32 / V_MAX3_I32 /
+  // V_MED3_I32 / V_MED3_U32 selections.  Chain together so the selector
+  // sees multi-step min3/max3 opportunities.
+  Value *C = B.CreateMul(B.CreateXor(A, Bv,
+                                      Twine(NamePrefix) + ".c.xor"),
+                          ci32(Ctx, 0x9e3779b1u),
+                          Twine(NamePrefix) + ".c.mul");
+  Value *D = B.CreateAdd(A,
+                          B.CreateLShr(Bv, ci32(Ctx, 3),
+                                       Twine(NamePrefix) + ".d.shr"),
+                          Twine(NamePrefix) + ".d.add");
+
+  Value *SMin3 =
+      B.CreateCall(SMin,
+                   {B.CreateCall(SMin, {A, Bv},
+                                 Twine(NamePrefix) + ".smin.ab"),
+                    C},
+                   Twine(NamePrefix) + ".smin3");
+  Value *SMax3 =
+      B.CreateCall(SMax,
+                   {B.CreateCall(SMax, {A, Bv},
+                                 Twine(NamePrefix) + ".smax.ab"),
+                    D},
+                   Twine(NamePrefix) + ".smax3");
+  Value *UMin3 =
+      B.CreateCall(UMin,
+                   {B.CreateCall(UMin, {A, Bv},
+                                 Twine(NamePrefix) + ".umin.ab"),
+                    C},
+                   Twine(NamePrefix) + ".umin3");
+  Value *UMax3 =
+      B.CreateCall(UMax,
+                   {B.CreateCall(UMax, {A, Bv},
+                                 Twine(NamePrefix) + ".umax.ab"),
+                    D},
+                   Twine(NamePrefix) + ".umax3");
+  // Med3: smin(smax(a,b), smax(smin(a,b), c))
+  Value *SMed3 =
+      B.CreateCall(SMin,
+                   {B.CreateCall(SMax, {A, Bv},
+                                 Twine(NamePrefix) + ".smax.ab.med"),
+                    B.CreateCall(SMax,
+                                 {B.CreateCall(SMin, {A, Bv},
+                                               Twine(NamePrefix) +
+                                                   ".smin.ab.med"),
+                                  C},
+                                 Twine(NamePrefix) + ".smax.minc")},
+                   Twine(NamePrefix) + ".smed3");
+
+  Value *Combined = B.CreateAdd(B.CreateXor(SMin3, SMax3,
+                                            Twine(NamePrefix) +
+                                                ".sminmax.xor"),
+                                 B.CreateXor(UMin3, UMax3,
+                                             Twine(NamePrefix) +
+                                                 ".uminmax.xor"),
+                                 Twine(NamePrefix) + ".combined.add");
+  Combined = B.CreateXor(Combined, SMed3,
+                          Twine(NamePrefix) + ".combined.med.xor");
+  switch (Gen() % 4) {
+  case 0:
+    return Combined;
+  case 1:
+    return B.CreateXor(Combined, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Combined, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Combined, C, Twine(NamePrefix) + ".c.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -19750,7 +19955,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1674) {
+  switch (Gen() % 1698) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -21907,6 +22112,36 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1673:
     return emitRandomLongIntFPRoundTripIdiom(
         B, M, A, Bv, Gen, "fuzz.longfpinttrip.idiom");
+  case 1674:
+  case 1675:
+  case 1676:
+  case 1677:
+  case 1678:
+  case 1679:
+  case 1680:
+  case 1681:
+    return emitRandomI8MulSaturateAccumIdiom(
+        B, M, A, Bv, Gen, "fuzz.i8mulsat.idiom");
+  case 1682:
+  case 1683:
+  case 1684:
+  case 1685:
+  case 1686:
+  case 1687:
+  case 1688:
+  case 1689:
+    return emitRandomI16BitFieldExtractIdiom(
+        B, A, Bv, Gen, "fuzz.i16bfe.idiom");
+  case 1690:
+  case 1691:
+  case 1692:
+  case 1693:
+  case 1694:
+  case 1695:
+  case 1696:
+  case 1697:
+    return emitRandomI32SignedMin3Max3Idiom(
+        B, M, A, Bv, Gen, "fuzz.i32min3max3.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -21941,7 +22176,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1666) {
+  switch (Gen() % 1690) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -24095,6 +24330,36 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1665:
     return emitRandomLongIntFPRoundTripIdiom(
         B, M, A, Bv, Gen, "fuzz.cfg.longfpinttrip.idiom");
+  case 1666:
+  case 1667:
+  case 1668:
+  case 1669:
+  case 1670:
+  case 1671:
+  case 1672:
+  case 1673:
+    return emitRandomI8MulSaturateAccumIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.i8mulsat.idiom");
+  case 1674:
+  case 1675:
+  case 1676:
+  case 1677:
+  case 1678:
+  case 1679:
+  case 1680:
+  case 1681:
+    return emitRandomI16BitFieldExtractIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.i16bfe.idiom");
+  case 1682:
+  case 1683:
+  case 1684:
+  case 1685:
+  case 1686:
+  case 1687:
+  case 1688:
+  case 1689:
+    return emitRandomI32SignedMin3Max3Idiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.i32min3max3.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
