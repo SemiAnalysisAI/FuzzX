@@ -10385,6 +10385,19 @@ impl<'a> Generator<'a> {
             writeln!(s).unwrap();
             writeln!(
                 s,
+                ".func (.reg .b32 ret0) fuzzx_mixed_param_helper(.reg .b32 a, .param .b32 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    .reg .b32       %mphr<2>;").unwrap();
+            writeln!(s, "    ld.param.u32    %mphr0, [b];").unwrap();
+            writeln!(s, "    add.u32         %mphr1, a, %mphr0;").unwrap();
+            writeln!(s, "    xor.b32         ret0, %mphr1, c;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
                 ".func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)"
             )
             .unwrap();
@@ -10491,6 +10504,13 @@ impl<'a> Generator<'a> {
             writeln!(
                 s,
                 "    call            (%r{scratch}), fuzzx_nested_helper, (%r1, %r2, %r{tid_reg}, %r0);"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    st.param.b32    [fuzzx_param_a], %r0;").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (%r{scratch}), fuzzx_mixed_param_helper, (%r1, fuzzx_param_a, %r2);"
             )
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
@@ -22483,6 +22503,14 @@ mod tests {
             "missing nested helper call"
         );
         assert!(
+            ptx.contains("fuzzx_mixed_param_helper"),
+            "missing mixed register/param helper function"
+        );
+        assert!(
+            ptx.contains("fuzzx_mixed_param_helper, (%r1, fuzzx_param_a, %r2)"),
+            "missing mixed register/param helper call"
+        );
+        assert!(
             ptx.contains("fuzzx_param_helper"),
             "missing param ABI helper function"
         );
@@ -22535,6 +22563,10 @@ mod tests {
             assert!(
                 !ptx.contains("call            (%nhr2), fuzzx_helper_chain"),
                 "seed {seed:x} emitted nested helper call"
+            );
+            assert!(
+                !ptx.contains("fuzzx_mixed_param_helper"),
+                "seed {seed:x} emitted mixed register/param helper function"
             );
             assert!(
                 !ptx.contains("fuzzx_param_helper"),
