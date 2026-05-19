@@ -163,6 +163,17 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
     max.f16 %h2, %h2, %h0;
     abs.f16 %h2, %h2;
     neg.f16 %h3, %h2;
+    and.b32 %r2, %r0, 1023;
+    add.u32 %r2, %r2, 0x3c00;
+    cvt.u16.u32 %h0, %r2;
+    and.b32 %r2, %r1, 1023;
+    add.u32 %r2, %r2, 0x3c00;
+    cvt.u16.u32 %h1, %r2;
+    mov.b16 %h3, %h0;
+    setp.lt.f16 %p0, %h0, %h1;
+    @%p0 fma.rn.f16 %h3, %h0, %h1, %h2;
+    cvt.u32.u16 %r2, %h3;
+    add.u32 %r0, %r0, %r2;
     set.lt.u32.f16 %r0, %h0, %h1;
     set.ge.u32.f16 %r1, %h1, %h0;
     setp.lt.f16 %p0, %h0, %h1;
