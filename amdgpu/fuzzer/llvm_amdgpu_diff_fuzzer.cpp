@@ -18883,6 +18883,164 @@ Value *emitRandomUMaxBitop3CascadeIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomI64MinMaxChainIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                     Value *A, Value *Bv,
+                                     std::minstd_rand &Gen,
+                                     StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  // Targets V_MIN_I64 / V_MAX_I64 / V_MIN_U64 / V_MAX_U64 single-instruction
+  // lowering on gfx950+ via the llvm.smin/smax/umin/umax intrinsics at i64.
+  FunctionCallee SMin = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::smin, {I64});
+  FunctionCallee SMax = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::smax, {I64});
+  FunctionCallee UMin = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umin, {I64});
+  FunctionCallee UMax = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umax, {I64});
+
+  Value *AS = B.CreateSExt(A, I64, Twine(NamePrefix) + ".a.sext");
+  Value *BS = B.CreateSExt(Bv, I64, Twine(NamePrefix) + ".b.sext");
+  Value *AZ = B.CreateZExt(A, I64, Twine(NamePrefix) + ".a.zext");
+  Value *BZ = B.CreateZExt(Bv, I64, Twine(NamePrefix) + ".b.zext");
+
+  // Build a chain of i64 min/max calls.
+  Value *Acc = ConstantInt::get(I64, 0);
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      X = AS;
+      Y = B.CreateAdd(BS, ConstantInt::get(I64, I * 0x100100100ull),
+                      Twine(NamePrefix) + ".bs.bias");
+      break;
+    case 1:
+      X = AZ;
+      Y = B.CreateXor(BZ, ConstantInt::get(I64, 0xffffffffull << (I & 31)),
+                      Twine(NamePrefix) + ".bz.xor");
+      break;
+    case 2:
+      X = B.CreateShl(AS, ConstantInt::get(I64, (I * 3u) + 8u),
+                      Twine(NamePrefix) + ".as.shl");
+      Y = BS;
+      break;
+    default:
+      X = B.CreateMul(AZ, ConstantInt::get(I64, (I * 0x111ull) | 1ull),
+                      Twine(NamePrefix) + ".az.mul");
+      Y = BZ;
+      break;
+    }
+    FunctionCallee Fn = nullptr;
+    switch ((Gen() + I * 3u) % 4) {
+    case 0:
+      Fn = SMin;
+      break;
+    case 1:
+      Fn = SMax;
+      break;
+    case 2:
+      Fn = UMin;
+      break;
+    default:
+      Fn = UMax;
+      break;
+    }
+    Value *Result = B.CreateCall(Fn, {X, Y},
+                                 Twine(NamePrefix) + ".minmax");
+    Acc = B.CreateAdd(B.CreateXor(Acc, Result,
+                                   Twine(NamePrefix) + ".acc.xor"),
+                      ConstantInt::get(I64, 0x9e3779b1ull + I),
+                      Twine(NamePrefix) + ".acc.next");
+  }
+  Value *Folded = foldI64ToI32(B, Acc, Twine(NamePrefix) + ".acc.fold");
+  switch (Gen() % 4) {
+  case 0:
+    return Folded;
+  case 1:
+    return B.CreateXor(Folded, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Folded, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(A, Folded, Twine(NamePrefix) + ".a.sub");
+  }
+}
+
+Value *emitRandomVOP3FusedFoldIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                    Value *A, Value *Bv,
+                                    std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  // Builds shapes that AMDGPU's VOP3 selection can fuse:
+  //   V_ADD3_U32:     a + b + c
+  //   V_LSHL_ADD_U32: (a << k) + b
+  //   V_ADD_LSHL_U32: (a + b) << k
+  //   V_LSHL_OR_B32:  (a << k) | b
+  //   V_AND_OR_B32:   (a & b) | c
+  //   V_OR3_B32:      a | b | c
+  //   V_MED3_U32:     min(max(a,b),c)
+  Value *Mix = B.CreateXor(A, Bv, Twine(NamePrefix) + ".mix");
+  Value *C = B.CreateAdd(Mix, ci32(Ctx, 0x9e3779b1u),
+                          Twine(NamePrefix) + ".c");
+
+  FunctionCallee UMaxF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umax, {I32});
+  FunctionCallee UMinF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::umin, {I32});
+
+  Value *Add3 = B.CreateAdd(B.CreateAdd(A, Bv,
+                                        Twine(NamePrefix) + ".ab.add"),
+                            C, Twine(NamePrefix) + ".add3");
+  unsigned Shift1 = ((Gen() & 7u) + 1u);
+  Value *LshlAdd = B.CreateAdd(B.CreateShl(A, ci32(Ctx, Shift1),
+                                           Twine(NamePrefix) + ".a.shl1"),
+                                Bv, Twine(NamePrefix) + ".lshl.add");
+  unsigned Shift2 = ((Gen() & 7u) + 1u);
+  Value *AddLshl = B.CreateShl(B.CreateAdd(A, Bv,
+                                           Twine(NamePrefix) + ".ab.add2"),
+                                ci32(Ctx, Shift2),
+                                Twine(NamePrefix) + ".add.lshl");
+  unsigned Shift3 = ((Gen() & 7u) + 1u);
+  Value *LshlOr = B.CreateOr(B.CreateShl(A, ci32(Ctx, Shift3),
+                                         Twine(NamePrefix) + ".a.shl3"),
+                              Bv, Twine(NamePrefix) + ".lshl.or");
+  Value *AndOr = B.CreateOr(B.CreateAnd(A, Bv,
+                                         Twine(NamePrefix) + ".ab.and"),
+                             C, Twine(NamePrefix) + ".and.or");
+  Value *Or3 = B.CreateOr(B.CreateOr(A, Bv,
+                                      Twine(NamePrefix) + ".ab.or"),
+                           C, Twine(NamePrefix) + ".or3");
+  Value *Med3 = B.CreateCall(
+      UMinF,
+      {B.CreateCall(UMaxF, {A, Bv}, Twine(NamePrefix) + ".max.ab"), C},
+      Twine(NamePrefix) + ".med3");
+
+  // Fold all six into a single result by xoring/adding them with a per-step
+  // bias.  Each candidate independently exercises a distinct selection
+  // path.
+  Value *Acc = Add3;
+  Acc = B.CreateAdd(Acc, LshlAdd, Twine(NamePrefix) + ".acc.lshl.add");
+  Acc = B.CreateXor(Acc, AddLshl, Twine(NamePrefix) + ".acc.add.lshl");
+  Acc = B.CreateAdd(Acc, LshlOr, Twine(NamePrefix) + ".acc.lshl.or");
+  Acc = B.CreateXor(Acc, AndOr, Twine(NamePrefix) + ".acc.and.or");
+  Acc = B.CreateAdd(Acc, Or3, Twine(NamePrefix) + ".acc.or3");
+  Acc = B.CreateXor(Acc, Med3, Twine(NamePrefix) + ".acc.med3");
+
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateXor(Acc, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Acc, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(C, Acc, Twine(NamePrefix) + ".c.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -18892,7 +19050,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1570) {
+  switch (Gen() % 1586) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -20919,6 +21077,26 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1569:
     return emitRandomUMaxBitop3CascadeIdiom(
         B, A, Bv, Gen, "fuzz.umaxbitop3cascade.idiom");
+  case 1570:
+  case 1571:
+  case 1572:
+  case 1573:
+  case 1574:
+  case 1575:
+  case 1576:
+  case 1577:
+    return emitRandomI64MinMaxChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.i64minmax.idiom");
+  case 1578:
+  case 1579:
+  case 1580:
+  case 1581:
+  case 1582:
+  case 1583:
+  case 1584:
+  case 1585:
+    return emitRandomVOP3FusedFoldIdiom(
+        B, M, A, Bv, Gen, "fuzz.vop3fused.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -20953,7 +21131,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1562) {
+  switch (Gen() % 1578) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -22977,6 +23155,26 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1561:
     return emitRandomUMaxBitop3CascadeIdiom(
         B, A, Bv, Gen, "fuzz.cfg.umaxbitop3cascade.idiom");
+  case 1562:
+  case 1563:
+  case 1564:
+  case 1565:
+  case 1566:
+  case 1567:
+  case 1568:
+  case 1569:
+    return emitRandomI64MinMaxChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.i64minmax.idiom");
+  case 1570:
+  case 1571:
+  case 1572:
+  case 1573:
+  case 1574:
+  case 1575:
+  case 1576:
+  case 1577:
+    return emitRandomVOP3FusedFoldIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.vop3fused.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
