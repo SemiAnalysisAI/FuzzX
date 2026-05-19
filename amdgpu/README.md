@@ -78,7 +78,9 @@ carry/borrow-chain idioms, pure-IR dynamic byte extraction/permutation idioms,
 pure-IR compare-rank/mask idioms, pure-IR ternary bit-logic idioms, pure-IR
 64-bit pair arithmetic idioms, and pure-IR byte-prefix/permutation idioms,
 pure-IR overflow-chain idioms, pure-IR select lookup-table idioms, and pure-IR
-nibble reduction idioms, alongside LLVM
+nibble reduction idioms, pure-IR SWAR bit tricks, pure-IR byte compare/mask
+idioms, pure-IR limb multiply/add idioms, and pure-IR select-network idioms,
+alongside LLVM
 bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
