@@ -848,6 +848,19 @@ enum F16CvtOp {
 }
 
 #[derive(Clone, Copy)]
+enum Bf16Tf32CvtOp {
+    Bf16RnRoundtrip,
+    Bf16RzRoundtrip,
+    Bf16RnReluRoundtrip,
+    Bf16x2Rn,
+    Bf16x2Rz,
+    Bf16x2RnRelu,
+    Tf32Rna,
+    Tf32Rn,
+    Tf32RzRelu,
+}
+
+#[derive(Clone, Copy)]
 enum GlobalLoadCacheOp {
     Default,
     Ca,
@@ -4001,6 +4014,13 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// Randomized bf16/bf16x2/tf32 conversion chain.
+    Bf16Tf32Cvt {
+        op: Bf16Tf32CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
     /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
     Scalar16Setp {
         cmp: CmpOp,
@@ -4866,6 +4886,17 @@ enum Inst {
     /// Predicated randomized half-precision conversion chain.
     PredicatedF16Cvt {
         op: F16CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated randomized bf16/bf16x2/tf32 conversion chain.
+    PredicatedBf16Tf32Cvt {
+        op: Bf16Tf32CvtOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -8149,6 +8180,40 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_bf16_tf32_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            Bf16Tf32CvtOp::Bf16RnRoundtrip,
+            Bf16Tf32CvtOp::Bf16RzRoundtrip,
+            Bf16Tf32CvtOp::Bf16RnReluRoundtrip,
+            Bf16Tf32CvtOp::Bf16x2Rn,
+            Bf16Tf32CvtOp::Bf16x2Rz,
+            Bf16Tf32CvtOp::Bf16x2RnRelu,
+            Bf16Tf32CvtOp::Tf32Rna,
+            Bf16Tf32CvtOp::Tf32Rn,
+            Bf16Tf32CvtOp::Tf32RzRelu,
+        ];
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedBf16Tf32Cvt {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::Bf16Tf32Cvt {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_f16x2_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let pick = u.int_in_range(0..=2)?;
         if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
@@ -9132,6 +9197,12 @@ impl<'a> Generator<'a> {
             if self.cfg.emit_f16_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f16_cvt(u);
+            }
+            if self.cfg.emit_bf16_tf32_cvt
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_bf16_tf32_cvt(u);
             }
             if self.cfg.emit_f16_arith
                 && self.cfg.emit_bitwise_binops
@@ -10486,6 +10557,7 @@ impl<'a> Generator<'a> {
             | Inst::F16Arith { dst, .. }
             | Inst::F16x2Arith { dst, .. }
             | Inst::F16Cvt { dst, .. }
+            | Inst::Bf16Tf32Cvt { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::F16Selp { dst, .. }
@@ -10547,6 +10619,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedF16Arith { dst, .. }
             | Inst::PredicatedF16x2Arith { dst, .. }
             | Inst::PredicatedF16Cvt { dst, .. }
+            | Inst::PredicatedBf16Tf32Cvt { dst, .. }
             | Inst::PredicatedF16Selp { dst, .. }
             | Inst::PredicatedF16x2Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
@@ -11833,6 +11906,72 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn emit_bf16_tf32_cvt_chain(
+        &self,
+        s: &mut String,
+        op: Bf16Tf32CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: Option<u32>,
+    ) {
+        let guard = pred.map(pred_guard);
+        match op {
+            Bf16Tf32CvtOp::Bf16RnRoundtrip
+            | Bf16Tf32CvtOp::Bf16RzRoundtrip
+            | Bf16Tf32CvtOp::Bf16RnReluRoundtrip => {
+                let cvt = match op {
+                    Bf16Tf32CvtOp::Bf16RnRoundtrip => "cvt.rn.bf16.f32",
+                    Bf16Tf32CvtOp::Bf16RzRoundtrip => "cvt.rz.bf16.f32",
+                    Bf16Tf32CvtOp::Bf16RnReluRoundtrip => "cvt.rn.relu.bf16.f32",
+                    _ => unreachable!(),
+                };
+                self.emit_sanitized_f32_operand(s, 0, a);
+                writeln!(s, "    mov.b16       %h0, 0;").unwrap();
+                writeln!(s, "    mov.b32       %f1, 0f00000000;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} {cvt} %h0, %f0;").unwrap();
+                    writeln!(s, "    {guard} cvt.f32.bf16 %f1, %h0;").unwrap();
+                } else {
+                    writeln!(s, "    {cvt:<13} %h0, %f0;").unwrap();
+                    writeln!(s, "    cvt.f32.bf16 %f1, %h0;").unwrap();
+                }
+                writeln!(s, "    mov.b32       %r{dst}, %f1;").unwrap();
+            }
+            Bf16Tf32CvtOp::Bf16x2Rn | Bf16Tf32CvtOp::Bf16x2Rz | Bf16Tf32CvtOp::Bf16x2RnRelu => {
+                let cvt = match op {
+                    Bf16Tf32CvtOp::Bf16x2Rn => "cvt.rn.bf16x2.f32",
+                    Bf16Tf32CvtOp::Bf16x2Rz => "cvt.rz.bf16x2.f32",
+                    Bf16Tf32CvtOp::Bf16x2RnRelu => "cvt.rn.relu.bf16x2.f32",
+                    _ => unreachable!(),
+                };
+                self.emit_sanitized_f32_operand(s, 0, a);
+                self.emit_sanitized_f32_operand(s, 1, b);
+                writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} {cvt} %r{dst}, %f0, %f1;").unwrap();
+                } else {
+                    writeln!(s, "    {cvt:<13} %r{dst}, %f0, %f1;").unwrap();
+                }
+            }
+            Bf16Tf32CvtOp::Tf32Rna | Bf16Tf32CvtOp::Tf32Rn | Bf16Tf32CvtOp::Tf32RzRelu => {
+                let cvt = match op {
+                    Bf16Tf32CvtOp::Tf32Rna => "cvt.rna.tf32.f32",
+                    Bf16Tf32CvtOp::Tf32Rn => "cvt.rn.tf32.f32",
+                    Bf16Tf32CvtOp::Tf32RzRelu => "cvt.rz.relu.tf32.f32",
+                    _ => unreachable!(),
+                };
+                self.emit_sanitized_f32_operand(s, 0, a);
+                writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} {cvt} %r{dst}, %f0;").unwrap();
+                } else {
+                    writeln!(s, "    {cvt:<13} %r{dst}, %f0;").unwrap();
+                }
+            }
+        }
+    }
+
     fn emit_raw_f32_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
         let cvt = if signed {
             "cvt.rn.f32.s32"
@@ -11999,6 +12138,9 @@ impl<'a> Generator<'a> {
             }
             Inst::F16Cvt { op, dst, a, b } => {
                 self.emit_f16_cvt_chain(s, op, dst, a, b, None);
+            }
+            Inst::Bf16Tf32Cvt { op, dst, a, b } => {
+                self.emit_bf16_tf32_cvt_chain(s, op, dst, a, b, None);
             }
             Inst::Scalar16Setp {
                 cmp,
@@ -14187,6 +14329,19 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 self.emit_f16_cvt_chain(s, op, dst, a, b, Some(pred));
+            }
+            Inst::PredicatedBf16Tf32Cvt {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_bf16_tf32_cvt_chain(s, op, dst, a, b, Some(pred));
             }
             Inst::PredicatedF16Selp {
                 cmp,
@@ -20415,6 +20570,7 @@ mod tests {
             CVT_MNEMONICS.contains(&op)
                 || F32_CVT_MNEMONICS.contains(&op)
                 || F64_CVT_MNEMONICS.contains(&op)
+                || BF16_TF32_CVT_MNEMONICS.contains(&op)
         })
     }
 
@@ -25115,6 +25271,65 @@ mod tests {
     #[test]
     fn bf16_tf32_cvt_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, BF16_TF32_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn randomized_bf16_tf32_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_compare: false,
+            emit_f16_cvt: false,
+            ..coverage_heavy_config()
+        };
+
+        let baseline_cfg = GenConfig {
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 0,
+            max_insts_per_block: 0,
+            ..cfg.clone()
+        };
+        let baseline_ptx =
+            generate_from_bytes_with_config(&bytes_from_seed(0, 1024), &baseline_cfg).unwrap();
+        let baseline: Vec<_> = BF16_TF32_CVT_MNEMONICS
+            .iter()
+            .map(|mnemonic| mnemonic_occurrences(&baseline_ptx, mnemonic))
+            .collect();
+        let mut found_extra = vec![false; BF16_TF32_CVT_MNEMONICS.len()];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in BF16_TF32_CVT_MNEMONICS.iter().enumerate() {
+                found_extra[i] |= mnemonic_occurrences(&ptx, mnemonic) > baseline[i];
+            }
+            if found_extra.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = BF16_TF32_CVT_MNEMONICS
+            .iter()
+            .zip(found_extra)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit randomized bf16/tf32 conversion mnemonics beyond the deterministic prologue: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_randomized_bf16_tf32_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_compare: false,
+            emit_f16_cvt: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, BF16_TF32_CVT_MNEMONICS);
     }
 
     #[test]

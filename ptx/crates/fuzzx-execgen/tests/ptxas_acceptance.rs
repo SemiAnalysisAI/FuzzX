@@ -368,6 +368,7 @@ fn ptxas_accepts_bf16_tf32_conversion_at_both_opt_levels() {
     .param .u64 out_ptr
 )
 {{
+    .reg .pred %p<2>;
     .reg .b16 %h<8>;
     .reg .b32 %r<8>;
     .reg .b64 %rd<1>;
@@ -401,6 +402,35 @@ fn ptxas_accepts_bf16_tf32_conversion_at_both_opt_levels() {
     cvt.u32.u16 %r7, %h0;
     add.u32 %r2, %r2, %r7;
     cvt.u32.u16 %r7, %h1;
+    add.u32 %r2, %r2, %r7;
+    setp.ne.u32 %p0, %r0, %r1;
+    mov.b16 %h3, 0;
+    @%p0 cvt.rn.bf16.f32 %h3, %f0;
+    @%p0 cvt.f32.bf16 %f2, %h3;
+    mov.b32 %r7, %f2;
+    add.u32 %r2, %r2, %r7;
+    mov.b16 %h4, 0;
+    @%p0 cvt.rz.bf16.f32 %h4, %f1;
+    @%p0 cvt.f32.bf16 %f3, %h4;
+    mov.b32 %r7, %f3;
+    add.u32 %r2, %r2, %r7;
+    mov.b16 %h5, 0;
+    @%p0 cvt.rn.relu.bf16.f32 %h5, %f0;
+    @%p0 cvt.f32.bf16 %f4, %h5;
+    mov.b32 %r7, %f4;
+    add.u32 %r2, %r2, %r7;
+    mov.u32 %r7, 0;
+    @%p0 cvt.rn.bf16x2.f32 %r7, %f0, %f1;
+    add.u32 %r2, %r2, %r7;
+    @%p0 cvt.rz.bf16x2.f32 %r7, %f0, %f1;
+    add.u32 %r2, %r2, %r7;
+    @%p0 cvt.rn.relu.bf16x2.f32 %r7, %f0, %f1;
+    add.u32 %r2, %r2, %r7;
+    @%p0 cvt.rna.tf32.f32 %r7, %f0;
+    add.u32 %r2, %r2, %r7;
+    @%p0 cvt.rn.tf32.f32 %r7, %f1;
+    add.u32 %r2, %r2, %r7;
+    @%p0 cvt.rz.relu.tf32.f32 %r7, %f0;
     add.u32 %r2, %r2, %r7;
     st.global.u32 [%rd0], %r2;
     ret;
