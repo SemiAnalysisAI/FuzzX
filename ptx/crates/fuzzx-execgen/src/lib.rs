@@ -5565,6 +5565,7 @@ struct Generator<'a> {
     blocks: Vec<Block>,
     prmt_result_regs: Vec<u32>,
     set_result_regs: Vec<u32>,
+    lop3_result_regs: Vec<u32>,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -5583,6 +5584,7 @@ impl<'a> Generator<'a> {
             blocks: Vec::new(),
             prmt_result_regs: Vec::new(),
             set_result_regs: Vec::new(),
+            lop3_result_regs: Vec::new(),
             counters: Vec::new(),
         }
     }
@@ -5725,6 +5727,13 @@ impl<'a> Generator<'a> {
         let operand = self.pick_operand(u)?;
         Ok(if op == BinOp::Xor && !self.cfg.emit_not {
             sanitize_xor_not_operand(operand)
+        } else if op == BinOp::Xor
+            && matches!(operand, Operand::Reg(reg) if self.lop3_result_regs.contains(&reg))
+        {
+            // m002-style `lop3`/`xor` truth-table folds remain live in current
+            // ptxas. Keep lop3 coverage, but avoid immediately consuming those
+            // results with xor and rediscovering the same family.
+            Operand::Imm(0)
         } else {
             operand
         })
@@ -9542,10 +9551,12 @@ impl<'a> Generator<'a> {
     fn forget_tracked_write(&mut self, dst: u32) {
         self.prmt_result_regs.retain(|reg| *reg != dst);
         self.set_result_regs.retain(|reg| *reg != dst);
+        self.lop3_result_regs.retain(|reg| *reg != dst);
     }
 
     fn remember_prmt_write(&mut self, dst: u32) {
         self.set_result_regs.retain(|reg| *reg != dst);
+        self.lop3_result_regs.retain(|reg| *reg != dst);
         if !self.prmt_result_regs.contains(&dst) {
             self.prmt_result_regs.push(dst);
         }
@@ -9553,8 +9564,17 @@ impl<'a> Generator<'a> {
 
     fn remember_set_write(&mut self, dst: u32) {
         self.prmt_result_regs.retain(|reg| *reg != dst);
+        self.lop3_result_regs.retain(|reg| *reg != dst);
         if !self.set_result_regs.contains(&dst) {
             self.set_result_regs.push(dst);
+        }
+    }
+
+    fn remember_lop3_write(&mut self, dst: u32) {
+        self.prmt_result_regs.retain(|reg| *reg != dst);
+        self.set_result_regs.retain(|reg| *reg != dst);
+        if !self.lop3_result_regs.contains(&dst) {
+            self.lop3_result_regs.push(dst);
         }
     }
 
@@ -9581,6 +9601,9 @@ impl<'a> Generator<'a> {
             }
             Inst::Prmt { dst, .. } | Inst::PredicatedPrmt { dst, .. } => {
                 self.remember_prmt_write(*dst);
+            }
+            Inst::Lop3 { dst, .. } | Inst::PredicatedLop3 { dst, .. } => {
+                self.remember_lop3_write(*dst);
             }
             Inst::AddCarry { dst_lo, dst_hi, .. }
             | Inst::PredicatedAddCarry { dst_lo, dst_hi, .. }
@@ -9749,8 +9772,6 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedMad { dst, .. }
             | Inst::MadHi { dst, .. }
             | Inst::PredicatedMadHi { dst, .. }
-            | Inst::Lop3 { dst, .. }
-            | Inst::PredicatedLop3 { dst, .. }
             | Inst::Funnel { dst, .. }
             | Inst::RegFunnel { dst, .. }
             | Inst::PredicatedFunnel { dst, .. }

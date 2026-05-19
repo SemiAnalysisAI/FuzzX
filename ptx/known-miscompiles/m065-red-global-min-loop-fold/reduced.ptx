@@ -1,0 +1,174 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.const .align 16 .b8 fuzzx_const[64] = {3,20,37,54,71,88,105,122,139,156,173,190,207,224,241,2,19,36,53,70,87,104,121,138,155,172,189,206,223,240,1,18,35,52,69,86,103,120,137,154,171,188,205,222,239,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255,16,33,50};
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<25>;
+    .reg .b16   %h<4>;
+    .reg .b32   %r<12>;
+    .reg .b64   %rd<10>;
+    .reg .f32   %f<4>;
+    .reg .f64   %fd<4>;
+    .local .align 16 .b8 fuzzx_local[64];
+    .shared .align 16 .b8 fuzzx_shared[512];
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r8, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r8, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r8;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r8;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    mov.u32         %r9, 10;
+    mov.u32         %r10, 16;
+
+    bra             block_0;
+
+block_0:
+    setp.ge.s32   %p0, %r7, %r5;
+    and.b32       %r11, %r5, 1023;
+    add.u32       %r11, %r11, 1;
+    cvt.rn.f64.u32 %fd0, %r11;
+    mov.f64       %fd1, %fd0;
+    @!%p0 rcp.rn.f64 %fd1, %fd0;
+    cvt.rzi.s32.f64 %r6, %fd1;
+    setp.lt.u32   %p3, %r5, %r6;
+    and.b32       %r11, 13, 1023;
+    cvt.rn.f32.u32 %f0, %r11;
+    and.b32       %r11, %r6, 1023;
+    cvt.rn.f32.u32 %f1, %r11;
+    setp.ne.xor.f32 %p4, %f0, %f1, %p3;
+    setp.ge.s32   %p5, 9, %r6;
+    @%p5 bra   block_1;
+    bra             block_3;
+
+block_1:
+    setp.lt.s32   %p6, %r3, %r0;
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32  %rd9, %r8, 16;
+    add.s64       %rd8, %rd8, %rd9;
+    @%p6 st.volatile.global.u8 [%rd8 + 13], %r7;
+    @%p6 ld.volatile.global.s8 %r3, [%rd8 + 13];
+    and.b32       %r11, %r4, 1023;
+    cvt.rn.f32.u32 %f0, %r11;
+    and.b32       %r11, 0, 1023;
+    cvt.rn.f32.u32 %f1, %r11;
+    setp.ge.ftz.f32 %p8, %f0, %f1;
+    selp.f32      %f2, %f0, %f1, %p8;
+    cvt.rzi.s32.f32 %r6, %f2;
+    setp.ne.u32   %p9, %r6, 2;
+    @%p9 bra   block_5;
+    bra             block_3;
+
+block_2:
+    mov.u64       %rd6, fuzzx_local;
+    st.local.u16  [%rd6 + 62], %r4;
+    ld.local.u16  %r7, [%rd6 + 62];
+    setp.eq.u32   %p10, %r9, 0;
+    @%p10 bra   loop_done_9;
+    sub.u32         %r9, %r9, 1;
+    bra             block_0;
+loop_done_9:
+    bra             block_7;
+
+block_3:
+    setp.le.s32   %p13, %r3, %r4;
+    setp.eq.u32   %p11, 10, %r4;
+    and.b32       %r11, %r4, 1023;
+    cvt.rn.f64.u32 %fd0, %r11;
+    and.b32       %r11, 0, 1023;
+    cvt.rn.f64.u32 %fd1, %r11;
+    setp.ne.u32   %p12, 0, 0;
+    @!%p13 setp.geu.or.f64 %p12, %fd0, %fd1, %p11;
+    setp.gt.s32   %p14, %r0, %r4;
+    and.b32       %r11, %r6, 63;
+    cvt.u64.u32   %rd6, %r4;
+    cvt.u64.u32   %rd7, 0;
+    @!%p14 bfi.b64  %rd6, %rd6, %rd7, %r11, 5;
+    @!%p14 mov.b64 {%r3, %r11}, %rd6;
+    and.b32       %r11, %r4, 31;
+    shr.u32       %r6, 29, %r11;
+    cvt.u16.u32   %h0, 0;
+    cvt.u16.u32   %h1, %r3;
+    set.gt.u32.u16 %r4, %h0, %h1;
+    setp.ne.u32   %p15, %r2, %r6;
+    mov.u64       %rd6, fuzzx_local;
+    mov.b64       %rd7, {%r0, %r0};
+    @%p15 st.local.u64 [%rd6 + 0], %rd7;
+    @%p15 ld.local.u64 %rd7, [%rd6 + 0];
+    @%p15 mov.b64 {%r5, %r11}, %rd7;
+    bra             block_4;
+
+block_4:
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32  %rd9, %r8, 16;
+    add.s64       %rd8, %rd8, %rd9;
+    st.volatile.global.u8 [%rd8 + 1], %r3;
+    ld.volatile.global.u8 %r3, [%rd8 + 1];
+    setp.eq.u32   %p16, 17, 29;
+    @%p16 cvt.s16.s32 %r11, %r2;
+    @%p16 cvt.s32.s16 %r7, %r11;
+    and.b32       %r11, %r5, 1023;
+    cvt.rn.f32.u32 %f0, %r11;
+    and.b32       %r11, %r2, 1023;
+    cvt.rn.f32.u32 %f1, %r11;
+    setp.neu.f32  %p17, %f0, %f1;
+    selp.f32      %f2, %f0, %f1, %p17;
+    cvt.rzi.s32.f32 %r3, %f2;
+    setp.gt.s32   %p18, %r2, 7;
+    cvt.u64.u32   %rd6, %r1;
+    cvt.u64.u32   %rd7, %r6;
+    @%p18 bfi.b64  %rd6, %rd6, %rd7, 23, 1;
+    @%p18 mov.b64 {%r5, %r11}, %rd6;
+    bra             block_5;
+
+block_5:
+    setp.lt.u32   %p19, %r5, %r2;
+    and.b32       %r11, 1431655765, 1023;
+    cvt.rn.f32.u32 %f0, %r11;
+    and.b32       %r11, %r5, 1023;
+    cvt.rn.f32.u32 %f1, %r11;
+    setp.gtu.ftz.and.f32 %p20, %f0, %f1, %p19;
+    cvta.to.global.u64 %rd6, %rd0;
+    ld.global.u16 %r2, [%rd6 + 8];
+    setp.ge.u32   %p21, %r1, 0;
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32  %rd9, %r8, 16;
+    add.s64       %rd8, %rd8, %rd9;
+    st.global.u32 [%rd8 + 8], %r6;
+    @%p21 red.global.min.u32 [%rd8 + 8], %r0;
+    ld.global.u32 %r11, [%rd8 + 8];
+    add.u32       %r6, %r6, %r11;
+    bra             block_6;
+
+block_6:
+    setp.eq.u32   %p23, %r10, 0;
+    @%p23 bra   loop_done_10;
+    sub.u32         %r10, %r10, 1;
+    bra             block_3;
+loop_done_10:
+    bra             block_7;
+
+block_7:
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r8, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    ret;
+}
