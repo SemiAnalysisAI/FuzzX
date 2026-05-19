@@ -1,0 +1,81 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.const .align 16 .b8 fuzzx_const[64] = {3,20,37,54,71,88,105,122,139,156,173,190,207,224,241,2,19,36,53,70,87,104,121,138,155,172,189,206,223,240,1,18,35,52,69,86,103,120,137,154,171,188,205,222,239,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255,16,33,50};
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<7>;
+    .reg .b16   %h<4>;
+    .reg .b32   %r<10>;
+    .reg .b64   %rd<10>;
+    .reg .f32   %f<4>;
+    .reg .f64   %fd<4>;
+    .local .align 16 .b8 fuzzx_local[64];
+    .shared .align 16 .b8 fuzzx_shared[512];
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r8, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r8, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r8;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r8;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+
+    bra             block_0;
+
+block_0:
+    mov.u64       %rd6, fuzzx_local;
+    st.local.b32  [%rd6 + 28], %r3;
+    ld.local.b32  %r4, [%rd6 + 28];
+    cvta.to.global.u64 %rd6, %rd0;
+    ldu.global.b8 %r1, [%rd6 + 28];
+    bra             block_1;
+
+block_1:
+    mov.u64       %rd6, fuzzx_shared;
+    mul.wide.u32  %rd7, %r8, 16;
+    add.s64       %rd6, %rd6, %rd7;
+    mov.b64       %rd7, {%r5, %r5};
+    st.shared.b64 [%rd6 + 8], %rd7;
+    ld.shared.b64 %rd7, [%rd6 + 8];
+    mov.b64       {%r6, %r9}, %rd7;
+    cvta.to.global.u64 %rd6, %rd0;
+    ld.volatile.global.b64 %rd7, [%rd6 + 80];
+    mov.b64       {%r4, %r9}, %rd7;
+    mov.u64       %rd6, fuzzx_const;
+    ld.const.u16  %r4, [%rd6 + 38];
+    bra             block_3;
+
+block_2:
+    bra             block_3;
+
+block_3:
+    add.s16x2     %r3, %r4, %r6;
+    setp.gt.u32   %p6, %r0, %r0;
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32  %rd9, %r8, 16;
+    add.s64       %rd8, %rd8, %rd9;
+    @%p6 st.volatile.global.b16 [%rd8 + 2], %r5;
+    @%p6 ld.volatile.global.b16 %r4, [%rd8 + 2];
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r8, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    st.global.u32   [%rd4 + 12], %r3;
+    ret;
+}

@@ -124,6 +124,7 @@ Version | Description |
 | 13.2.78 | [m069-wide-subc-loop-borrow-fold](known-miscompiles/m069-wide-subc-loop-borrow-fold/NOTES.md): Loop-carried state around a predicated `sub.cc.u64` / `subc.u64` pair drops the borrow/value feeding the final live-out. |
 | 13.2.78 | [m070-lop3-loop-liveout-fold](known-miscompiles/m070-lop3-loop-liveout-fold/NOTES.md): Loop-carried `lop3.b32` live-out is replaced with the original input-size value under optimized ptxas. |
 | 13.2.78 | [m071-f32-neg-loop-liveout-fold](known-miscompiles/m071-f32-neg-loop-liveout-fold/NOTES.md): Loop-carried `neg.f32` / `cvt.rzi.s32.f32` live-out is replaced with the original input word under optimized ptxas. |
+| 13.2.78 | [m072-const-u16-highbits-fold](known-miscompiles/m072-const-u16-highbits-fold/NOTES.md): `ld.const.u16` into a reused 32-bit register preserves stale high bits under optimized ptxas. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
