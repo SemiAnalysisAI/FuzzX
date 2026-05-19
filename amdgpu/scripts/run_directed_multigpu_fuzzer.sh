@@ -82,6 +82,12 @@ import_one_corpus_entry() {
     [[ -s "$src" ]] || return 0
     sum="$(cksum <"$src" | awk '{print $1 "-" $2}')"
     base="$(basename "$src")"
+    # Strip any chain of existing import-<cksum>- prefixes so re-importing a
+    # corpus that already contains imported files does not compound the
+    # filename past the OS limit across many generations.
+    while [[ "$base" =~ ^import-[0-9]+-[0-9]+- ]]; do
+        base="${base#import-*-*-}"
+    done
     target="$dst/import-$sum-$base"
     [[ -e "$target" ]] && return 0
     cp -p "$src" "$target" 2>/dev/null || cp "$src" "$target"

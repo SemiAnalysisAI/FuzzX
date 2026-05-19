@@ -256,6 +256,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M062_BYTEHIST_BITMUX=1` | unset | Re-enable final stores depending on both generated `bytehist` and `bitmux` values for [m062](known-miscompiles/m062-bytehist-bitmux-lowbyte/NOTES.md). |
 | `FUZZX_ALLOW_M063_OVERFLOW_CARRY_BITOP3=1` | unset | Re-enable final stores depending on generated `carry` values for [m063](known-miscompiles/m063-overflow-carry-bitop3/NOTES.md). |
 | `FUZZX_ALLOW_M064_NIBBLECARRY_LOOP=1` | unset | Re-enable loop-carried final stores depending on generated `nibblecarry` values for [m064](known-miscompiles/m064-nibblecarry-loop-readfirstlane/NOTES.md). |
+| `FUZZX_ALLOW_M065_USUB_OVERFLOW_XOR_FOLD=1` | unset | Re-enable final stores depending on generated `ovbytegather` values for [m065](known-miscompiles/m065-usub-overflow-xor-fold/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -361,6 +362,7 @@ Tested toolchains as of 2026-05-19:
 | [m062-bytehist-bitmux-lowbyte](known-miscompiles/m062-bytehist-bitmux-lowbyte/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` lower a bytehist/bitmux low-byte expression through `v_bitop3_b32` and store `0xb81c0001` instead of the oracle/`-O2` result `0xb81c0002`; ROCm 7.2.3 passes. |
 | [m063-overflow-carry-bitop3](known-miscompiles/m063-overflow-carry-bitop3/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` lower an overflow-derived duplicated carry expression through `v_bitop3_b32` and store `0x6` instead of the oracle/`-O2` result `0x2`; ROCm 7.2.3 passes. |
 | [m064-nibblecarry-loop-readfirstlane](known-miscompiles/m064-nibblecarry-loop-readfirstlane/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` scalarize a divergent nibble-carry-derived loop value through `v_readfirstlane_b32` and store `0x1805d9` instead of the oracle/`-O2` result `0xc1b09`; ROCm 7.2.3 passes. |
+| [m065-usub-overflow-xor-fold](known-miscompiles/m065-usub-overflow-xor-fold/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` fold `(lane ^ fold) & 1` after `usub.with.overflow` into a single `v_bitop3_b32` with the wrong truth table, storing `0x0` instead of the oracle/`-O2` result `0x1`; ROCm 7.2.3 passes. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

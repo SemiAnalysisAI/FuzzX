@@ -1839,6 +1839,20 @@ bool triggersM063OverflowCarryStore(const Instruction &I) {
                              "fuzz.cfg.carry.idiom", Seen);
 }
 
+bool triggersM065OvByteGatherStore(const Instruction &I) {
+  const auto *Store = dyn_cast<StoreInst>(&I);
+  if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(Store->getValueOperand(),
+                          "fuzz.ovbytegather.idiom", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Store->getValueOperand(),
+                             "fuzz.cfg.ovbytegather.idiom", Seen);
+}
+
 bool triggersM064NibbleCarryLoopStore(const Instruction &I) {
   const auto *Store = dyn_cast<StoreInst>(&I);
   if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
@@ -1976,6 +1990,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM062 = envFlag("FUZZX_ALLOW_M062_BYTEHIST_BITMUX", false);
   bool AllowM063 = envFlag("FUZZX_ALLOW_M063_OVERFLOW_CARRY_BITOP3", false);
   bool AllowM064 = envFlag("FUZZX_ALLOW_M064_NIBBLECARRY_LOOP", false);
+  bool AllowM065 = envFlag("FUZZX_ALLOW_M065_USUB_OVERFLOW_XOR_FOLD", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -2026,6 +2041,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM062 && triggersM062ByteHistBitmuxStore(I)) ||
               (!AllowM063 && triggersM063OverflowCarryStore(I)) ||
               (!AllowM064 && triggersM064NibbleCarryLoopStore(I)) ||
+              (!AllowM065 && triggersM065OvByteGatherStore(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
