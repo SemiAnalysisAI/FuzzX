@@ -394,6 +394,16 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     ret;
 }}
 
+.func (.reg .b64 ret0) fuzzx_wide_helper(.reg .b64 a, .reg .b64 b, .reg .b32 c)
+{{
+    .reg .b64 %whr<3>;
+    shl.b64 %whr0, a, 13;
+    xor.b64 %whr1, %whr0, b;
+    cvt.u64.u32 %whr2, c;
+    add.u64 ret0, %whr1, %whr2;
+    ret;
+}}
+
 .func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)
 {{
     .reg .b32 %phr<3>;
@@ -409,7 +419,7 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
 )
 {{
     .reg .b32 %r<8>;
-    .reg .b64 %rd<1>;
+    .reg .b64 %rd<5>;
     .param .b32 fuzzx_param_ret;
     .param .b32 fuzzx_param_a;
     .param .b32 fuzzx_param_b;
@@ -431,6 +441,17 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     add.u32 %r6, %r6, %r7;
     st.param.b32 [fuzzx_param_a], %r6;
     call.uni (%r7), fuzzx_mixed_param_helper, (%r3, fuzzx_param_a, %r4);
+    add.u32 %r6, %r6, %r7;
+    cvt.u64.u32 %rd1, %r6;
+    shl.b64 %rd1, %rd1, 32;
+    cvt.u64.u32 %rd2, %r7;
+    or.b64 %rd1, %rd1, %rd2;
+    cvt.u64.u32 %rd2, %r0;
+    call.uni (%rd3), fuzzx_wide_helper, (%rd1, %rd2, %r5);
+    cvt.u32.u64 %r7, %rd3;
+    shr.u64 %rd4, %rd3, 32;
+    cvt.u32.u64 %r5, %rd4;
+    xor.b32 %r7, %r7, %r5;
     add.u32 %r6, %r6, %r7;
     st.global.u32 [%rd0], %r6;
     ret;
