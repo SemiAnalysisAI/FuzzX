@@ -11886,6 +11886,8 @@ impl<'a> Generator<'a> {
         }
         if self.cfg.emit_f16_arith {
             let scratch = self.wide_scratch_hi_reg();
+            let s1 = self.scratch_reg(1);
+            let s2 = self.scratch_reg(2);
             writeln!(s, "    add.rn.f16      %h2, %h0, %h1;").unwrap();
             writeln!(s, "    sub.rn.f16      %h2, %h2, %h0;").unwrap();
             writeln!(s, "    mul.rn.f16      %h2, %h2, %h1;").unwrap();
@@ -11896,17 +11898,22 @@ impl<'a> Generator<'a> {
             writeln!(s, "    neg.f16         %h3, %h2;").unwrap();
             writeln!(s, "    cvt.u32.u16     %r{scratch}, %h3;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    mov.b32         %r1, 0x3c004000;").unwrap();
-            writeln!(s, "    mov.b32         %r2, 0x40003c00;").unwrap();
-            writeln!(s, "    add.rn.f16x2    %r1, %r1, %r2;").unwrap();
-            writeln!(s, "    sub.rn.f16x2    %r1, %r1, %r2;").unwrap();
-            writeln!(s, "    mul.rn.f16x2    %r1, %r1, %r2;").unwrap();
-            writeln!(s, "    fma.rn.f16x2    %r1, %r1, %r2, %r2;").unwrap();
-            writeln!(s, "    min.f16x2       %r1, %r1, %r2;").unwrap();
-            writeln!(s, "    max.f16x2       %r1, %r1, %r2;").unwrap();
-            writeln!(s, "    abs.f16x2       %r1, %r1;").unwrap();
-            writeln!(s, "    neg.f16x2       %r1, %r1;").unwrap();
-            writeln!(s, "    add.u32         %r0, %r0, %r1;").unwrap();
+            // Use scratch regs (not %r1/%r2 output pool) for the f16x2
+            // operand setup. Leaving these constants in %r1/%r2 lets
+            // ptxas's predicate-guarded-write fold (m085 family) leak the
+            // f16x2 packed bit pattern (0x3c004000 / 0x40003c00) into the
+            // per-thread output store.
+            writeln!(s, "    mov.b32         %r{s1}, 0x3c004000;").unwrap();
+            writeln!(s, "    mov.b32         %r{s2}, 0x40003c00;").unwrap();
+            writeln!(s, "    add.rn.f16x2    %r{s1}, %r{s1}, %r{s2};").unwrap();
+            writeln!(s, "    sub.rn.f16x2    %r{s1}, %r{s1}, %r{s2};").unwrap();
+            writeln!(s, "    mul.rn.f16x2    %r{s1}, %r{s1}, %r{s2};").unwrap();
+            writeln!(s, "    fma.rn.f16x2    %r{s1}, %r{s1}, %r{s2}, %r{s2};").unwrap();
+            writeln!(s, "    min.f16x2       %r{s1}, %r{s1}, %r{s2};").unwrap();
+            writeln!(s, "    max.f16x2       %r{s1}, %r{s1}, %r{s2};").unwrap();
+            writeln!(s, "    abs.f16x2       %r{s1}, %r{s1};").unwrap();
+            writeln!(s, "    neg.f16x2       %r{s1}, %r{s1};").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{s1};").unwrap();
         }
         if self.cfg.emit_f16_compare {
             let scratch = self.wide_scratch_hi_reg();
