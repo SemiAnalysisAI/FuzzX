@@ -145,6 +145,7 @@ pub struct GenConfig {
     pub emit_f32_selp: bool,
     pub emit_f16_arith: bool,
     pub emit_f16_compare: bool,
+    pub emit_f16_cvt: bool,
     pub emit_f64_arith: bool,
     pub emit_f64_rounding: bool,
     pub emit_f64_unary: bool,
@@ -389,6 +390,7 @@ impl Default for GenConfig {
             emit_f32_selp: true,
             emit_f16_arith: true,
             emit_f16_compare: true,
+            emit_f16_cvt: true,
             emit_f64_arith: true,
             emit_f64_rounding: true,
             emit_f64_unary: true,
@@ -10370,7 +10372,7 @@ impl<'a> Generator<'a> {
             writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p2;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
-        if self.cfg.emit_f16_arith || self.cfg.emit_f16_compare {
+        if self.cfg.emit_f16_arith || self.cfg.emit_f16_compare || self.cfg.emit_f16_cvt {
             writeln!(s, "    mov.b16         %h0, 0x3c00;").unwrap();
             writeln!(s, "    mov.b16         %h1, 0x4000;").unwrap();
         }
@@ -10415,6 +10417,27 @@ impl<'a> Generator<'a> {
             writeln!(s, "    cvt.u32.u16     %r{scratch}, %h2;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    cvt.u32.u16     %r{scratch}, %h3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
+        if self.cfg.emit_f16_cvt {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    cvt.f32.f16     %f0, %h0;").unwrap();
+            writeln!(s, "    cvt.f32.f16     %f1, %h1;").unwrap();
+            writeln!(s, "    cvt.rn.f16.f32  %h2, %f0;").unwrap();
+            writeln!(s, "    cvt.f64.f16     %fd0, %h2;").unwrap();
+            writeln!(s, "    cvt.rn.f16.f64  %h3, %fd0;").unwrap();
+            writeln!(s, "    cvt.rzi.u32.f16 %r{scratch}, %h3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.rzi.s32.f16 %r{scratch}, %h3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.u32         %r{scratch}, 3;").unwrap();
+            writeln!(s, "    cvt.rn.f16.u32  %h2, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.rn.f16.s32  %h3, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.u32.u16     %r{scratch}, %h2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.u32.u16     %r{scratch}, %h3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.rn.f16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_warp_barriers {
@@ -17360,6 +17383,17 @@ mod tests {
         "setp.ge.f16",
         "selp.b16",
     ];
+    const F16_CVT_MNEMONICS: &[&str] = &[
+        "cvt.f32.f16",
+        "cvt.rn.f16.f32",
+        "cvt.f64.f16",
+        "cvt.rn.f16.f64",
+        "cvt.rzi.u32.f16",
+        "cvt.rzi.s32.f16",
+        "cvt.rn.f16.u32",
+        "cvt.rn.f16.s32",
+        "cvt.rn.f16x2.f32",
+    ];
     const F64_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f64",
         "sub.rn.f64",
@@ -17962,6 +17996,7 @@ mod tests {
             F32_SELP_MNEMONICS,
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
+            F16_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
@@ -18051,6 +18086,7 @@ mod tests {
             F32_SELP_MNEMONICS,
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
+            F16_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
@@ -23007,6 +23043,27 @@ mod tests {
             assert!(
                 !has_mnemonic(&ptx, mnemonic),
                 "disabled f16 compare still emitted {mnemonic}"
+            );
+        }
+    }
+
+    #[test]
+    fn f16_cvt_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, F16_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn f16_cvt_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f16_cvt: false,
+            ..coverage_heavy_config()
+        };
+
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
+        for mnemonic in F16_CVT_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled f16 conversion still emitted {mnemonic}"
             );
         }
     }

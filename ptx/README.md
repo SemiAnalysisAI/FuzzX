@@ -106,6 +106,7 @@ Version | Description |
 | 13.2.78 | [m019-structured-loop-uniform-counter](known-miscompiles/m019-structured-loop-uniform-counter/NOTES.md): Structured loop counters are promoted to uniform state and lose per-lane values. |
 | 13.2.78 | [m020-mixed-minmax-signedness-fold](known-miscompiles/m020-mixed-minmax-signedness-fold/NOTES.md): Mixed signed/unsigned `min` / `max` fold drops the runtime input. |
 | 13.2.78 | [m021-cnot-funnel-add](known-miscompiles/m021-cnot-funnel-add/NOTES.md): `shf.r.wrap.b32` plus add fold loses part of the shifted value. |
+| 13.2.78 | [m081-cnot-shf-left-add](known-miscompiles/m081-cnot-shf-left-add/NOTES.md): Likely related to m021; `cnot.b32` feeding `shf.l.wrap.b32` plus add flips the shifted contribution under optimized ptxas. |
 | 13.2.78 | [m022-neg-funnel-left-add](known-miscompiles/m022-neg-funnel-left-add/NOTES.md): `neg.s32` plus `shf.l.wrap.b32` fold produces a sign-extension-shaped error. |
 | 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/NOTES.md): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
 | 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/NOTES.md): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
@@ -334,6 +335,7 @@ that feature.
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32`, including `.ftz` forms, feeding `selp.f32`. |
 | `DIV_DISABLE_F16_ARITH` | Deterministic prologue coverage for scalar `.f16` and packed `.f16x2` add/sub/mul/fma/min/max/abs/neg. |
 | `DIV_DISABLE_F16_COMPARE` | Deterministic prologue coverage for scalar `.f16` `set`, `setp`, and predicate-fed `selp.b16`. |
+| `DIV_DISABLE_F16_CVT` | Deterministic prologue coverage for `.f16` conversion chains through f32, f64, integer, and packed `.f16x2` forms. |
 | `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f64` arithmetic. |
 | `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F64_UNARY` | Sanitized `abs.f64` and `neg.f64`. |

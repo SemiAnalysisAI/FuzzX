@@ -91,6 +91,8 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
     .reg .b16 %h<4>;
     .reg .b32 %r<6>;
     .reg .b64 %rd<1>;
+    .reg .f32 %f<2>;
+    .reg .f64 %fd<1>;
 
     ld.param.u64 %rd0, [out_ptr];
     mov.b16 %h0, 0x3c00;
@@ -117,6 +119,24 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
     cvt.u32.u16 %r2, %h3;
     add.u32 %r0, %r0, %r2;
     cvt.u32.u16 %r2, %h2;
+    add.u32 %r0, %r0, %r2;
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+    cvt.rn.f16.f32 %h2, %f0;
+    cvt.f64.f16 %fd0, %h2;
+    cvt.rn.f16.f64 %h3, %fd0;
+    cvt.rzi.u32.f16 %r2, %h3;
+    add.u32 %r0, %r0, %r2;
+    cvt.rzi.s32.f16 %r2, %h3;
+    add.u32 %r0, %r0, %r2;
+    mov.u32 %r2, 3;
+    cvt.rn.f16.u32 %h2, %r2;
+    cvt.rn.f16.s32 %h3, %r2;
+    cvt.u32.u16 %r2, %h2;
+    add.u32 %r0, %r0, %r2;
+    cvt.u32.u16 %r2, %h3;
+    add.u32 %r0, %r0, %r2;
+    cvt.rn.f16x2.f32 %r2, %f0, %f1;
     add.u32 %r0, %r0, %r2;
     mov.b32 %r3, 0x3c004000;
     mov.b32 %r4, 0x40003c00;
