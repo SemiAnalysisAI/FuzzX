@@ -1,0 +1,549 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.const .align 16 .b8 fuzzx_const[64] = {3,20,37,54,71,88,105,122,139,156,173,190,207,224,241,2,19,36,53,70,87,104,121,138,155,172,189,206,223,240,1,18,35,52,69,86,103,120,137,154,171,188,205,222,239,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255,16,33,50};
+
+.func (.reg .b32 ret0) fuzzx_helper(.reg .b32 a, .reg .b32 b)
+{
+    add.u32         ret0, a, b;
+    ret;
+}
+
+.func (.reg .b32 ret0, .reg .b32 ret1) fuzzx_helper_pair(.reg .b32 a, .reg .b32 b, .reg .b32 c)
+{
+    add.u32         ret0, a, b;
+    xor.b32         ret1, ret0, c;
+    ret;
+}
+
+.func (.reg .b32 ret0) fuzzx_helper_chain(.reg .b32 a, .reg .b32 b, .reg .b32 c, .reg .b32 d)
+{
+    xor.b32         ret0, a, b;
+    add.u32         ret0, ret0, c;
+    xor.b32         ret0, ret0, d;
+    ret;
+}
+
+.func (.reg .b32 ret0) fuzzx_nested_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c, .reg .b32 d)
+{
+    .reg .b32       %nhr<4>;
+    call.uni        (%nhr0, %nhr1), fuzzx_helper_pair, (a, b, c);
+    call            (%nhr2), fuzzx_helper_chain, (%nhr0, %nhr1, c, d);
+    xor.b32         %nhr3, %nhr2, a;
+    add.u32         ret0, %nhr3, b;
+    ret;
+}
+
+.func (.reg .b64 ret0) fuzzx_wide_helper(.reg .b64 a, .reg .b64 b, .reg .b32 c)
+{
+    .reg .b64       %whr<3>;
+    shl.b64         %whr0, a, 13;
+    xor.b64         %whr1, %whr0, b;
+    cvt.u64.u32     %whr2, c;
+    add.u64         ret0, %whr1, %whr2;
+    ret;
+}
+
+.func (.reg .b32 ret0, .reg .b64 ret1) fuzzx_mixed_return_helper(.reg .b32 a, .reg .b64 b, .reg .b32 c)
+{
+    .reg .b64       %mrr<2>;
+    add.u32         ret0, a, c;
+    cvt.u64.u32     %mrr0, ret0;
+    shl.b64         %mrr1, %mrr0, 7;
+    xor.b64         ret1, b, %mrr1;
+    ret;
+}
+
+.func (.reg .f32 ret0) fuzzx_f32_bit_helper(.reg .f32 a, .reg .f32 b, .reg .b32 c)
+{
+    mov.b32         ret0, a;
+    ret;
+}
+
+.func (.reg .f64 ret0) fuzzx_f64_bit_helper(.reg .f64 a, .reg .f64 b, .reg .b32 c)
+{
+    mov.b64         ret0, a;
+    ret;
+}
+
+.func (.reg .b32 ret0) fuzzx_predicated_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c)
+{
+    .reg .pred      %phpr<2>;
+    .reg .b32       %phrr<2>;
+    setp.lo.u32     %phpr0, a, b;
+    selp.u32        %phrr0, a, b, %phpr0;
+    setp.eq.u32     %phpr1, c, 0;
+    mov.u32         %phrr1, %phrr0;
+    @%phpr1 xor.b32 %phrr1, %phrr1, 0x5a5a5a5a;
+    add.u32         ret0, %phrr1, c;
+    ret;
+}
+
+.func (.reg .b32 ret0) fuzzx_mixed_param_helper(.reg .b32 a, .param .b32 b, .reg .b32 c)
+{
+    .reg .b32       %mphr<2>;
+    ld.param.u32    %mphr0, [b];
+    add.u32         %mphr1, a, %mphr0;
+    xor.b32         ret0, %mphr1, c;
+    ret;
+}
+
+.func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)
+{
+    .reg .b32       %phr<3>;
+    ld.param.u32    %phr0, [a];
+    ld.param.u32    %phr1, [b];
+    add.u32         %phr2, %phr0, %phr1;
+    st.param.b32    [ret0], %phr2;
+    ret;
+}
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<21>;
+    .reg .b16   %h<4>;
+    .reg .b32   %r<13>;
+    .reg .b64   %rd<10>;
+    .reg .f32   %f<4>;
+    .reg .f64   %fd<4>;
+    .param .b32 fuzzx_param_ret;
+    .param .b32 fuzzx_param_a;
+    .param .b32 fuzzx_param_b;
+    .local .align 16 .b8 fuzzx_local[64];
+    .shared .align 16 .b8 fuzzx_shared[512];
+
+    ld.param.u64    %rd0, [in_ptr];
+    ld.param.u64    %rd1, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.u32         %r8, %tid.x;
+    cvta.to.global.u64 %rd2, %rd0;
+    mul.wide.u32    %rd3, %r8, 4;
+    add.s64         %rd2, %rd2, %rd3;
+    ld.global.u32   %r2, [%rd2];
+    mov.u32         %r1, %r8;
+    mov.u32         %r3, %r0;
+    mov.u32         %r4, 4;
+    mov.u32         %r5, %r8;
+    mov.u32         %r6, %r2;
+    mov.u32         %r7, %r0;
+    call.uni        (%r9), fuzzx_helper, (%r8, %r2);
+    add.u32         %r0, %r0, %r9;
+    call.uni        (%r1, %r2), fuzzx_helper_pair, (%r8, %r0, %r2);
+    add.u32         %r0, %r0, %r1;
+    add.u32         %r0, %r0, %r2;
+    call            (%r9), fuzzx_helper_chain, (%r1, %r2, %r8, %r0);
+    add.u32         %r0, %r0, %r9;
+    st.param.b32    [fuzzx_param_a], %r0;
+    st.param.b32    [fuzzx_param_b], %r8;
+    call.uni        (fuzzx_param_ret), fuzzx_param_helper, (fuzzx_param_a, fuzzx_param_b);
+    ld.param.u32    %r9, [fuzzx_param_ret];
+    add.u32         %r0, %r0, %r9;
+    call            (%r9), fuzzx_nested_helper, (%r1, %r2, %r8, %r0);
+    add.u32         %r0, %r0, %r9;
+    st.param.b32    [fuzzx_param_a], %r0;
+    call.uni        (%r9), fuzzx_mixed_param_helper, (%r1, fuzzx_param_a, %r2);
+    add.u32         %r0, %r0, %r9;
+    cvt.u64.u32     %rd4, %r0;
+    shl.b64         %rd4, %rd4, 32;
+    cvt.u64.u32     %rd5, %r2;
+    or.b64          %rd4, %rd4, %rd5;
+    cvt.u64.u32     %rd5, %r8;
+    call.uni        (%rd8), fuzzx_wide_helper, (%rd4, %rd5, %r1);
+    cvt.u32.u64     %r9, %rd8;
+    shr.u64         %rd9, %rd8, 32;
+    cvt.u32.u64     %r1, %rd9;
+    xor.b32         %r9, %r9, %r1;
+    add.u32         %r0, %r0, %r9;
+    call.uni        (%r9), fuzzx_predicated_helper, (%r0, %r1, %r2);
+    add.u32         %r0, %r0, %r9;
+    cvt.u64.u32     %rd4, %r0;
+    shl.b64         %rd4, %rd4, 32;
+    cvt.u64.u32     %rd5, %r2;
+    or.b64          %rd4, %rd4, %rd5;
+    call.uni        (%r1, %rd8), fuzzx_mixed_return_helper, (%r0, %rd4, %r2);
+    cvt.u32.u64     %r9, %rd8;
+    shr.u64         %rd9, %rd8, 32;
+    cvt.u32.u64     %r2, %rd9;
+    xor.b32         %r9, %r9, %r2;
+    add.u32         %r0, %r0, %r1;
+    add.u32         %r0, %r0, %r9;
+    mov.b32         %f0, 0f3f800000;
+    mov.b32         %f1, 0f40000000;
+    call.uni        (%f2), fuzzx_f32_bit_helper, (%f0, %f1, %r0);
+    mov.b32         %r9, %f2;
+    add.u32         %r0, %r0, %r9;
+    mov.b64         %fd0, 0d3ff0000000000000;
+    mov.b64         %fd1, 0d4000000000000000;
+    call.uni        (%fd2), fuzzx_f64_bit_helper, (%fd0, %fd1, %r0);
+    mov.b64         %rd8, %fd2;
+    cvt.u32.u64     %r9, %rd8;
+    shr.u64         %rd9, %rd8, 32;
+    cvt.u32.u64     %r1, %rd9;
+    xor.b32         %r9, %r9, %r1;
+    add.u32         %r0, %r0, %r9;
+    // fuzzx_random_helper_call fuzzx_f64_bit_helper
+    call.uni        (%fd2), fuzzx_f64_bit_helper, (%fd0, %fd1, %r0);
+    mov.b64         %rd8, %fd2;
+    cvt.u32.u64     %r9, %rd8;
+    shr.u64         %rd9, %rd8, 32;
+    cvt.u32.u64     %r1, %rd9;
+    xor.b32         %r9, %r9, %r1;
+    xor.b32         %r0, %r0, %r9;
+    mov.pred        %p0, %is_explicit_cluster;
+    mov.u32         %r9, 0;
+    @%p0 mov.u32    %r9, 1;
+    add.u32         %r0, %r0, %r9;
+    cvta.to.global.u64 %rd6, %rd0;
+    createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64 %rd7, 0.5;
+    applypriority.global.L2::evict_normal [%rd6], 128;
+    ld.global.L2::cache_hint.u32 %r9, [%rd6], %rd7;
+    add.u32         %r0, %r0, %r9;
+    cvta.to.global.u64 %rd8, %rd1;
+    mul.wide.u32    %rd9, %r8, 16;
+    add.s64         %rd8, %rd8, %rd9;
+    st.global.L2::cache_hint.u32 [%rd8], %r0, %rd7;
+    ld.global.L2::cache_hint.u32 %r9, [%rd8], %rd7;
+    add.u32         %r0, %r0, %r9;
+    ld.global.nc.L2::cache_hint.u32 %r9, [%rd6], %rd7;
+    add.u32         %r0, %r0, %r9;
+    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd7, [%rd6], 64, 128;
+    ld.global.L2::cache_hint.u32 %r9, [%rd6], %rd7;
+    add.u32         %r0, %r0, %r9;
+    setp.lt.u32     %p0, %r8, 16;
+    setp.eq.u32     %p1, %r8, 0;
+    and.pred        %p2, %p0, %p1;
+    or.pred         %p3, %p0, %p1;
+    xor.pred        %p1, %p2, %p3;
+    not.pred        %p2, %p1;
+    selp.u32        %r9, 1, 0, %p1;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 2, 0, %p2;
+    add.u32         %r0, %r0, %r9;
+    mov.b16         %h0, 0x3c00;
+    mov.b16         %h1, 0x4000;
+    add.rn.f16      %h2, %h0, %h1;
+    sub.rn.f16      %h2, %h2, %h0;
+    mul.rn.f16      %h2, %h2, %h1;
+    fma.rn.f16      %h2, %h0, %h1, %h2;
+    min.f16         %h2, %h2, %h1;
+    max.f16         %h2, %h2, %h0;
+    abs.f16         %h2, %h2;
+    neg.f16         %h3, %h2;
+    cvt.u32.u16     %r9, %h3;
+    add.u32         %r0, %r0, %r9;
+    mov.b32         %r1, 0x3c004000;
+    mov.b32         %r2, 0x40003c00;
+    add.rn.f16x2    %r1, %r1, %r2;
+    sub.rn.f16x2    %r1, %r1, %r2;
+    mul.rn.f16x2    %r1, %r1, %r2;
+    fma.rn.f16x2    %r1, %r1, %r2, %r2;
+    min.f16x2       %r1, %r1, %r2;
+    max.f16x2       %r1, %r1, %r2;
+    abs.f16x2       %r1, %r1;
+    neg.f16x2       %r1, %r1;
+    add.u32         %r0, %r0, %r1;
+    set.lt.u32.f16  %r9, %h0, %h1;
+    add.u32         %r0, %r0, %r9;
+    set.ge.u32.f16  %r9, %h1, %h0;
+    add.u32         %r0, %r0, %r9;
+    setp.lt.f16     %p0, %h0, %h1;
+    setp.ge.f16     %p1, %h1, %h0;
+    selp.u32        %r9, 1, 0, %p0;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 2, 0, %p1;
+    add.u32         %r0, %r0, %r9;
+    selp.b16        %h2, %h0, %h1, %p0;
+    selp.b16        %h3, %h1, %h0, %p1;
+    cvt.u32.u16     %r9, %h2;
+    add.u32         %r0, %r0, %r9;
+    cvt.u32.u16     %r9, %h3;
+    add.u32         %r0, %r0, %r9;
+    cvt.f32.f16     %f0, %h0;
+    cvt.f32.f16     %f1, %h1;
+    cvt.rn.f16.f32  %h2, %f0;
+    cvt.f64.f16     %fd0, %h2;
+    cvt.rn.f16.f64  %h3, %fd0;
+    cvt.rzi.u32.f16 %r9, %h3;
+    add.u32         %r0, %r0, %r9;
+    cvt.rzi.s32.f16 %r9, %h3;
+    add.u32         %r0, %r0, %r9;
+    mov.u32         %r9, 3;
+    cvt.rn.f16.u32  %h2, %r9;
+    cvt.rn.f16.s32  %h3, %r9;
+    cvt.u32.u16     %r9, %h2;
+    add.u32         %r0, %r0, %r9;
+    cvt.u32.u16     %r9, %h3;
+    add.u32         %r0, %r0, %r9;
+    cvt.rn.f16x2.f32 %r9, %f0, %f1;
+    add.u32         %r0, %r0, %r9;
+    mov.b32         %r1, 0x3f800000;
+    mov.b32         %r2, 0x40000000;
+    mov.b32         %f0, %r1;
+    mov.b32         %f1, %r2;
+    cvt.rn.bf16.f32 %h0, %f0;
+    cvt.rz.bf16.f32 %h1, %f1;
+    cvt.rn.relu.bf16.f32 %h2, %f0;
+    cvt.f32.bf16    %f2, %h0;
+    mov.b32         %r9, %f2;
+    add.u32         %r0, %r0, %r9;
+    cvt.f32.bf16    %f3, %h1;
+    mov.b32         %r9, %f3;
+    add.u32         %r0, %r0, %r9;
+    cvt.rn.bf16x2.f32 %r3, %f0, %f1;
+    add.u32         %r0, %r0, %r3;
+    cvt.rz.bf16x2.f32 %r3, %f0, %f1;
+    add.u32         %r0, %r0, %r3;
+    cvt.rn.relu.bf16x2.f32 %r3, %f0, %f1;
+    add.u32         %r0, %r0, %r3;
+    cvt.rna.tf32.f32 %r9, %f0;
+    add.u32         %r0, %r0, %r9;
+    cvt.rn.tf32.f32 %r9, %f1;
+    add.u32         %r0, %r0, %r9;
+    cvt.rz.relu.tf32.f32 %r9, %f0;
+    add.u32         %r0, %r0, %r9;
+    cvt.u32.u16     %r9, %h0;
+    add.u32         %r0, %r0, %r9;
+    cvt.u32.u16     %r9, %h1;
+    add.u32         %r0, %r0, %r9;
+    mov.s32         %r1, -40000;
+    mov.s32         %r2, 40000;
+    cvt.pack.sat.s16.s32 %r9, %r1, %r2;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.u16.s32 %r9, %r1, %r2;
+    add.u32         %r0, %r0, %r9;
+    mov.u32         %r3, 0x88776655;
+    cvt.pack.sat.u8.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.s8.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.u4.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.s4.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.u2.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    cvt.pack.sat.s2.s32.b32 %r9, %r1, %r2, %r3;
+    add.u32         %r0, %r0, %r9;
+    bar.warp.sync   0xffffffff;
+    setp.lt.u32     %p0, %r8, 16;
+    activemask.b32  %r9;
+    add.u32         %r0, %r0, %r9;
+    vote.sync.all.pred %p1, %p0, 0xffffffff;
+    vote.sync.any.pred %p2, %p0, 0xffffffff;
+    vote.sync.uni.pred %p3, %p0, 0xffffffff;
+    selp.u32        %r9, 1, 0, %p1;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 2, 0, %p2;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 4, 0, %p3;
+    add.u32         %r0, %r0, %r9;
+    vote.sync.ballot.b32 %r9, %p0, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    match.sync.any.b32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    match.sync.all.b32 %r9|%p4, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 8, 0, %p4;
+    add.u32         %r0, %r0, %r9;
+    elect.sync      %r9|%p4, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 16, 0, %p4;
+    add.u32         %r0, %r0, %r9;
+    shfl.sync.idx.b32 %r9, %r8, 0, 31, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    shfl.sync.up.b32 %r9, %r8, 1, 31, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    shfl.sync.down.b32 %r9, %r8, 1, 31, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    shfl.sync.bfly.b32 %r9, %r8, 1, 31, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.add.u32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.min.u32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.max.u32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.add.s32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.min.s32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.max.s32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.and.b32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.or.b32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    redux.sync.xor.b32 %r9, %r8, 0xffffffff;
+    add.u32         %r0, %r0, %r9;
+    // fuzzx_random_warp_collective activemask.b32
+    activemask.b32  %r6;
+    // fuzzx_random_warp_collective shfl.sync.bfly.b32
+    shfl.sync.bfly.b32 %r4, %r2, 4, 31, 0xffffffff;
+    bar.sync        0;
+    bar.sync        0, 32;
+    barrier.sync    0;
+    barrier.sync    0, 32;
+    setp.lt.u32     %p0, %r8, 16;
+    bar.red.popc.u32 %r0, 0, %p0;
+    bar.red.and.pred %p1, 0, %p0;
+    bar.red.or.pred %p2, 0, %p0;
+    selp.u32        %r9, 1, 0, %p1;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 2, 0, %p2;
+    add.u32         %r0, %r0, %r9;
+    barrier.red.popc.u32 %r9, 0, %p0;
+    add.u32         %r0, %r0, %r9;
+    barrier.red.and.pred %p1, 0, %p0;
+    barrier.red.or.pred %p2, 0, %p0;
+    selp.u32        %r9, 4, 0, %p1;
+    add.u32         %r0, %r0, %r9;
+    selp.u32        %r9, 8, 0, %p2;
+    add.u32         %r0, %r0, %r9;
+    and.b32         %r9, %r8, 3;
+fuzzx_brx_table: .branchtargets fuzzx_brx_0, fuzzx_brx_1, fuzzx_brx_2, fuzzx_brx_3;
+    brx.idx         %r9, fuzzx_brx_table;
+fuzzx_brx_0:
+    add.u32         %r0, %r0, 1;
+    bra             fuzzx_brx_done;
+fuzzx_brx_1:
+    add.u32         %r0, %r0, 2;
+    bra             fuzzx_brx_done;
+fuzzx_brx_2:
+    add.u32         %r0, %r0, 3;
+    bra             fuzzx_brx_done;
+fuzzx_brx_3:
+    add.u32         %r0, %r0, 4;
+    bra             fuzzx_brx_done;
+fuzzx_brx_done:
+
+    bra             block_0;
+
+block_0:
+    setp.ge.u32   %p4, %r3, %r3;
+    and.b32       %r9, %r0, 1023;
+    cvt.rn.f32.u32 %f0, %r9;
+    mov.f32       %f1, %f0;
+    @%p4 sqrt.rm.ftz.f32 %f1, %f0;
+    cvt.rzi.s32.f32 %r6, %f1;
+    setp.eq.u32   %p5, 716567616, %r7;
+    @!%p5 bfi.b32  %r5, %r6, 531705826, 20, 30;
+    and.b32       %r9, %r2, 1023;
+    cvt.rn.f64.u32 %fd0, %r9;
+    neg.f64       %fd1, %fd0;
+    cvt.rzi.s32.f64 %r7, %fd1;
+    add.u32       %r0, %r5, %r4;
+    setp.eq.u32   %p6, %r5, %r1;
+    mov.b32       %r9, %r6;
+    mov.b32       %r10, %r6;
+    mov.b32       %r11, %r1;
+    @%p6 cvt.pack.sat.u8.s32.b32 %r2, %r9, %r10, %r11;
+    and.b32       %r9, %r0, 1023;
+    add.u32       %r9, %r9, 0x3c00;
+    cvt.u16.u32   %h0, %r9;
+    mov.u32       %r0, 0;
+    cvt.rzi.u32.f16 %r0, %h0;
+    setp.ge.u32   %p7, %r0, %r7;
+    @%p7 bra   block_1;
+    bra             block_4;
+
+block_1:
+    setp.ge.u32   %p8, 16777216, %r6;
+    @!%p8 neg.s32  %r2, %r4;
+    add.u32       %r5, %r7, %r1;
+    setp.ne.u32   %p9, %r0, %r0;
+    @%p9 bra   block_3;
+    bra             block_3;
+
+block_2:
+    and.b32       %r9, %r2, 31;
+    shl.b32       %r7, %r0, %r9;
+    add.s32       %r1, 211042891, 15;
+    setp.ne.u32   %p10, %r0, 2097152;
+    mov.u64       %rd6, fuzzx_shared;
+    mul.wide.u32  %rd7, %r8, 16;
+    add.s64       %rd6, %rd6, %rd7;
+    @!%p10 st.volatile.shared.u8 [%rd6 + 0], %r7;
+    @!%p10 ld.volatile.shared.s8 %r5, [%rd6 + 0];
+    add.u32       %r4, %r7, %r4;
+    bra             block_7;
+
+block_3:
+    popc.b32      %r1, %r5;
+    bfe.u32       %r4, 2344220440, 29, 7;
+    and.b32       %r9, 15, 1023;
+    cvt.rn.f32.u32 %f0, %r9;
+    and.b32       %r9, %r2, 1023;
+    cvt.rn.f32.u32 %f1, %r9;
+    setp.ltu.ftz.f32 %p11, %f0, %f1;
+    selp.f32      %f2, %f0, %f1, %p11;
+    cvt.rzi.s32.f32 %r2, %f2;
+    and.b32       %r9, %r4, 1023;
+    cvt.rn.f32.u32 %f0, %r9;
+    and.b32       %r9, %r0, 1023;
+    cvt.rn.f32.u32 %f1, %r9;
+    setp.lt.f32   %p12, %f0, %f1;
+    selp.f32      %f2, %f0, %f1, %p12;
+    cvt.rzi.s32.f32 %r6, %f2;
+    cvta.to.global.u64 %rd6, %rd0;
+    prefetch.global.L2              [%rd6 + 32];
+    bfi.b32       %r5, 2, %r2, 12, 10;
+    setp.ge.u32   %p13, %r7, %r5;
+    @%p13 bra   block_4;
+    bra             block_5;
+
+block_4:
+    add.u32       %r6, %r5, %r2;
+    bra             block_7;
+
+block_5:
+    setp.le.u32   %p14, %r1, 4255946460;
+    and.b32       %r9, %r7, 1023;
+    cvt.rn.f32.u32 %f0, %r9;
+    and.b32       %r9, %r2, 1023;
+    cvt.rn.f32.u32 %f1, %r9;
+    setp.eq.and.f32 %p15, %f0, %f1, %p14;
+    selp.u32      %r6, 1, 0, %p15;
+    bra             block_6;
+
+block_6:
+    bfi.b32       %r6, %r7, %r2, 17, 2;
+    setp.eq.u32   %p16, %r0, %r6;
+    @%p16 bra   block_7;
+    bra             block_7;
+
+block_7:
+    add.u32       %r3, 5, %r3;
+    and.b32       %r9, %r7, 31;
+    shr.u32       %r6, %r0, %r9;
+    setp.gt.u32   %p17, %r1, %r2;
+    @%p17 and.b32  %r0, %r6, %r0;
+    add.u32       %r6, %r7, 29;
+    setp.gt.u32   %p18, 23, 17;
+    and.b32       %r9, 1048576, 1023;
+    cvt.rn.f64.u32 %fd0, %r9;
+    mov.f64       %fd1, %fd0;
+    @%p18 neg.f64  %fd1, %fd0;
+    cvt.rzi.s32.f64 %r4, %fd1;
+    setp.le.u32   %p19, %r5, %r6;
+    and.b32       %r9, %r0, 1023;
+    cvt.rn.f32.u32 %f0, %r9;
+    and.b32       %r9, %r3, 1023;
+    cvt.rn.f32.u32 %f1, %r9;
+    setp.ltu.ftz.or.f32 %p20, %f0, %f1, %p19;
+    selp.u32      %r7, 1, 0, %p20;
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r8, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r0;
+    st.global.u32   [%rd4 + 4], %r1;
+    st.global.u32   [%rd4 + 8], %r2;
+    st.global.u32   [%rd4 + 12], %r3;
+    ret;
+}

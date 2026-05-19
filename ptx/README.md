@@ -160,6 +160,7 @@ Version | Description |
 | 13.2.78 | [m052-bfe-reg-pos-fold](known-miscompiles/m052-bfe-reg-pos-fold/NOTES.md): Register-position `bfe.s32` with an out-of-range start folds to the wrong sign-filled value. |
 | 13.2.78 | [m053-bfi-reg-len-fold](known-miscompiles/m053-bfi-reg-len-fold/NOTES.md): Likely related to m052; register-length `bfi.b32` preserves high base bits that should be overwritten. |
 | 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
+| 13.2.78 | [m083-orphan-param-ld](known-miscompiles/m083-orphan-param-ld/NOTES.md): ptxas segfaults at every optimization level on an 11-line kernel that declares a local `.param` and reads it with `ld.param` without ever using the `.param` as a `call` argument or return value. Also reproduces on 13.0.88. |
 
 ### Bugs Found in 13.0.88 and Fixed in 13.2.78
 
