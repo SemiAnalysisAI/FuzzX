@@ -10399,6 +10399,20 @@ impl<'a> Generator<'a> {
             writeln!(s).unwrap();
             writeln!(
                 s,
+                ".func (.reg .b32 ret0, .reg .b64 ret1) fuzzx_mixed_return_helper(.reg .b32 a, .reg .b64 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    .reg .b64       %mrr<2>;").unwrap();
+            writeln!(s, "    add.u32         ret0, a, c;").unwrap();
+            writeln!(s, "    cvt.u64.u32     %mrr0, ret0;").unwrap();
+            writeln!(s, "    shl.b64         %mrr1, %mrr0, 7;").unwrap();
+            writeln!(s, "    xor.b64         ret1, b, %mrr1;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
                 ".func (.reg .b32 ret0) fuzzx_predicated_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c)"
             )
             .unwrap();
@@ -10565,6 +10579,21 @@ impl<'a> Generator<'a> {
                 "    call.uni        (%r{scratch}), fuzzx_predicated_helper, (%r0, %r1, %r2);"
             )
             .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.u64.u32     %rd4, %r0;").unwrap();
+            writeln!(s, "    shl.b64         %rd4, %rd4, 32;").unwrap();
+            writeln!(s, "    cvt.u64.u32     %rd5, %r2;").unwrap();
+            writeln!(s, "    or.b64          %rd4, %rd4, %rd5;").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (%r1, %rd8), fuzzx_mixed_return_helper, (%r0, %rd4, %r2);"
+            )
+            .unwrap();
+            writeln!(s, "    cvt.u32.u64     %r{scratch}, %rd8;").unwrap();
+            writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
+            writeln!(s, "    cvt.u32.u64     %r2, %rd9;").unwrap();
+            writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_special_regs {
@@ -22583,6 +22612,14 @@ mod tests {
             "missing predicated helper call"
         );
         assert!(
+            ptx.contains("fuzzx_mixed_return_helper"),
+            "missing mixed-return helper function"
+        );
+        assert!(
+            ptx.contains("call.uni        (%r1, %rd8), fuzzx_mixed_return_helper"),
+            "missing mixed-return helper call"
+        );
+        assert!(
             ptx.contains("fuzzx_param_helper"),
             "missing param ABI helper function"
         );
@@ -22647,6 +22684,10 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_predicated_helper"),
                 "seed {seed:x} emitted predicated helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_mixed_return_helper"),
+                "seed {seed:x} emitted mixed-return helper function"
             );
             assert!(
                 !ptx.contains("fuzzx_param_helper"),
