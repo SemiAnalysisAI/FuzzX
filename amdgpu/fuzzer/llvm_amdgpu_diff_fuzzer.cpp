@@ -1828,6 +1828,19 @@ bool triggersM057RotCascadeStore(const Instruction &I) {
                              "fuzz.cfg.rotcascade.idiom.acc.next", Seen);
 }
 
+bool triggersM058NibbleByteSelectHighBit(const Instruction &I) {
+  if (!hasNameStartingWith(&I, "fuzz.bytesel.idiom.carry.xor") &&
+      !hasNameStartingWith(&I, "fuzz.cfg.bytesel.idiom.carry.xor"))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(&I, "fuzz.nibbletable.idiom.packed.sub", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(&I, "fuzz.cfg.nibbletable.idiom.packed.sub",
+                             Seen);
+}
+
 bool isFuzzInputLoadIndex(const Value *V, Function &Kernel) {
   const auto *ZExt = dyn_cast<ZExtInst>(V);
   if (!ZExt || !hasNameStartingWith(ZExt, "fuzz.load.idx64") ||
@@ -1933,6 +1946,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM055 = envFlag("FUZZX_ALLOW_M055_I64BYTEPERM_LOOP", false);
   bool AllowM056 = envFlag("FUZZX_ALLOW_M056_HALFDOT_BRANCH", false);
   bool AllowM057 = envFlag("FUZZX_ALLOW_M057_ROTCASCADE_STORE", false);
+  bool AllowM058 = envFlag("FUZZX_ALLOW_M058_NIBBLE_BYTESEL_HIGHBIT", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1984,6 +1998,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM055 && triggersM055I64BytePermuteLoopPhi(I)) ||
               (!AllowM056 && triggersM056HalfDotLowBitBranch(I)) ||
               (!AllowM057 && triggersM057RotCascadeStore(I)) ||
+              (!AllowM058 && triggersM058NibbleByteSelectHighBit(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
