@@ -27,7 +27,7 @@ made deterministic and race-free in the current differential oracle".
 | Memory roundtrips | `ld/st.global`, `ld/st.local`, `ld/st.shared`, `ld.const`, vector loads/stores, cache hints, volatile forms | Memory addresses are bounded to per-thread slices or private local/shared storage. |
 | Atomics and reductions | `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}`, `red.global.{add,inc,dec,min,max,and,or,xor}` | Current work adds per-thread global output-slice roundtrips. Post-known profile keeps min/max suppressed but can exercise add/inc/dec/and. |
 | Control flow | `bra`, predicated instructions, structured braces, `ret` | Generator emits arbitrary CFG or structured if/loop shapes with bounded loop counters. |
-| Special registers | `%tid`, `%ntid`, `%ctaid`, `%nctaid`, `%laneid`, `%nwarpid`, `%lanemask_*` | Read as deterministic scalar inputs; predicated forms exist for some paths. |
+| Special registers | `%tid`, `%ntid`, `%ctaid`, `%nctaid`, `%laneid`, `%warpid`, `%nwarpid`, `%warpsize`, `%lanemask_*` | Read as deterministic scalar inputs; predicated forms exist for some paths. |
 
 ## Candidates
 
@@ -44,7 +44,7 @@ made deterministic and race-free in the current differential oracle".
 | Medium | Uniform synchronization/fences | `membar`/`fence`, `bar.warp.sync`, possibly `bar.sync` in uniform regions | Fences have no direct value but can legally sit around memory roundtrips; barriers are safe only when all participating threads reach them. | Add uniform-only insertion points and avoid divergent/early-exit paths. |
 | Medium | Cache policy helpers | `createpolicy`, `applypriority`, `prefetch`, `prefetchu`, `discard` | Mostly compile/optimizer surface; some can be paired with later loads without changing semantics. | Emit valid policy operands and treat as low-oracle/no-output instructions unless paired with memory. |
 | Medium | New packed integer types | `.u8x4` / `.s8x4` `add`, `sub`, `min`, `max`, `neg` | PTX 9.2 calls these out as new instruction types; byte-lane operations are deterministic and likely optimizer-heavy. | Add byte-lane packing helpers and suppressor flags distinct from existing video/packed16 paths. |
-| Medium | More special registers | `%warpid`, `%smid`, `%nsmid`, `%gridid`, `%cluster_*`, `%is_explicit_cluster`, `%lanemask_*` variants not yet covered | Some are deterministic within one launch or at least stable enough if only compared between opt levels in the same launch shape. | Decide which are stable across O0/O3 runs; avoid values that can differ between separate launches unless normalized. |
+| Medium | More special registers | `%smid`, `%nsmid`, `%gridid`, `%cluster_*`, `%is_explicit_cluster`, `%lanemask_*` variants not yet covered | Some are deterministic within one launch or at least stable enough if only compared between opt levels in the same launch shape. | Decide which are stable across O0/O3 runs; avoid values that can differ between separate launches unless normalized. |
 | Low | Predicate-only algebra | More `and.pred`, `or.pred`, `xor.pred`, `not.pred`, dual-destination `setp` forms | Pure dataflow and already partially covered. | Increase coverage density and add variant-specific suppressors if needed. |
 | Low | Floating edge modes | More `.ftz`, `.sat`, `.rn/rz/rm/rp` combinations, f64 approximations where available | Mostly already covered for f32/f64; remaining forms are incremental. | Expand mnemonic tables and keep exact-output hazards quarantined. |
 

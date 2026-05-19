@@ -290,7 +290,7 @@ that feature.
 | `DIV_DISABLE_CNOT` | `cnot.b32`. |
 | `DIV_DISABLE_POPC` | `popc.b32`. |
 | `DIV_DISABLE_ABS` | `abs.s32`. |
-| `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid` and `%lanemask_*`. |
+| `DIV_DISABLE_SPECIAL_REGS` | Deterministic special-register reads such as `%laneid`, `%warpid`, `%warpsize`, and `%lanemask_*`. |
 | `DIV_DISABLE_PREDICATED_SPECIAL_REGS` | Predicated deterministic special-register reads. |
 | `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32,u64,s64}` loads from the input buffer. |
 | `DIV_DISABLE_UNIFORM_GLOBAL_LOADS` | Uniform-address scalar/vector `ldu.global` loads from the input buffer. |
