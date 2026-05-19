@@ -375,12 +375,25 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     ret;
 }}
 
+.func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)
+{{
+    .reg .b32 %phr<3>;
+    ld.param.u32 %phr0, [a];
+    ld.param.u32 %phr1, [b];
+    add.u32 %phr2, %phr0, %phr1;
+    st.param.b32 [ret0], %phr2;
+    ret;
+}}
+
 .visible .entry rich_helper_call_smoke(
     .param .u64 out_ptr
 )
 {{
     .reg .b32 %r<8>;
     .reg .b64 %rd<1>;
+    .param .b32 fuzzx_param_ret;
+    .param .b32 fuzzx_param_a;
+    .param .b32 fuzzx_param_b;
 
     ld.param.u64 %rd0, [out_ptr];
     mov.u32 %r0, %tid.x;
@@ -388,8 +401,13 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     mov.u32 %r2, 11;
     call.uni (%r3, %r4), fuzzx_helper_pair, (%r0, %r1, %r2);
     call (%r5), fuzzx_helper_chain, (%r3, %r4, %r1, %r2);
+    st.param.b32 [fuzzx_param_a], %r5;
+    st.param.b32 [fuzzx_param_b], %r0;
+    call.uni (fuzzx_param_ret), fuzzx_param_helper, (fuzzx_param_a, fuzzx_param_b);
+    ld.param.u32 %r7, [fuzzx_param_ret];
     add.u32 %r6, %r3, %r4;
     add.u32 %r6, %r6, %r5;
+    add.u32 %r6, %r6, %r7;
     st.global.u32 [%rd0], %r6;
     ret;
 }}

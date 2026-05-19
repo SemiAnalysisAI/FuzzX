@@ -10361,6 +10361,20 @@ impl<'a> Generator<'a> {
             writeln!(s, "    ret;").unwrap();
             writeln!(s, "}}").unwrap();
             writeln!(s).unwrap();
+            writeln!(
+                s,
+                ".func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    .reg .b32       %phr<3>;").unwrap();
+            writeln!(s, "    ld.param.u32    %phr0, [a];").unwrap();
+            writeln!(s, "    ld.param.u32    %phr1, [b];").unwrap();
+            writeln!(s, "    add.u32         %phr2, %phr0, %phr1;").unwrap();
+            writeln!(s, "    st.param.b32    [ret0], %phr2;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
         }
         writeln!(s, ".visible .entry {KERNEL_NAME}(").unwrap();
         writeln!(s, "    .param .u64 in_ptr,").unwrap();
@@ -10377,6 +10391,11 @@ impl<'a> Generator<'a> {
         writeln!(s, "    .reg .b64   %rd<10>;").unwrap();
         writeln!(s, "    .reg .f32   %f<4>;").unwrap();
         writeln!(s, "    .reg .f64   %fd<4>;").unwrap();
+        if self.cfg.emit_rich_helper_calls {
+            writeln!(s, "    .param .b32 fuzzx_param_ret;").unwrap();
+            writeln!(s, "    .param .b32 fuzzx_param_a;").unwrap();
+            writeln!(s, "    .param .b32 fuzzx_param_b;").unwrap();
+        }
         writeln!(
             s,
             "    .local .align 16 .b8 fuzzx_local[{LOCAL_MEM_BYTES}];"
@@ -10437,6 +10456,15 @@ impl<'a> Generator<'a> {
                 "    call            (%r{scratch}), fuzzx_helper_chain, (%r1, %r2, %r{tid_reg}, %r0);"
             )
             .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    st.param.b32    [fuzzx_param_a], %r0;").unwrap();
+            writeln!(s, "    st.param.b32    [fuzzx_param_b], %r{tid_reg};").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (fuzzx_param_ret), fuzzx_param_helper, (fuzzx_param_a, fuzzx_param_b);"
+            )
+            .unwrap();
+            writeln!(s, "    ld.param.u32    %r{scratch}, [fuzzx_param_ret];").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_special_regs {
@@ -22418,6 +22446,26 @@ mod tests {
             ptx.contains("fuzzx_helper_chain"),
             "missing multi-arg helper function"
         );
+        assert!(
+            ptx.contains("fuzzx_param_helper"),
+            "missing param ABI helper function"
+        );
+        assert!(
+            ptx.contains(".param .b32 fuzzx_param_ret"),
+            "missing param ABI return slot"
+        );
+        assert!(
+            ptx.contains("st.param.b32    [fuzzx_param_a]"),
+            "missing param ABI argument store"
+        );
+        assert!(
+            ptx.contains("call.uni        (fuzzx_param_ret), fuzzx_param_helper"),
+            "missing param ABI helper call"
+        );
+        assert!(
+            ptx.contains("[fuzzx_param_ret]"),
+            "missing param ABI return load"
+        );
     }
 
     #[test]
@@ -22443,6 +22491,18 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_helper_chain"),
                 "seed {seed:x} emitted multi-arg helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_param_helper"),
+                "seed {seed:x} emitted param ABI helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_param_ret"),
+                "seed {seed:x} emitted param ABI return slot"
+            );
+            assert!(
+                !ptx.contains("st.param.b32    [fuzzx_param_a]"),
+                "seed {seed:x} emitted param ABI argument store"
             );
         }
     }
