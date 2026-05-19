@@ -1,60 +1,89 @@
 # m085-cond-skip-or-imm-neg1
 
-Found while continuing the CUDA 13.2.78 sweep after `DIV_DISABLE_CVT_PACK=1`
-(m084 family suppressed) and `DIV_DISABLE_RICH_HELPER_CALLS=1` (m083
-suppressed):
+ptxas `-O3` produces the wrong value when a predicate-guarded skip
+straddles a write to a register that was previously initialised to the
+`1.0f` bit pattern (`0x3f800000`). The optimiser appears to fold the
+conditional as if the guard were "always true" — i.e. it eliminates the
+guarded write — and leaves the `0x3f800000` initialiser as the live
+value, even though the predicate is set from runtime parameter data
+and may be either true or false.
+
+Found while continuing the CUDA 13.2.78 sweep after `DIV_DISABLE_RICH_HELPER_CALLS=1`
+(m083 suppressed) and `DIV_DISABLE_I32_BOUNDARY_IMMS=1`:
 
 ```text
 divergences/active-20260519-185043-m084-cvtpack-suppressed/div-1779216671-18b10c1c52a811e2
 ```
 
-`OUTPUT_MISMATCH` (both opt levels compile and launch cleanly; outputs
-disagree on all 32 threads). The bug surfaces in the second 32-bit output
-slot, `%r1`:
-
-```text
--O0 stores 0xffffffff
--O3 stores 0x3f800000     (the 1.0f bit pattern)
-```
-
-## Trigger
-
-The 345-line `reduced.ptx` contains a control-flow tail of the form:
+## Reduced repro (19 lines)
 
 ```ptx
-block_5:
-    cvta.to.global.u64 %rd6, %rd0;
-    prefetch.global.L2  [%rd6 + 53];
-    setp.eq.u32   %p11, 11, %r7;
-    @%p11 bra   block_7;
-    bra             block_6;
+.version 8.8
+.target sm_103
+.address_size 64
 
-block_6:
-    or.b32        %r1, 4294967295, %r0;
-    bra             block_7;
-
-block_7:
-    ... reads %r1 ...
+.visible .entry fuzz_kernel(.param .u64 in_ptr, .param .u64 out_ptr, .param .u32 in_n)
+{
+    .reg .pred  %p<1>;
+    .reg .b32   %r<2>;
+    .reg .b64   %rd<2>;
+    ld.param.u64    %rd0, [out_ptr];
+    ld.param.u32    %r0, [in_n];
+    mov.b32         %r1, 0x3f800000;
+    setp.eq.u32     %p0, %r0, 42;
+    @%p0 bra        done;
+    or.b32          %r1, 4294967295, %r0;
+done:
+    cvta.to.global.u64 %rd0, %rd0;
+    st.global.u32   [%rd0 + 4], %r1;
+}
 ```
 
-`%r7` is `mov.u32 %r7, %r0;` where `%r0` is the kernel's runtime `in_n`
-parameter — so the optimizer cannot know `%r7` at compile time. Both
-control-flow paths converge at `block_7` and the code reads `%r1`.
+The fuzzer harness launches with `in_n == 32`, so `%p0 = (32 == 42) =
+false`, the `bra` is **not** taken, and the `or.b32 %r1, -1, %r0` runs
+and sets `%r1 = 0xffffffff`. The expected output is therefore
+`0xffffffff` in slot 1.
 
-Earlier in the prologue, `%r1` is initialized via `mov.b32 %r1, 0x3f800000;`
-(the 1.0f constant used to seed the f32 bit-preserving helper) and then
-mutated by the f16x2 arithmetic prologue. At the join point in `block_7`,
-the only path that overwrites `%r1` with `0xffffffff` is the `block_6` body
-(the OR with immediate `-1`), which executes when `%r7 != 11`.
+| ptxas | tid 0 slot 1 |
+| --- | --- |
+| 13.2.78 `-O0` | `0xffffffff` (correct) |
+| 13.2.78 `-O3` | `0x3f800000` (the initial `mov.b32` value) |
+| 13.0.88 `-O0` | `0xffffffff` (correct) |
+| 13.0.88 `-O3` | `0x3f800000` (same bug) |
 
-In the saved test, `%r7 == 32`, so block_6 should execute and `%r1` should
-be `0xffffffff`. `-O0` agrees and stores `0xffffffff`. `-O3` instead stores
-the earlier prologue value (`0x3f800000`), as if it had folded the
-`block_6` arm out — i.e. assumed `%r7 == 11` and skipped the `or.b32`.
+## What it depends on
 
-The XOR of the differing slots — `0xffffffff ^ 0x3f800000 = 0xc07fffff` —
-matches the prior `%r1` value bleeding through the join. Output slot 1 is
-the only one that disagrees.
+The bug is highly specific to the **`0x3f800000` initialiser**. Tested
+with every "obvious" replacement constant; only `0x3f800000` fires:
+
+| init `mov.b32 %r1, X` | `-O3` slot 1 |
+| --- | --- |
+| `0x3f800000` (1.0f) | `0x3f800000` (BUG) |
+| `0x40000000` (2.0f) | `0xffffffff` (ok) |
+| `0xbf800000` (-1.0f) | `0xffffffff` (ok) |
+| `0x3f7fffff` (1.0f - ULP) | `0xffffffff` (ok) |
+| `0x3f800001` (1.0f + ULP) | `0xffffffff` (ok) |
+| `0x3f000000` (0.5f) | `0xffffffff` (ok) |
+| `0x7f800000` (+inf) | `0xffffffff` (ok) |
+| `0x7fc00000` (qNaN) | `0xffffffff` (ok) |
+| `0x00000000` (0.0f) | `0xffffffff` (ok) |
+| `0xffffffff` (all-1s) | `0xffffffff` (ok) |
+| `0x12345678` (random) | `0xffffffff` (ok) |
+| `0xdeadbeef` (random) | `0xffffffff` (ok) |
+
+The wrong-side instruction is also flexible — `or.b32 %r1, -1, _`,
+`not.b32 %r1, 0`, and `mov.u32 %r1, -1` all reproduce. The trigger is
+the combination of:
+
+1. A `mov.b32` of `0x3f800000` into the target register before the
+   branch.
+2. A predicate-guarded `@%p bra done;` (with `%p` set by `setp` against
+   a kernel parameter so the optimiser cannot fold it).
+3. An unconditional join-block read of the target register.
+
+The bug therefore looks like an optimiser pass that special-cases the
+canonical `1.0f` bit-pattern in the integer/predicate domain and
+mis-folds the conditional skip on top of it.
 
 ## Reproduce
 
@@ -71,41 +100,23 @@ Observed result:
 DIVERGES (deterministic) — 32/32 tids differ, 32/128 u32 slots differ
 ```
 
-Confirmed deterministic across 5 recompile-and-run cycles per opt level.
-Found on 2026-05-19 with `release 13.2, V13.2.78`,
-build `cuda_13.2.r13.2/compiler.37668154_0`.
+Reproduced on 2026-05-19 with:
 
-## Broader family
+* CUDA Toolkit 13.2 Update 1 ptxas: `release 13.2, V13.2.78`,
+  build `cuda_13.2.r13.2/compiler.37668154_0`
+* CUDA Toolkit 13.0 ptxas: `release 13.0, V13.0.88`,
+  build `cuda_13.0.r13.0/compiler.36424714_0`
 
-The first reproducer used `or.b32 %r1, 0xffffffff, %r0` as the
-0xffffffff-producing instruction. After `DIV_DISABLE_I32_BOUNDARY_IMMS=1`
-was added (no more immediate `-1`), the fuzzer immediately found two more
-divergences with the same output-slot symptom — `O0: 0xffffffff` vs
-`O3: 0x3f800000` in slot 1 of every thread — but with different
-0xffffffff-producing instructions in the body, including `not.b32 %r, 0`.
+## Fuzzer-side mitigation and suppressor
 
-So the trigger is not specifically `or.b32 imm,-1`; the common pattern is:
+The fuzzer's bf16/tf32 prologue used to emit
+`mov.b32 %r1, 0x3f800000;` into an *output* register, which is what
+exposed this bug through the differential oracle. After commit
+`8c55762` ("Move bf16/tf32 prologue setup into scratch regs"), the
+1.0f bit pattern is written to a scratch slot instead, so the bug no
+longer reaches the per-thread output store.
 
-1. The deterministic bf16/tf32 prologue at `lib.rs:11949` seeds
-   `mov.b32 %r1, 0x3f800000;` to prepare the `cvt.rn.bf16.f32` chain —
-   leaving `0x3f800000` in `%r1`.
-2. Random body instructions later overwrite `%r1` with `0xffffffff` (via
-   any single-result instruction that lands on the all-ones bit pattern:
-   `or.b32 %r, -1, _`, `not.b32 %r, 0`, etc.) inside a small
-   uniform-prefix-guarded arm.
-3. `-O3` incorrectly dead-store-eliminates the body write, so `%r1` keeps
-   the prologue's `0x3f800000` value at the final `st.global.u32 [%rd4+4]`.
-
-The fundamental problem is the bf16/tf32 prologue using output registers
-(`%r1`, `%r2`, `%r3`) as bf16 scratch rather than dedicated scratch slots,
-which makes the output value depend on whether the body's writes survive
-optimization. A long-term fix is to move the prologue's bf16 scratch into
-the existing `wide_scratch_hi_reg()` pool; that has not been done in this
-commit.
-
-## Suppressor
-
-`DIV_DISABLE_BF16_TF32_CVT=1` removes the prologue line that seeds
-`%r1 = 0x3f800000`, which removes the family's wrong-value source. That is
-heavier than ideal — it loses all bf16/tf32 conversion coverage from
-`3483c72` — but it is the single env flag that gates the family.
+`DIV_DISABLE_BF16_TF32_CVT=1` is the broad env-flag suppressor; it
+removes the prologue's `mov.b32 ..., 0x3f800000` entirely. After the
+scratch-reg fix the broad suppressor is no longer needed in the
+fuzzer.
