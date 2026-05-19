@@ -19364,6 +19364,198 @@ Value *emitRandomConditionalShiftPatternIdiom(IRBuilder<NoFolder> &B,
   }
 }
 
+Value *emitRandomVectorI16AbsCondAddIdiom(IRBuilder<NoFolder> &B,
+                                          Module &M, Value *A, Value *Bv,
+                                          std::minstd_rand &Gen,
+                                          StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  constexpr unsigned Lanes = 2;
+  auto *VecTy = FixedVectorType::get(I16, Lanes);
+  FunctionCallee Abs16 = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::abs, {VecTy});
+
+  Value *AVec = B.CreateBitCast(A, VecTy,
+                                Twine(NamePrefix) + ".a.bitcast");
+  Value *BVec = B.CreateBitCast(Bv, VecTy,
+                                Twine(NamePrefix) + ".b.bitcast");
+
+  // Packed `abs(a - b) + (a > b ? a : b)` style chain.  Targets V_PK_SUB
+  // + V_PK_MAX selection and packed abs lowering.
+  Value *Diff = B.CreateSub(AVec, BVec, Twine(NamePrefix) + ".diff");
+  Value *AbsDiff = B.CreateCall(Abs16, {Diff,
+                                        ConstantInt::getFalse(Ctx)},
+                                 Twine(NamePrefix) + ".abs.diff");
+  Value *Cond = B.CreateICmpSGT(AVec, BVec,
+                                Twine(NamePrefix) + ".cmp.sgt");
+  Value *Max = B.CreateSelect(Cond, AVec, BVec,
+                               Twine(NamePrefix) + ".max");
+  Value *Min = B.CreateSelect(Cond, BVec, AVec,
+                               Twine(NamePrefix) + ".min");
+  Value *AbsPlusMax = B.CreateAdd(AbsDiff, Max,
+                                   Twine(NamePrefix) + ".abs.max.add");
+  Value *AbsMinusMin = B.CreateSub(AbsDiff, Min,
+                                    Twine(NamePrefix) + ".abs.min.sub");
+  Value *Combined = nullptr;
+  switch (Gen() % 4) {
+  case 0:
+    Combined = B.CreateXor(AbsPlusMax, AbsMinusMin,
+                           Twine(NamePrefix) + ".combined.xor");
+    break;
+  case 1:
+    Combined = B.CreateAdd(AbsPlusMax, AbsMinusMin,
+                           Twine(NamePrefix) + ".combined.add");
+    break;
+  case 2:
+    Combined = B.CreateSub(AbsPlusMax, Diff,
+                           Twine(NamePrefix) + ".combined.sub");
+    break;
+  default:
+    Combined = B.CreateMul(AbsMinusMin, AVec,
+                            Twine(NamePrefix) + ".combined.mul");
+    break;
+  }
+
+  Value *AsI32 = B.CreateBitCast(Combined, I32,
+                                 Twine(NamePrefix) + ".result.bitcast");
+  switch (Gen() % 4) {
+  case 0:
+    return AsI32;
+  case 1:
+    return B.CreateXor(AsI32, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(AsI32, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Bv, AsI32, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
+Value *emitRandomI32ShiftWidthCornerIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                          Value *Bv,
+                                          std::minstd_rand &Gen,
+                                          StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // Shifts with the corner amounts 0, 1, 30, 31.  Useful for exercising
+  // the AMDGPU lowering's special-case handling of those values.
+  static constexpr unsigned Corners[4] = {0, 1, 30, 31};
+  Value *Acc = A;
+  Value *Salt = Bv;
+  for (unsigned I = 0; I != 4; ++I) {
+    unsigned Sh = Corners[(Gen() + I) & 3u];
+    Value *Shl = B.CreateShl(Acc, ci32(Ctx, Sh),
+                             Twine(NamePrefix) + ".corner.shl");
+    Value *Lshr = B.CreateLShr(Acc, ci32(Ctx, Sh),
+                               Twine(NamePrefix) + ".corner.lshr");
+    Value *Ashr = B.CreateAShr(Acc, ci32(Ctx, Sh),
+                               Twine(NamePrefix) + ".corner.ashr");
+    Value *Mixed = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      Mixed = B.CreateXor(Shl, Lshr,
+                          Twine(NamePrefix) + ".shl.lshr.xor");
+      break;
+    case 1:
+      Mixed = B.CreateOr(Ashr, Lshr,
+                          Twine(NamePrefix) + ".ashr.lshr.or");
+      break;
+    case 2:
+      Mixed = B.CreateSub(Shl, Ashr,
+                          Twine(NamePrefix) + ".shl.ashr.sub");
+      break;
+    default:
+      Mixed = B.CreateAdd(B.CreateAnd(Shl, Salt,
+                                      Twine(NamePrefix) + ".shl.and.salt"),
+                          Lshr,
+                          Twine(NamePrefix) + ".shl.salt.lshr.add");
+      break;
+    }
+    Acc = B.CreateAdd(Mixed, Salt, Twine(NamePrefix) + ".acc.next");
+    Salt = B.CreateXor(Salt,
+                       B.CreateMul(Acc, ci32(Ctx, 0x9e3779b1u),
+                                   Twine(NamePrefix) + ".acc.mul"),
+                       Twine(NamePrefix) + ".salt.next");
+  }
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateXor(Acc, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Acc, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Salt, Acc, Twine(NamePrefix) + ".salt.sub");
+  }
+}
+
+Value *emitRandomFPMinMaxChainIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                    Value *A, Value *Bv,
+                                    std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *FloatTy = Type::getFloatTy(Ctx);
+  FunctionCallee MinF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::minnum, {FloatTy});
+  FunctionCallee MaxF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::maxnum, {FloatTy});
+  FunctionCallee FabsF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::fabs, {FloatTy});
+  // Chain of llvm.minnum / llvm.maxnum / llvm.fabs operations on FP values
+  // derived from masked integer inputs (so the values stay finite and the
+  // final fptoui is safe).  Targets v_min_f32, v_max_f32, v_med3_f32, and
+  // their packed variants.
+  Value *AMasked = B.CreateAnd(A, ci32(Ctx, 0x3ffu),
+                               Twine(NamePrefix) + ".a.mask");
+  Value *BMasked = B.CreateAnd(Bv, ci32(Ctx, 0x3ffu),
+                               Twine(NamePrefix) + ".b.mask");
+  Value *AF = B.CreateUIToFP(AMasked, FloatTy,
+                             Twine(NamePrefix) + ".a.uitofp");
+  Value *BF = B.CreateUIToFP(BMasked, FloatTy,
+                             Twine(NamePrefix) + ".b.uitofp");
+  Value *One = ConstantFP::get(FloatTy, 1.0);
+  Value *Zero = ConstantFP::get(FloatTy, 0.0);
+
+  Value *Step1 = B.CreateCall(MinF, {AF, BF},
+                              Twine(NamePrefix) + ".min.ab");
+  Value *Step2 = B.CreateCall(MaxF, {Step1, One},
+                              Twine(NamePrefix) + ".max.one");
+  Value *Step3 = B.CreateCall(FabsF, {B.CreateFSub(AF, BF,
+                                                   Twine(NamePrefix) +
+                                                       ".diff")},
+                              Twine(NamePrefix) + ".abs.diff");
+  Value *Step4 = B.CreateCall(MaxF, {Step3, Zero},
+                              Twine(NamePrefix) + ".max.zero");
+  Value *Step5 = B.CreateCall(MinF, {Step2, Step4},
+                              Twine(NamePrefix) + ".min.2.4");
+  // Med3 via min(max(a,b),c)
+  Value *Med = B.CreateCall(MinF, {B.CreateCall(MaxF, {AF, BF},
+                                                Twine(NamePrefix) +
+                                                    ".max.ab.med"),
+                                    Step5},
+                             Twine(NamePrefix) + ".med");
+  // Clamp into [0, 2^20) for safe fptoui.
+  Value *Clamp = B.CreateCall(MinF, {Med,
+                                     ConstantFP::get(FloatTy,
+                                                     1024.0 * 1024.0)},
+                               Twine(NamePrefix) + ".clamp.hi");
+  Clamp = B.CreateCall(MaxF, {Clamp, Zero},
+                       Twine(NamePrefix) + ".clamp.lo");
+  Value *Result = B.CreateFPToUI(Clamp, I32,
+                                 Twine(NamePrefix) + ".fptoui");
+  switch (Gen() % 4) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateXor(Result, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Result, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateOr(Result, ci32(Ctx, 1u),
+                      Twine(NamePrefix) + ".result.nz");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -19373,7 +19565,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1626) {
+  switch (Gen() % 1650) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -21470,6 +21662,36 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1625:
     return emitRandomConditionalShiftPatternIdiom(
         B, A, Bv, Gen, "fuzz.condshift.idiom");
+  case 1626:
+  case 1627:
+  case 1628:
+  case 1629:
+  case 1630:
+  case 1631:
+  case 1632:
+  case 1633:
+    return emitRandomVectorI16AbsCondAddIdiom(
+        B, M, A, Bv, Gen, "fuzz.veci16abscondadd.idiom");
+  case 1634:
+  case 1635:
+  case 1636:
+  case 1637:
+  case 1638:
+  case 1639:
+  case 1640:
+  case 1641:
+    return emitRandomI32ShiftWidthCornerIdiom(
+        B, A, Bv, Gen, "fuzz.i32shiftcorner.idiom");
+  case 1642:
+  case 1643:
+  case 1644:
+  case 1645:
+  case 1646:
+  case 1647:
+  case 1648:
+  case 1649:
+    return emitRandomFPMinMaxChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.fpminmaxchain.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -21504,7 +21726,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1618) {
+  switch (Gen() % 1642) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -23598,6 +23820,36 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1617:
     return emitRandomConditionalShiftPatternIdiom(
         B, A, Bv, Gen, "fuzz.cfg.condshift.idiom");
+  case 1618:
+  case 1619:
+  case 1620:
+  case 1621:
+  case 1622:
+  case 1623:
+  case 1624:
+  case 1625:
+    return emitRandomVectorI16AbsCondAddIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.veci16abscondadd.idiom");
+  case 1626:
+  case 1627:
+  case 1628:
+  case 1629:
+  case 1630:
+  case 1631:
+  case 1632:
+  case 1633:
+    return emitRandomI32ShiftWidthCornerIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.i32shiftcorner.idiom");
+  case 1634:
+  case 1635:
+  case 1636:
+  case 1637:
+  case 1638:
+  case 1639:
+  case 1640:
+  case 1641:
+    return emitRandomFPMinMaxChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.fpminmaxchain.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
