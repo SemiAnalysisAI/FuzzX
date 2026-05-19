@@ -17,6 +17,18 @@ For lane 19, the correct packed add result is `0x00000033`, so the final
 stored value is `0x00000043`. Optimized `ptxas` stores `0x00130043`, as if the
 high 16-bit lane also received `%tid.x`.
 
+A later post-m079 sweep found the same high-half corruption with an
+unpredicated signed packed add:
+
+```text
+divergences/active-20260519-093159-ptxas-13.2.78-post-m079-noscalar16min/div-1779183189-18b0ed9ef4c7ebb0
+```
+
+The extra checked-in variant, `reduced_s16x2_unpredicated.ptx`, reaches an
+unpredicated `add.s16x2` only for lane 4. The correct stored value is
+`0x00000004`, but optimized `ptxas` stores `0x00040004`, again filling the high
+half with the lane value.
+
 ```bash
 PTXAS=/tmp/cuda-13.2.78-py/nvidia/cu13/bin/ptxas \
 target/release/fuzzx-diff-test \
@@ -38,5 +50,7 @@ cuda_13.2.r13.2/compiler.37668154_0
 ```
 
 For continued fuzzing past this family, use
-`DIV_DISABLE_PREDICATED_PACKED_ADD=1`. Replaying the 32k-seed window starting
-at `0x18b0e49b5de5ddc2` with that suppressor produced no divergences.
+`DIV_DISABLE_PACKED_ADD=1`. The original predicated variant was avoided by the
+narrower `DIV_DISABLE_PREDICATED_PACKED_ADD=1`, but the later unpredicated
+signed variant shows the whole packed-add family needs suppression for current
+13.2.78 sweeps.
