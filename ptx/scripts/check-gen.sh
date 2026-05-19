@@ -27,18 +27,23 @@ START_SEED="${DIV_STARTING_SEED:-0}"
 declare -A errs
 pass=0
 tmp_ptx=$(mktemp --suffix=.ptx)
-trap 'rm -f "$tmp_ptx"' EXIT
+tmp_cubin=$(mktemp --suffix=.cubin)
+trap 'rm -f "$tmp_ptx" "$tmp_cubin"' EXIT
 
 for ((i = 0; i < N; i++)); do
     seed=$((START_SEED + i))
     "$GEN" "$seed" > "$tmp_ptx"
-    err=$("$PTXAS" "-arch=$PTXAS_ARCH" "$tmp_ptx" 2>&1 >/dev/null \
-        | head -1 \
-        | sed 's#/tmp/[^ ,:]*##g; s/, line [0-9]*//' \
-        | cut -c1-80)
-    if [[ -z "$err" ]]; then
+    if out=$("$PTXAS" "-arch=$PTXAS_ARCH" "$tmp_ptx" -o "$tmp_cubin" 2>&1 >/dev/null); then
         pass=$((pass + 1))
         err="(PASS)"
+    else
+        err=$(printf '%s\n' "$out" \
+            | head -1 \
+            | sed 's#/tmp/[^ ,:]*##g; s/, line [0-9]*//' \
+            | cut -c1-80)
+        if [[ -z "$err" ]]; then
+            err="(FAILED with empty stderr)"
+        fi
     fi
     errs[$err]=$(( ${errs[$err]:-0} + 1 ))
 done

@@ -2507,6 +2507,20 @@ enum SpecialRegOp {
     LaneMaskLe,
     LaneMaskGt,
     LaneMaskGe,
+    ClusterIdX,
+    ClusterIdY,
+    ClusterIdZ,
+    NClusterIdX,
+    NClusterIdY,
+    NClusterIdZ,
+    ClusterCtaidX,
+    ClusterCtaidY,
+    ClusterCtaidZ,
+    ClusterNCtaidX,
+    ClusterNCtaidY,
+    ClusterNCtaidZ,
+    ClusterCtaRank,
+    ClusterNCtaRank,
 }
 
 impl SpecialRegOp {
@@ -2532,6 +2546,20 @@ impl SpecialRegOp {
             SpecialRegOp::LaneMaskLe => "%lanemask_le",
             SpecialRegOp::LaneMaskGt => "%lanemask_gt",
             SpecialRegOp::LaneMaskGe => "%lanemask_ge",
+            SpecialRegOp::ClusterIdX => "%clusterid.x",
+            SpecialRegOp::ClusterIdY => "%clusterid.y",
+            SpecialRegOp::ClusterIdZ => "%clusterid.z",
+            SpecialRegOp::NClusterIdX => "%nclusterid.x",
+            SpecialRegOp::NClusterIdY => "%nclusterid.y",
+            SpecialRegOp::NClusterIdZ => "%nclusterid.z",
+            SpecialRegOp::ClusterCtaidX => "%cluster_ctaid.x",
+            SpecialRegOp::ClusterCtaidY => "%cluster_ctaid.y",
+            SpecialRegOp::ClusterCtaidZ => "%cluster_ctaid.z",
+            SpecialRegOp::ClusterNCtaidX => "%cluster_nctaid.x",
+            SpecialRegOp::ClusterNCtaidY => "%cluster_nctaid.y",
+            SpecialRegOp::ClusterNCtaidZ => "%cluster_nctaid.z",
+            SpecialRegOp::ClusterCtaRank => "%cluster_ctarank",
+            SpecialRegOp::ClusterNCtaRank => "%cluster_nctarank",
         }
     }
 }
@@ -10277,6 +10305,9 @@ impl<'a> Generator<'a> {
         if self.cfg.emit_f16_compare {
             total_pred = total_pred.max(2);
         }
+        if self.cfg.emit_special_regs {
+            total_pred = total_pred.max(1);
+        }
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -10406,6 +10437,13 @@ impl<'a> Generator<'a> {
                 "    call            (%r{scratch}), fuzzx_helper_chain, (%r1, %r2, %r{tid_reg}, %r0);"
             )
             .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
+        if self.cfg.emit_special_regs {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    mov.pred        %p0, %is_explicit_cluster;").unwrap();
+            writeln!(s, "    mov.u32         %r{scratch}, 0;").unwrap();
+            writeln!(s, "    @%p0 mov.u32    %r{scratch}, 1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_cache_policy_helpers {
@@ -15922,6 +15960,20 @@ fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
         SpecialRegOp::LaneMaskLe,
         SpecialRegOp::LaneMaskGt,
         SpecialRegOp::LaneMaskGe,
+        SpecialRegOp::ClusterIdX,
+        SpecialRegOp::ClusterIdY,
+        SpecialRegOp::ClusterIdZ,
+        SpecialRegOp::NClusterIdX,
+        SpecialRegOp::NClusterIdY,
+        SpecialRegOp::NClusterIdZ,
+        SpecialRegOp::ClusterCtaidX,
+        SpecialRegOp::ClusterCtaidY,
+        SpecialRegOp::ClusterCtaidZ,
+        SpecialRegOp::ClusterNCtaidX,
+        SpecialRegOp::ClusterNCtaidY,
+        SpecialRegOp::ClusterNCtaidZ,
+        SpecialRegOp::ClusterCtaRank,
+        SpecialRegOp::ClusterNCtaRank,
     ];
     Ok(*u.choose(&ops)?)
 }
@@ -17787,7 +17839,22 @@ mod tests {
         "%lanemask_le",
         "%lanemask_gt",
         "%lanemask_ge",
+        "%clusterid.x",
+        "%clusterid.y",
+        "%clusterid.z",
+        "%nclusterid.x",
+        "%nclusterid.y",
+        "%nclusterid.z",
+        "%cluster_ctaid.x",
+        "%cluster_ctaid.y",
+        "%cluster_ctaid.z",
+        "%cluster_nctaid.x",
+        "%cluster_nctaid.y",
+        "%cluster_nctaid.z",
+        "%cluster_ctarank",
+        "%cluster_nctarank",
     ];
+    const SPECIAL_PRED_REG_NAMES: &[&str] = &["%is_explicit_cluster"];
     const CVT_MNEMONICS: &[&str] = &[
         "cvt.u32.u8",
         "cvt.u32.u16",
@@ -18738,6 +18805,13 @@ mod tests {
         ptx.lines().any(|line| {
             let line = line.trim_start();
             line.starts_with("mov.u32       %r") && line.ends_with(&format!("{reg_name};"))
+        })
+    }
+
+    fn has_special_pred_reg(ptx: &str, reg_name: &str) -> bool {
+        ptx.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("mov.pred") && line.ends_with(&format!("{reg_name};"))
         })
     }
 
@@ -23670,6 +23744,15 @@ mod tests {
             .filter_map(|(reg_name, seen)| (!seen).then_some(*reg_name))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+
+        let bytes = bytes_from_seed(0, 4096);
+        let ptx = generate_from_bytes(&bytes).unwrap();
+        for reg_name in SPECIAL_PRED_REG_NAMES {
+            assert!(
+                has_special_pred_reg(&ptx, reg_name),
+                "sample did not emit {reg_name}"
+            );
+        }
     }
 
     #[test]
@@ -23685,6 +23768,12 @@ mod tests {
             for reg_name in SPECIAL_REG_NAMES {
                 assert!(
                     !has_special_reg(&ptx, reg_name),
+                    "seed {seed:x} emitted {reg_name}"
+                );
+            }
+            for reg_name in SPECIAL_PRED_REG_NAMES {
+                assert!(
+                    !has_special_pred_reg(&ptx, reg_name),
                     "seed {seed:x} emitted {reg_name}"
                 );
             }

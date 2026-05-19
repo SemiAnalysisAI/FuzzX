@@ -37,6 +37,64 @@ fn ptxas_accepts_warp_size_constant_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_cluster_special_regs_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry cluster_special_reg_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .pred %p<1>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %clusterid.x;
+    mov.u32 %r1, %clusterid.y;
+    mov.u32 %r2, %clusterid.z;
+    mov.u32 %r3, %nclusterid.x;
+    mov.u32 %r4, %nclusterid.y;
+    mov.u32 %r5, %nclusterid.z;
+    mov.u32 %r6, %cluster_ctaid.x;
+    mov.u32 %r7, %cluster_ctaid.y;
+    mov.u32 %r8, %cluster_ctaid.z;
+    mov.u32 %r9, %cluster_nctaid.x;
+    mov.u32 %r10, %cluster_nctaid.y;
+    mov.u32 %r11, %cluster_nctaid.z;
+    mov.u32 %r12, %cluster_ctarank;
+    mov.u32 %r13, %cluster_nctarank;
+    mov.pred %p0, %is_explicit_cluster;
+    selp.u32 %r14, 1, 0, %p0;
+    add.u32 %r0, %r0, %r1;
+    add.u32 %r0, %r0, %r2;
+    add.u32 %r0, %r0, %r3;
+    add.u32 %r0, %r0, %r4;
+    add.u32 %r0, %r0, %r5;
+    add.u32 %r0, %r0, %r6;
+    add.u32 %r0, %r0, %r7;
+    add.u32 %r0, %r0, %r8;
+    add.u32 %r0, %r0, %r9;
+    add.u32 %r0, %r0, %r10;
+    add.u32 %r0, %r0, %r11;
+    add.u32 %r0, %r0, %r12;
+    add.u32 %r0, %r0, %r13;
+    add.u32 %r0, %r0, %r14;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_pred_logic_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(
