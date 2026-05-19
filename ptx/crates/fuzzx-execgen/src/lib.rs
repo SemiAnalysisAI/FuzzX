@@ -126,6 +126,7 @@ pub struct GenConfig {
     pub emit_volatile_memory: bool,
     pub emit_bit_memory: bool,
     pub emit_memory_fences: bool,
+    pub emit_prefetch: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -357,6 +358,7 @@ impl Default for GenConfig {
             emit_volatile_memory: true,
             emit_bit_memory: true,
             emit_memory_fences: true,
+            emit_prefetch: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -2498,6 +2500,31 @@ impl MemoryFenceOp {
 }
 
 #[derive(Clone, Copy)]
+enum PrefetchOp {
+    GlobalL1,
+    GlobalL2,
+    GlobalL2EvictLast,
+    GlobalL2EvictNormal,
+    UniformL1,
+}
+
+impl PrefetchOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            PrefetchOp::GlobalL1 => "prefetch.global.L1",
+            PrefetchOp::GlobalL2 => "prefetch.global.L2",
+            PrefetchOp::GlobalL2EvictLast => "prefetch.global.L2::evict_last",
+            PrefetchOp::GlobalL2EvictNormal => "prefetch.global.L2::evict_normal",
+            PrefetchOp::UniformL1 => "prefetchu.L1",
+        }
+    }
+
+    fn uses_global_address(self) -> bool {
+        !matches!(self, PrefetchOp::UniformL1)
+    }
+}
+
+#[derive(Clone, Copy)]
 enum CvtOp {
     U8ToU32,
     U16ToU32,
@@ -3863,6 +3890,8 @@ enum Inst {
     },
     /// Uniform memory-ordering instruction with no value result.
     MemoryFence { op: MemoryFenceOp },
+    /// Bounded cache prefetch hint with no value result.
+    Prefetch { op: PrefetchOp, offset: u32 },
     /// Store to this thread's output slice, perform an atomic op, reload it.
     GlobalAtomic {
         op: GlobalAtomicOp,
@@ -8282,6 +8311,12 @@ impl<'a> Generator<'a> {
                     op: pick_memory_fence(u)?,
                 });
             }
+            if self.cfg.emit_prefetch && u.int_in_range(0..=31)? == 0 {
+                return Ok(Inst::Prefetch {
+                    op: pick_prefetch(u)?,
+                    offset: u.int_in_range(0..=(input_len() as u32 - 1))?,
+                });
+            }
             if self.cfg.emit_global_store_roundtrips
                 && can_address_thread_output
                 && u.int_in_range(0..=7)? == 0
@@ -9663,6 +9698,7 @@ impl<'a> Generator<'a> {
                 self.remember_lop3_write(*dst);
             }
             Inst::MemoryFence { .. } => {}
+            Inst::Prefetch { .. } => {}
             Inst::AddCarry { dst_lo, dst_hi, .. }
             | Inst::PredicatedAddCarry { dst_lo, dst_hi, .. }
             | Inst::WideCarry { dst_lo, dst_hi, .. }
@@ -12428,6 +12464,15 @@ impl<'a> Generator<'a> {
             Inst::MemoryFence { op } => {
                 writeln!(s, "    {:<13} ;", op.mnemonic()).unwrap();
             }
+            Inst::Prefetch { op, offset } => {
+                let base = if op.uses_global_address() {
+                    writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+                    "%rd6"
+                } else {
+                    "%rd0"
+                };
+                writeln!(s, "    {:<31} [{base} + {offset}];", op.mnemonic()).unwrap();
+            }
             Inst::PredicatedShift {
                 op,
                 dst,
@@ -15093,6 +15138,17 @@ fn pick_memory_fence(u: &mut Unstructured) -> Result<MemoryFenceOp> {
     Ok(*u.choose(&ops)?)
 }
 
+fn pick_prefetch(u: &mut Unstructured) -> Result<PrefetchOp> {
+    let ops = [
+        PrefetchOp::GlobalL1,
+        PrefetchOp::GlobalL2,
+        PrefetchOp::GlobalL2EvictLast,
+        PrefetchOp::GlobalL2EvictNormal,
+        PrefetchOp::UniformL1,
+    ];
+    Ok(*u.choose(&ops)?)
+}
+
 fn pick_special_reg(u: &mut Unstructured) -> Result<SpecialRegOp> {
     let ops = [
         SpecialRegOp::TidX,
@@ -15913,6 +15969,13 @@ mod tests {
         "fence.sc.cta",
         "fence.sc.gpu",
         "fence.sc.sys",
+    ];
+    const PREFETCH_MNEMONICS: &[&str] = &[
+        "prefetch.global.L1",
+        "prefetch.global.L2",
+        "prefetch.global.L2::evict_last",
+        "prefetch.global.L2::evict_normal",
+        "prefetchu.L1",
     ];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.global.add.u32",
@@ -17261,6 +17324,7 @@ mod tests {
             GLOBAL_STORE_MNEMONICS,
             GENERIC_MEMORY_MNEMONICS,
             MEMORY_FENCE_MNEMONICS,
+            PREFETCH_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
             CONST_LOAD_MNEMONICS,
@@ -20862,6 +20926,30 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in MEMORY_FENCE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prefetch_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 32768, 8192, PREFETCH_MNEMONICS);
+    }
+
+    #[test]
+    fn prefetch_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_prefetch: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in PREFETCH_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
