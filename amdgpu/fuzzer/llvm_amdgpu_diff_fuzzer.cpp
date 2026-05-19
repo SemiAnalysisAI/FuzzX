@@ -1542,6 +1542,19 @@ bool triggersM047V8I8Shl(const Instruction &I) {
          VT->getNumElements() == 8;
 }
 
+bool triggersM048V8I8UAddSat(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call)
+    return false;
+  const auto *VT = dyn_cast<FixedVectorType>(Call->getType());
+  if (!VT || !VT->getElementType()->isIntegerTy(8) ||
+      VT->getNumElements() != 8)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::uadd_sat;
+}
+
 bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
   return BO && BO->getOpcode() == Instruction::LShr &&
@@ -1679,6 +1692,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM045 = envFlag("FUZZX_ALLOW_M045_UREM_OR_ONE", false);
   bool AllowM046 = envFlag("FUZZX_ALLOW_M046_V4I16_CTTZ", false);
   bool AllowM047 = envFlag("FUZZX_ALLOW_M047_V8I8_SHL", false);
+  bool AllowM048 = envFlag("FUZZX_ALLOW_M048_V8I8_UADD_SAT", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1720,6 +1734,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM045 && triggersM045URemOrOne(I)) ||
               (!AllowM046 && triggersM046V4I16Cttz(I)) ||
               (!AllowM047 && triggersM047V8I8Shl(I)) ||
+              (!AllowM048 && triggersM048V8I8UAddSat(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
