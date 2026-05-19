@@ -109,6 +109,7 @@ pub struct GenConfig {
     pub emit_uniform_global_loads: bool,
     pub emit_global_store_roundtrips: bool,
     pub emit_global_atomics: bool,
+    pub emit_global_atomic_dec: bool,
     pub emit_predicated_global_atomics: bool,
     pub emit_global_reductions: bool,
     pub emit_predicated_global_reductions: bool,
@@ -337,6 +338,7 @@ impl Default for GenConfig {
             emit_uniform_global_loads: true,
             emit_global_store_roundtrips: true,
             emit_global_atomics: true,
+            emit_global_atomic_dec: true,
             emit_predicated_global_atomics: true,
             emit_global_reductions: true,
             emit_predicated_global_reductions: true,
@@ -6814,9 +6816,12 @@ impl<'a> Generator<'a> {
             GlobalAtomicOp::ExchB32,
             GlobalAtomicOp::CasB32,
             GlobalAtomicOp::IncU32,
-            GlobalAtomicOp::DecU32,
         ] {
             ops[n_ops] = op;
+            n_ops += 1;
+        }
+        if self.cfg.emit_global_atomic_dec {
+            ops[n_ops] = GlobalAtomicOp::DecU32;
             n_ops += 1;
         }
         if self.cfg.emit_minmax {
@@ -15855,7 +15860,6 @@ mod tests {
         "atom.global.exch.b32",
         "atom.global.cas.b32",
         "atom.global.inc.u32",
-        "atom.global.dec.u32",
         "atom.global.and.b32",
     ];
     const GLOBAL_REDUCTION_MNEMONICS: &[&str] = &[
@@ -18699,6 +18703,7 @@ mod tests {
             emit_bfind: false,
             emit_bfi: false,
             emit_reg_bitfield: false,
+            emit_global_atomic_dec: false,
             emit_scalar_16bit_min: false,
             emit_scalar_16bit_signed_unary: false,
             emit_addc: false,
@@ -20417,6 +20422,7 @@ mod tests {
         let cfg = GenConfig {
             emit_global_store_roundtrips: false,
             emit_global_atomics: false,
+            emit_global_atomic_dec: false,
             emit_global_reductions: false,
             ..coverage_heavy_config()
         };
@@ -20587,6 +20593,23 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn global_atomic_dec_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_atomic_dec: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "atom.global.dec.u32"),
+                "seed {seed:x} emitted atom.global.dec.u32"
+            );
         }
     }
 

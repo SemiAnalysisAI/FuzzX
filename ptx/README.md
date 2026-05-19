@@ -119,6 +119,7 @@ Version | Description |
 | 13.2.78 | [m063-f32-approx-div-cvt-boundary](known-miscompiles/m063-f32-approx-div-cvt-boundary/NOTES.md): `div.approx.ftz.f32` can legally straddle an integer boundary before `cvt.rzi.s32.f32`, producing an exact-output oracle mismatch. |
 | 13.2.78 | [m064-scalar16-max-cvt-predicate-fold](known-miscompiles/m064-scalar16-max-cvt-predicate-fold/NOTES.md): Scalar `max.u16` through `.b16` scratch registers folds a following zero predicate incorrectly. |
 | 13.2.78 | [m065-red-global-min-loop-fold](known-miscompiles/m065-red-global-min-loop-fold/NOTES.md): Loop-carried value feeding a per-thread `red.global.min.u32` roundtrip uses an earlier store value under optimized ptxas. |
+| 13.2.78 | [m067-atom-global-dec-loop-fold](known-miscompiles/m067-atom-global-dec-loop-fold/NOTES.md): Loop-carried state around a per-thread `atom.global.dec.u32` roundtrip changes a final predicate-controlled live-out under optimized ptxas. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
@@ -284,6 +285,7 @@ that feature.
 | `DIV_DISABLE_UNIFORM_GLOBAL_LOADS` | Uniform-address scalar/vector `ldu.global` loads from the input buffer. |
 | `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32,u64}` plus `ld.global.{u8,s8,u16,s16,u32,u64,s64}` roundtrips through the output buffer. |
 | `DIV_DISABLE_GLOBAL_ATOMICS` | Per-thread `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}` roundtrips through the output buffer. |
+| `DIV_DISABLE_GLOBAL_ATOMIC_DEC` | `atom.global.dec.u32` roundtrips only; other global atomics remain enabled. |
 | `DIV_DISABLE_PREDICATED_GLOBAL_ATOMICS` | Predicated per-thread global atomic roundtrips. |
 | `DIV_DISABLE_GLOBAL_REDUCTIONS` | Per-thread `red.global.{add,inc,dec,min,max,and,or,xor}` roundtrips through the output buffer. |
 | `DIV_DISABLE_PREDICATED_GLOBAL_REDUCTIONS` | Predicated per-thread global reduction roundtrips. |
