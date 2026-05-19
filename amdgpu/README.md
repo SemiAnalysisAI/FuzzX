@@ -86,6 +86,8 @@ pure-IR nibble table-lookup idioms, pure-IR bit deposit/extract idioms,
 pure-IR i64 byte-permutation idioms, and pure-IR narrow-vector min/max idioms,
 pure-IR byte-lane select idioms, pure-IR halfword dot-accumulate idioms,
 pure-IR rotate/mask cascade idioms, and pure-IR vector byte gather idioms,
+pure-IR byte-prefix compare and byte median/range idioms, pure-IR i64
+cross-lane fold idioms, and pure-IR vector pairwise byte arithmetic idioms,
 alongside LLVM
 bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
