@@ -7274,6 +7274,286 @@ Value *emitRandomVectorPairwiseByteArithIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomBytePermuteControlIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                         Value *Bv, std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  SmallVector<Value *, 8> Pool;
+  for (unsigned I = 0; I != 4; ++I) {
+    Pool.push_back(extractByteAsI32(B, A, I, Twine(NamePrefix) + ".a.byte"));
+    Pool.push_back(extractByteAsI32(B, Bv, I, Twine(NamePrefix) + ".b.byte"));
+  }
+
+  Value *Control = B.CreateXor(A, B.CreateLShr(Bv, ci32(Ctx, Gen() & 15u),
+                                               Twine(NamePrefix) + ".ctl.shr"),
+                               Twine(NamePrefix) + ".ctl");
+  SmallVector<Value *, 4> Bytes;
+  Value *Fold = ci32(Ctx, Gen() & 0xffu);
+  for (unsigned Lane = 0; Lane != 4; ++Lane) {
+    Value *Sel = B.CreateAnd(
+        B.CreateLShr(Control, ci32(Ctx, Lane * 3u),
+                     Twine(NamePrefix) + ".sel.shr"),
+        ci32(Ctx, 7), Twine(NamePrefix) + ".sel");
+    Value *Choice = Pool[(Lane + (Gen() & 7u)) & 7u];
+    for (unsigned I = 0; I != 8; ++I) {
+      Value *IsCase =
+          B.CreateICmpEQ(Sel, ci32(Ctx, I), Twine(NamePrefix) + ".case");
+      Value *Candidate = Pool[(I + Lane + (Gen() & 3u)) & 7u];
+      Choice = B.CreateSelect(IsCase, Candidate, Choice,
+                              Twine(NamePrefix) + ".choice");
+    }
+
+    Value *Biased =
+        B.CreateAdd(Choice, B.CreateAnd(Fold, ci32(Ctx, 0xff),
+                                        Twine(NamePrefix) + ".fold.byte"),
+                    Twine(NamePrefix) + ".biased");
+    Value *Mixed = nullptr;
+    switch ((Gen() + Lane) % 4) {
+    case 0:
+      Mixed = B.CreateXor(Choice, Fold, Twine(NamePrefix) + ".mix.xor");
+      break;
+    case 1:
+      Mixed = unsignedAbsDiffI32(B, Choice, Fold,
+                                 Twine(NamePrefix) + ".mix.diff");
+      break;
+    case 2:
+      Mixed = unsignedMinMaxSelect(B, Choice, Biased, (Gen() & 1u) != 0,
+                                   Twine(NamePrefix) + ".mix.minmax");
+      break;
+    default:
+      Mixed = B.CreateOr(B.CreateAnd(Choice, ci32(Ctx, 0xf0),
+                                     Twine(NamePrefix) + ".choice.hi"),
+                         B.CreateAnd(Biased, ci32(Ctx, 0x0f),
+                                     Twine(NamePrefix) + ".biased.lo"),
+                         Twine(NamePrefix) + ".mix.nib");
+      break;
+    }
+    Bytes.push_back(Mixed);
+    Fold = B.CreateXor(B.CreateAdd(Fold, Mixed, Twine(NamePrefix) + ".fold.add"),
+                       Sel, Twine(NamePrefix) + ".fold.next");
+  }
+
+  Value *Packed = packFourBytesAsI32(B, Bytes, (Gen() & 1u) != 0,
+                                     Twine(NamePrefix) + ".pack");
+  switch (Gen() % 4) {
+  case 0:
+    return Packed;
+  case 1:
+    return B.CreateXor(Packed, Fold, Twine(NamePrefix) + ".fold.xor");
+  case 2:
+    return B.CreateAdd(Packed, B.CreateShl(Fold, ci32(Ctx, 16),
+                                           Twine(NamePrefix) + ".fold.shl"),
+                       Twine(NamePrefix) + ".fold.add");
+  default:
+    return B.CreateSub(Packed, Fold, Twine(NamePrefix) + ".fold.sub");
+  }
+}
+
+Value *emitRandomBitRunMaskIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                 std::minstd_rand &Gen,
+                                 StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *CountA =
+      B.CreateAnd(B.CreateAdd(A, ci32(Ctx, Gen() & 31u),
+                              Twine(NamePrefix) + ".count.a.add"),
+                  ci32(Ctx, 31), Twine(NamePrefix) + ".count.a");
+  Value *CountB =
+      B.CreateAnd(B.CreateXor(Bv, ci32(Ctx, (Gen() * 17u) & 31u),
+                              Twine(NamePrefix) + ".count.b.xor"),
+                  ci32(Ctx, 31), Twine(NamePrefix) + ".count.b");
+  Value *RunA = B.CreateSub(B.CreateShl(ci32(Ctx, 1), CountA,
+                                        Twine(NamePrefix) + ".run.a.shl"),
+                            ci32(Ctx, 1), Twine(NamePrefix) + ".run.a");
+  Value *RunB = B.CreateSub(B.CreateShl(ci32(Ctx, 1), CountB,
+                                        Twine(NamePrefix) + ".run.b.shl"),
+                            ci32(Ctx, 1), Twine(NamePrefix) + ".run.b");
+  Value *InvA = B.CreateAnd(B.CreateSub(ci32(Ctx, 32), CountA,
+                                        Twine(NamePrefix) + ".inv.a.raw"),
+                            ci32(Ctx, 31), Twine(NamePrefix) + ".inv.a");
+  Value *Left = B.CreateShl(A, CountB, Twine(NamePrefix) + ".left");
+  Value *Right = B.CreateLShr(Bv, InvA, Twine(NamePrefix) + ".right");
+  Value *Window = B.CreateOr(Left, Right, Twine(NamePrefix) + ".window");
+  Value *MaskedA = B.CreateAnd(Window, RunA, Twine(NamePrefix) + ".masked.a");
+  Value *MaskedB =
+      B.CreateAnd(B.CreateXor(Window, Bv, Twine(NamePrefix) + ".window.xor"),
+                  RunB, Twine(NamePrefix) + ".masked.b");
+  Value *Cmp = B.CreateICmpULT(CountA, CountB, Twine(NamePrefix) + ".lt");
+  Value *Selected =
+      B.CreateSelect(Cmp, MaskedA, MaskedB, Twine(NamePrefix) + ".select");
+
+  switch (Gen() % 5) {
+  case 0:
+    return Selected;
+  case 1:
+    return B.CreateXor(Selected, RunA, Twine(NamePrefix) + ".run.xor");
+  case 2:
+    return B.CreateAdd(Selected, RunB, Twine(NamePrefix) + ".run.add");
+  case 3:
+    return B.CreateOr(B.CreateAnd(Selected, ci32(Ctx, 0x00ff00ffu),
+                                  Twine(NamePrefix) + ".sel.mask"),
+                      B.CreateAnd(Window, ci32(Ctx, 0xff00ff00u),
+                                  Twine(NamePrefix) + ".win.mask"),
+                      Twine(NamePrefix) + ".merge");
+  default:
+    return B.CreateSub(Window, Selected, Twine(NamePrefix) + ".sub");
+  }
+}
+
+Value *emitRandomI64MulFoldIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                 std::minstd_rand &Gen,
+                                 StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  Value *Acc = ConstantInt::get(I64, randomInteresting64(Gen));
+
+  for (unsigned I = 0; I != 4; ++I) {
+    bool SignedA = ((Gen() + I) & 1u) != 0;
+    bool SignedB = ((Gen() + I) & 2u) != 0;
+    Value *AByte = extractByteAsI32(B, A, I, Twine(NamePrefix) + ".a.byte");
+    Value *BHalf = extractHalfAsI32(B, Bv, I & 1u, SignedB,
+                                    Twine(NamePrefix) + ".b.half");
+    Value *AWide = SignedA
+                       ? B.CreateSExt(B.CreateTrunc(AByte, Type::getInt8Ty(Ctx),
+                                                    Twine(NamePrefix) + ".a.i8"),
+                                      I64, Twine(NamePrefix) + ".a.sext")
+                       : B.CreateZExt(AByte, I64, Twine(NamePrefix) + ".a.zext");
+    Value *BWide =
+        SignedB ? B.CreateSExt(BHalf, I64, Twine(NamePrefix) + ".b.sext")
+                : B.CreateZExt(BHalf, I64, Twine(NamePrefix) + ".b.zext");
+    Value *Product = B.CreateMul(AWide, BWide, Twine(NamePrefix) + ".mul");
+    Value *Shifted =
+        B.CreateShl(Product, ConstantInt::get(I64, (I + 1u) * 5u),
+                    Twine(NamePrefix) + ".mul.shl");
+    switch ((Gen() + I) % 4) {
+    case 0:
+      Acc = B.CreateAdd(Acc, Product, Twine(NamePrefix) + ".acc.add");
+      break;
+    case 1:
+      Acc = B.CreateXor(Acc, Shifted, Twine(NamePrefix) + ".acc.xor");
+      break;
+    case 2:
+      Acc = B.CreateSub(Acc, Product, Twine(NamePrefix) + ".acc.sub");
+      break;
+    default:
+      Acc = B.CreateAdd(B.CreateLShr(Acc, ConstantInt::get(I64, 3),
+                                     Twine(NamePrefix) + ".acc.shr"),
+                        Shifted, Twine(NamePrefix) + ".acc.shift.add");
+      break;
+    }
+  }
+
+  Value *Lo = B.CreateTrunc(Acc, I32, Twine(NamePrefix) + ".lo");
+  Value *Hi = B.CreateTrunc(B.CreateLShr(Acc, ConstantInt::get(I64, 32),
+                                         Twine(NamePrefix) + ".hi.shr"),
+                            I32, Twine(NamePrefix) + ".hi");
+  Value *Rot =
+      B.CreateOr(B.CreateShl(Lo, ci32(Ctx, 13), Twine(NamePrefix) + ".rot.lo"),
+                 B.CreateLShr(Lo, ci32(Ctx, 19), Twine(NamePrefix) + ".rot.hi"),
+                 Twine(NamePrefix) + ".rot");
+  switch (Gen() % 5) {
+  case 0:
+    return B.CreateXor(Lo, Hi, Twine(NamePrefix) + ".fold.xor");
+  case 1:
+    return B.CreateAdd(Rot, Hi, Twine(NamePrefix) + ".rot.add");
+  case 2:
+    return B.CreateSub(Hi, Rot, Twine(NamePrefix) + ".rot.sub");
+  case 3:
+    return B.CreateOr(B.CreateAnd(Rot, ci32(Ctx, 0xffff0000u),
+                                  Twine(NamePrefix) + ".rot.mask"),
+                      B.CreateAnd(Hi, ci32(Ctx, 0x0000ffffu),
+                                  Twine(NamePrefix) + ".hi.mask"),
+                      Twine(NamePrefix) + ".pack");
+  default:
+    return unsignedMinMaxSelect(B, Rot, Hi, (Gen() & 1u) != 0,
+                                Twine(NamePrefix) + ".minmax");
+  }
+}
+
+Value *emitRandomHalfwordBlendNetworkIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                           Value *Bv, std::minstd_rand &Gen,
+                                           StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  SmallVector<Value *, 4> Halves;
+  Halves.push_back(extractHalfAsI32(B, A, 0, false,
+                                    Twine(NamePrefix) + ".a.lo"));
+  Halves.push_back(extractHalfAsI32(B, A, 1, false,
+                                    Twine(NamePrefix) + ".a.hi"));
+  Halves.push_back(extractHalfAsI32(B, Bv, 0, false,
+                                    Twine(NamePrefix) + ".b.lo"));
+  Halves.push_back(extractHalfAsI32(B, Bv, 1, false,
+                                    Twine(NamePrefix) + ".b.hi"));
+
+  Value *Fold = ci32(Ctx, Gen() & 0xffffu);
+  for (unsigned Step = 0; Step != 5; ++Step) {
+    unsigned L = (Step + (Gen() & 3u)) & 3u;
+    unsigned R = (Step * 3u + (Gen() & 3u)) & 3u;
+    Value *X = Halves[L];
+    Value *Y = Halves[R];
+    Value *Cmp = ((Gen() + Step) & 1u)
+                     ? B.CreateICmpULT(X, Y, Twine(NamePrefix) + ".ult")
+                     : B.CreateICmpSGT(
+                           B.CreateSExt(B.CreateTrunc(X, Type::getInt16Ty(Ctx),
+                                                      Twine(NamePrefix) + ".x.i16"),
+                                        I32, Twine(NamePrefix) + ".x.sext"),
+                           B.CreateSExt(B.CreateTrunc(Y, Type::getInt16Ty(Ctx),
+                                                      Twine(NamePrefix) + ".y.i16"),
+                                        I32, Twine(NamePrefix) + ".y.sext"),
+                           Twine(NamePrefix) + ".sgt");
+    Value *Lo = B.CreateSelect(Cmp, X, Y, Twine(NamePrefix) + ".lo");
+    Value *Hi = B.CreateSelect(Cmp, Y, X, Twine(NamePrefix) + ".hi");
+    Value *Mixed = nullptr;
+    switch ((Gen() + Step) % 4) {
+    case 0:
+      Mixed = B.CreateAdd(Lo, Hi, Twine(NamePrefix) + ".mix.add");
+      break;
+    case 1:
+      Mixed = B.CreateSub(Hi, Lo, Twine(NamePrefix) + ".mix.sub");
+      break;
+    case 2:
+      Mixed = B.CreateXor(Lo, B.CreateShl(Hi, ci32(Ctx, 3),
+                                          Twine(NamePrefix) + ".hi.shl"),
+                          Twine(NamePrefix) + ".mix.xor");
+      break;
+    default:
+      Mixed = B.CreateOr(B.CreateAnd(Lo, ci32(Ctx, 0x00ff),
+                                     Twine(NamePrefix) + ".lo.byte"),
+                         B.CreateShl(B.CreateAnd(Hi, ci32(Ctx, 0x00ff),
+                                                 Twine(NamePrefix) + ".hi.byte"),
+                                     ci32(Ctx, 8), Twine(NamePrefix) + ".hi.pack"),
+                         Twine(NamePrefix) + ".mix.pack");
+      break;
+    }
+    Halves[L] = B.CreateAnd(Mixed, ci32(Ctx, 0xffff),
+                            Twine(NamePrefix) + ".half.update");
+    Fold = B.CreateXor(B.CreateAdd(Fold, Mixed, Twine(NamePrefix) + ".fold.add"),
+                       B.CreateZExt(Cmp, I32, Twine(NamePrefix) + ".cmp.i32"),
+                       Twine(NamePrefix) + ".fold.next");
+  }
+
+  Value *PackedLo = packTwoHalvesAsI32(B, Halves[0], Halves[1],
+                                       (Gen() & 1u) != 0,
+                                       Twine(NamePrefix) + ".pack.lo");
+  Value *PackedHi = packTwoHalvesAsI32(B, Halves[2], Halves[3],
+                                       (Gen() & 1u) != 0,
+                                       Twine(NamePrefix) + ".pack.hi");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(PackedLo, PackedHi, Twine(NamePrefix) + ".xor");
+  case 1:
+    return B.CreateAdd(PackedLo, Fold, Twine(NamePrefix) + ".fold.add");
+  case 2:
+    return B.CreateSub(PackedHi, PackedLo, Twine(NamePrefix) + ".sub");
+  default:
+    return B.CreateOr(B.CreateAnd(PackedLo, ci32(Ctx, 0x00ff00ffu),
+                                  Twine(NamePrefix) + ".lo.mask"),
+                      B.CreateAnd(PackedHi, ci32(Ctx, 0xff00ff00u),
+                                  Twine(NamePrefix) + ".hi.mask"),
+                      Twine(NamePrefix) + ".merge");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -7283,7 +7563,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 426) {
+  switch (Gen() % 458) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -7860,6 +8140,46 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 409:
     return emitRandomVectorPairwiseByteArithIdiom(B, A, Bv, Gen,
                                                   "fuzz.vecpairbyte.idiom");
+  case 410:
+  case 411:
+  case 412:
+  case 413:
+  case 414:
+  case 415:
+  case 416:
+  case 417:
+    return emitRandomBytePermuteControlIdiom(B, A, Bv, Gen,
+                                             "fuzz.bytepermctl.idiom");
+  case 418:
+  case 419:
+  case 420:
+  case 421:
+  case 422:
+  case 423:
+  case 424:
+  case 425:
+    return emitRandomBitRunMaskIdiom(B, A, Bv, Gen,
+                                     "fuzz.bitrunmask.idiom");
+  case 426:
+  case 427:
+  case 428:
+  case 429:
+  case 430:
+  case 431:
+  case 432:
+  case 433:
+    return emitRandomI64MulFoldIdiom(B, A, Bv, Gen,
+                                     "fuzz.i64mulfold.idiom");
+  case 434:
+  case 435:
+  case 436:
+  case 437:
+  case 438:
+  case 439:
+  case 440:
+  case 441:
+    return emitRandomHalfwordBlendNetworkIdiom(B, A, Bv, Gen,
+                                               "fuzz.halfblend.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -7894,7 +8214,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 410) {
+  switch (Gen() % 442) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -8468,6 +8788,46 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 401:
     return emitRandomVectorPairwiseByteArithIdiom(B, A, Bv, Gen,
                                                   "fuzz.cfg.vecpairbyte.idiom");
+  case 402:
+  case 403:
+  case 404:
+  case 405:
+  case 406:
+  case 407:
+  case 408:
+  case 409:
+    return emitRandomBytePermuteControlIdiom(B, A, Bv, Gen,
+                                             "fuzz.cfg.bytepermctl.idiom");
+  case 410:
+  case 411:
+  case 412:
+  case 413:
+  case 414:
+  case 415:
+  case 416:
+  case 417:
+    return emitRandomBitRunMaskIdiom(B, A, Bv, Gen,
+                                     "fuzz.cfg.bitrunmask.idiom");
+  case 418:
+  case 419:
+  case 420:
+  case 421:
+  case 422:
+  case 423:
+  case 424:
+  case 425:
+    return emitRandomI64MulFoldIdiom(B, A, Bv, Gen,
+                                     "fuzz.cfg.i64mulfold.idiom");
+  case 426:
+  case 427:
+  case 428:
+  case 429:
+  case 430:
+  case 431:
+  case 432:
+  case 433:
+    return emitRandomHalfwordBlendNetworkIdiom(B, A, Bv, Gen,
+                                               "fuzz.cfg.halfblend.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
