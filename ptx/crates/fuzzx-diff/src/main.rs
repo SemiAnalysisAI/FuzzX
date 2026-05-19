@@ -1958,8 +1958,10 @@ impl Config {
             emit_const_memory: !disable_const_memory,
             emit_local_memory: !disable_local_memory,
             emit_shared_memory: !disable_shared_memory && !disable_mul_wide && !disable_wide_int,
+            // The 64-bit shared atomic prologue block is independent of the
+            // 32-bit random-body generator, so don't fold it into
+            // disable_shared_atomics (which targets the 32-bit body emitter).
             emit_shared_atomics_u64: !disable_shared_atomics_u64
-                && !disable_shared_atomics
                 && !disable_shared_memory,
             emit_shared_atomics: !disable_shared_atomics
                 && !disable_shared_memory
