@@ -16,8 +16,9 @@
 //!     firing. Counters initialize once in entry and only decrease, so
 //!     total back-edge firings ≤ sum of initial counter values.
 //!   * Each thread writes only to its own disjoint output slice, private local
-//!     memory, and private shared-memory slot; no atomics, no warp intrinsics,
-//!     no `bar.sync`.
+//!     memory, and private shared-memory slot; global atomics/reductions are
+//!     constrained to the writer thread's output slice; no warp intrinsics or
+//!     `bar.sync`.
 //!   * Variable shift counts are masked or use `.wrap` semantics. Divisors are
 //!     nonzero. Floating-point inputs are sanitized to a small finite range.
 
@@ -107,6 +108,12 @@ pub struct GenConfig {
     pub emit_global_loads: bool,
     pub emit_uniform_global_loads: bool,
     pub emit_global_store_roundtrips: bool,
+    pub emit_global_atomics: bool,
+    pub emit_predicated_global_atomics: bool,
+    pub emit_global_reductions: bool,
+    pub emit_predicated_global_reductions: bool,
+    pub emit_generic_memory: bool,
+    pub emit_predicated_generic_memory: bool,
     pub emit_const_memory: bool,
     pub emit_local_memory: bool,
     pub emit_shared_memory: bool,
@@ -329,6 +336,12 @@ impl Default for GenConfig {
             emit_global_loads: true,
             emit_uniform_global_loads: true,
             emit_global_store_roundtrips: true,
+            emit_global_atomics: true,
+            emit_predicated_global_atomics: true,
+            emit_global_reductions: true,
+            emit_predicated_global_reductions: true,
+            emit_generic_memory: true,
+            emit_predicated_generic_memory: true,
             emit_const_memory: true,
             emit_local_memory: true,
             emit_shared_memory: true,
@@ -954,6 +967,14 @@ impl GlobalStoreRoundtripOp {
         format!("st.volatile.global.{}", self.store_type_suffix())
     }
 
+    fn generic_load_mnemonic(self) -> String {
+        format!("ld.{}", self.load_type_suffix())
+    }
+
+    fn generic_store_mnemonic(self) -> String {
+        format!("st.{}", self.store_type_suffix())
+    }
+
     fn width(self) -> u32 {
         match self {
             GlobalStoreRoundtripOp::U8
@@ -974,6 +995,76 @@ impl GlobalStoreRoundtripOp {
             self,
             GlobalStoreRoundtripOp::U64 | GlobalStoreRoundtripOp::S64 | GlobalStoreRoundtripOp::B64
         )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GlobalAtomicOp {
+    AddU32,
+    ExchB32,
+    CasB32,
+    IncU32,
+    DecU32,
+    MinU32,
+    MaxU32,
+    MinS32,
+    MaxS32,
+    AndB32,
+    OrB32,
+    XorB32,
+}
+
+impl GlobalAtomicOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            GlobalAtomicOp::AddU32 => "atom.global.add.u32",
+            GlobalAtomicOp::ExchB32 => "atom.global.exch.b32",
+            GlobalAtomicOp::CasB32 => "atom.global.cas.b32",
+            GlobalAtomicOp::IncU32 => "atom.global.inc.u32",
+            GlobalAtomicOp::DecU32 => "atom.global.dec.u32",
+            GlobalAtomicOp::MinU32 => "atom.global.min.u32",
+            GlobalAtomicOp::MaxU32 => "atom.global.max.u32",
+            GlobalAtomicOp::MinS32 => "atom.global.min.s32",
+            GlobalAtomicOp::MaxS32 => "atom.global.max.s32",
+            GlobalAtomicOp::AndB32 => "atom.global.and.b32",
+            GlobalAtomicOp::OrB32 => "atom.global.or.b32",
+            GlobalAtomicOp::XorB32 => "atom.global.xor.b32",
+        }
+    }
+
+    fn uses_compare(self) -> bool {
+        matches!(self, GlobalAtomicOp::CasB32)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GlobalReductionOp {
+    AddU32,
+    IncU32,
+    DecU32,
+    MinU32,
+    MaxU32,
+    MinS32,
+    MaxS32,
+    AndB32,
+    OrB32,
+    XorB32,
+}
+
+impl GlobalReductionOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            GlobalReductionOp::AddU32 => "red.global.add.u32",
+            GlobalReductionOp::IncU32 => "red.global.inc.u32",
+            GlobalReductionOp::DecU32 => "red.global.dec.u32",
+            GlobalReductionOp::MinU32 => "red.global.min.u32",
+            GlobalReductionOp::MaxU32 => "red.global.max.u32",
+            GlobalReductionOp::MinS32 => "red.global.min.s32",
+            GlobalReductionOp::MaxS32 => "red.global.max.s32",
+            GlobalReductionOp::AndB32 => "red.global.and.b32",
+            GlobalReductionOp::OrB32 => "red.global.or.b32",
+            GlobalReductionOp::XorB32 => "red.global.xor.b32",
+        }
     }
 }
 
@@ -3707,6 +3798,68 @@ enum Inst {
         volatile: bool,
         dst: u32,
         src: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Generic-address store/load roundtrip through this thread's output slice.
+    GenericStoreRoundtrip {
+        op: GlobalStoreRoundtripOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+        space_pred: u32,
+    },
+    /// Predicated generic-address store/load roundtrip.
+    PredicatedGenericStoreRoundtrip {
+        op: GlobalStoreRoundtripOp,
+        dst: u32,
+        src: u32,
+        offset: u32,
+        space_pred: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Store to this thread's output slice, perform an atomic op, reload it.
+    GlobalAtomic {
+        op: GlobalAtomicOp,
+        dst: u32,
+        init: u32,
+        compare: u32,
+        value: u32,
+        offset: u32,
+    },
+    /// Predicated per-thread global atomic roundtrip.
+    PredicatedGlobalAtomic {
+        op: GlobalAtomicOp,
+        dst: u32,
+        init: u32,
+        compare: u32,
+        value: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Store to this thread's output slice, perform a global reduction, reload it.
+    GlobalReduction {
+        op: GlobalReductionOp,
+        dst: u32,
+        init: u32,
+        value: u32,
+        offset: u32,
+    },
+    /// Predicated per-thread global reduction roundtrip.
+    PredicatedGlobalReduction {
+        op: GlobalReductionOp,
+        dst: u32,
+        init: u32,
+        value: u32,
         offset: u32,
         cmp: CmpOp,
         ca: Operand,
@@ -6525,6 +6678,245 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_generic_store_roundtrip(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory
+            && self.cfg.emit_predicated_generic_memory
+            && u.arbitrary::<bool>()?;
+        let allow_narrow_bit =
+            self.cfg.emit_bitwise_binops && (!predicated || self.cfg.emit_predicated_alu);
+        let base_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+        ];
+        let bit_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::B8,
+            GlobalStoreRoundtripOp::B16,
+            GlobalStoreRoundtripOp::B32,
+        ];
+        let bit_no_narrow_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::B32,
+        ];
+        let wide_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+        ];
+        let wide_bit_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+            GlobalStoreRoundtripOp::B8,
+            GlobalStoreRoundtripOp::B16,
+            GlobalStoreRoundtripOp::B32,
+            GlobalStoreRoundtripOp::B64,
+        ];
+        let wide_bit_no_narrow_ops = [
+            GlobalStoreRoundtripOp::U8,
+            GlobalStoreRoundtripOp::S8,
+            GlobalStoreRoundtripOp::U16,
+            GlobalStoreRoundtripOp::S16,
+            GlobalStoreRoundtripOp::U32,
+            GlobalStoreRoundtripOp::U64,
+            GlobalStoreRoundtripOp::S64,
+            GlobalStoreRoundtripOp::B32,
+            GlobalStoreRoundtripOp::B64,
+        ];
+        let ops = match (
+            self.cfg.emit_wide_memory,
+            self.cfg.emit_bit_memory,
+            allow_narrow_bit,
+        ) {
+            (true, true, true) => &wide_bit_ops[..],
+            (true, true, false) => &wide_bit_no_narrow_ops[..],
+            (true, false, _) => &wide_ops[..],
+            (false, true, true) => &bit_ops[..],
+            (false, true, false) => &bit_no_narrow_ops[..],
+            (false, false, _) => &base_ops[..],
+        };
+        let op = *u.choose(ops)?;
+        let width = op.width();
+        let max_offset = N_OUTPUTS * 4 - width;
+        let offset = u.int_in_range(0..=max_offset / width)? * width;
+        let dst = self.pick_dst(u)?;
+        let src = self.pick_safe_reg(u)?;
+        let space_pred = self.alloc_pred();
+        if predicated {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedGenericStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+                space_pred,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::GenericStoreRoundtrip {
+            op,
+            dst,
+            src,
+            offset,
+            space_pred,
+        })
+    }
+
+    fn pick_global_atomic(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory
+            && self.cfg.emit_predicated_global_atomics
+            && u.arbitrary::<bool>()?;
+        let mut ops = [GlobalAtomicOp::AddU32; 12];
+        let mut n_ops = 0;
+        for op in [
+            GlobalAtomicOp::AddU32,
+            GlobalAtomicOp::ExchB32,
+            GlobalAtomicOp::CasB32,
+            GlobalAtomicOp::IncU32,
+            GlobalAtomicOp::DecU32,
+        ] {
+            ops[n_ops] = op;
+            n_ops += 1;
+        }
+        if self.cfg.emit_minmax {
+            for op in [
+                GlobalAtomicOp::MinU32,
+                GlobalAtomicOp::MaxU32,
+                GlobalAtomicOp::MinS32,
+                GlobalAtomicOp::MaxS32,
+            ] {
+                ops[n_ops] = op;
+                n_ops += 1;
+            }
+        }
+        if self.cfg.emit_bitwise_binops {
+            ops[n_ops] = GlobalAtomicOp::AndB32;
+            n_ops += 1;
+            if self.cfg.emit_or {
+                ops[n_ops] = GlobalAtomicOp::OrB32;
+                n_ops += 1;
+            }
+            if self.cfg.emit_xor {
+                ops[n_ops] = GlobalAtomicOp::XorB32;
+                n_ops += 1;
+            }
+        }
+        let op = *u.choose(&ops[..n_ops])?;
+        let offset = u.int_in_range(0..=N_OUTPUTS - 1)? * 4;
+        let dst = self.pick_dst(u)?;
+        let init = self.pick_safe_reg(u)?;
+        let compare = self.pick_safe_reg(u)?;
+        let value = self.pick_safe_reg(u)?;
+        if predicated {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedGlobalAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::GlobalAtomic {
+            op,
+            dst,
+            init,
+            compare,
+            value,
+            offset,
+        })
+    }
+
+    fn pick_global_reduction(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory
+            && self.cfg.emit_predicated_global_reductions
+            && u.arbitrary::<bool>()?;
+        let mut ops = [GlobalReductionOp::AddU32; 10];
+        let mut n_ops = 0;
+        ops[n_ops] = GlobalReductionOp::AddU32;
+        n_ops += 1;
+        ops[n_ops] = GlobalReductionOp::IncU32;
+        n_ops += 1;
+        ops[n_ops] = GlobalReductionOp::DecU32;
+        n_ops += 1;
+        if self.cfg.emit_minmax {
+            for op in [
+                GlobalReductionOp::MinU32,
+                GlobalReductionOp::MaxU32,
+                GlobalReductionOp::MinS32,
+                GlobalReductionOp::MaxS32,
+            ] {
+                ops[n_ops] = op;
+                n_ops += 1;
+            }
+        }
+        if self.cfg.emit_bitwise_binops {
+            ops[n_ops] = GlobalReductionOp::AndB32;
+            n_ops += 1;
+            if self.cfg.emit_or {
+                ops[n_ops] = GlobalReductionOp::OrB32;
+                n_ops += 1;
+            }
+            if self.cfg.emit_xor {
+                ops[n_ops] = GlobalReductionOp::XorB32;
+                n_ops += 1;
+            }
+        }
+        let op = *u.choose(&ops[..n_ops])?;
+        let offset = u.int_in_range(0..=N_OUTPUTS - 1)? * 4;
+        let dst = self.pick_dst(u)?;
+        let init = self.pick_safe_reg(u)?;
+        let value = self.pick_safe_reg(u)?;
+        if predicated {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedGlobalReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::GlobalReduction {
+            op,
+            dst,
+            init,
+            value,
+            offset,
+        })
+    }
+
     fn pick_const_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
         let allow_narrow_bit =
@@ -7820,15 +8212,33 @@ impl<'a> Generator<'a> {
         //   255..256 (<1%) Dp4a/Dp2a
         let pick: u8 = u.arbitrary()?;
         if pick < 90 {
+            let can_address_thread_output = self.cfg.emit_mul_wide && self.cfg.emit_wide_int;
             if self.cfg.emit_global_loads && u.int_in_range(0..=7)? == 0 {
                 return self.pick_global_load(u);
             }
             if self.cfg.emit_global_store_roundtrips
-                && self.cfg.emit_mul_wide
-                && self.cfg.emit_wide_int
+                && can_address_thread_output
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_global_store_roundtrip(u);
+            }
+            if self.cfg.emit_generic_memory
+                && can_address_thread_output
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_generic_store_roundtrip(u);
+            }
+            if self.cfg.emit_global_atomics
+                && can_address_thread_output
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_global_atomic(u);
+            }
+            if self.cfg.emit_global_reductions
+                && can_address_thread_output
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_global_reduction(u);
             }
             if self.cfg.emit_const_memory && u.int_in_range(0..=7)? == 0 {
                 return self.pick_const_load(u);
@@ -9225,6 +9635,12 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedGlobalLoad { dst, .. }
             | Inst::GlobalStoreRoundtrip { dst, .. }
             | Inst::PredicatedGlobalStoreRoundtrip { dst, .. }
+            | Inst::GenericStoreRoundtrip { dst, .. }
+            | Inst::PredicatedGenericStoreRoundtrip { dst, .. }
+            | Inst::GlobalAtomic { dst, .. }
+            | Inst::PredicatedGlobalAtomic { dst, .. }
+            | Inst::GlobalReduction { dst, .. }
+            | Inst::PredicatedGlobalReduction { dst, .. }
             | Inst::ConstLoad { dst, .. }
             | Inst::PredicatedConstLoad { dst, .. }
             | Inst::LocalMem { dst, .. }
@@ -10139,6 +10555,186 @@ impl<'a> Generator<'a> {
                     op.is_wide(),
                     Some(pred),
                 );
+            }
+            Inst::GenericStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+                space_pred,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    mov.u64       %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    isspacep.global %p{space_pred}, %rd8;").unwrap();
+                let store_mnemonic = op.generic_store_mnemonic();
+                let load_mnemonic = op.generic_load_mnemonic();
+                self.emit_memory_store(s, &store_mnemonic, src, "%rd8", offset, op.is_wide(), None);
+                self.emit_memory_load(s, &load_mnemonic, dst, "%rd8", offset, op.is_wide(), None);
+                writeln!(s, "    selp.u32      %r{scratch}, 1, 0, %p{space_pred};").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::PredicatedGenericStoreRoundtrip {
+                op,
+                dst,
+                src,
+                offset,
+                space_pred,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    mov.u64       %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    isspacep.global %p{space_pred}, %rd8;").unwrap();
+                let store_mnemonic = op.generic_store_mnemonic();
+                let load_mnemonic = op.generic_load_mnemonic();
+                self.emit_memory_store(
+                    s,
+                    &store_mnemonic,
+                    src,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
+                self.emit_memory_load(
+                    s,
+                    &load_mnemonic,
+                    dst,
+                    "%rd8",
+                    offset,
+                    op.is_wide(),
+                    Some(pred),
+                );
+                writeln!(s, "    selp.u32      %r{scratch}, 1, 0, %p{space_pred};").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::GlobalAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    st.global.u32 [%rd8 + {offset}], %r{init};").unwrap();
+                writeln!(s, "    mov.u32       %r{scratch}, %r{value};").unwrap();
+                if op.uses_compare() {
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, [%rd8 + {offset}], %r{compare}, %r{scratch};",
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, [%rd8 + {offset}], %r{scratch};",
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    ld.global.u32 %r{scratch}, [%rd8 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::PredicatedGlobalAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    st.global.u32 [%rd8 + {offset}], %r{init};").unwrap();
+                writeln!(s, "    mov.u32       %r{scratch}, %r{value};").unwrap();
+                writeln!(s, "    mov.u32       %r{dst}, %r{init};").unwrap();
+                if op.uses_compare() {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, [%rd8 + {offset}], %r{compare}, %r{scratch};",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, [%rd8 + {offset}], %r{scratch};",
+                        pred_guard(pred),
+                        op.mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    ld.global.u32 %r{scratch}, [%rd8 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::GlobalReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    st.global.u32 [%rd8 + {offset}], %r{init};").unwrap();
+                writeln!(s, "    {:<13} [%rd8 + {offset}], %r{value};", op.mnemonic()).unwrap();
+                writeln!(s, "    ld.global.u32 %r{scratch}, [%rd8 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::PredicatedGlobalReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+                writeln!(s, "    mul.wide.u32  %rd9, %r{tid_reg}, {};", N_OUTPUTS * 4).unwrap();
+                writeln!(s, "    add.s64       %rd8, %rd8, %rd9;").unwrap();
+                writeln!(s, "    st.global.u32 [%rd8 + {offset}], %r{init};").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} [%rd8 + {offset}], %r{value};",
+                    pred_guard(pred),
+                    op.mnemonic()
+                )
+                .unwrap();
+                writeln!(s, "    ld.global.u32 %r{scratch}, [%rd8 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
             }
             Inst::ConstLoad { op, dst, offset } => {
                 writeln!(s, "    mov.u64       %rd6, fuzzx_const;").unwrap();
@@ -15187,6 +15783,68 @@ mod tests {
         "st.global.u32",
         "st.global.u64",
     ];
+    const GENERIC_MEMORY_MNEMONICS: &[&str] = &[
+        "ld.u8",
+        "ld.s8",
+        "ld.u16",
+        "ld.s16",
+        "ld.u32",
+        "ld.u64",
+        "ld.s64",
+        "ld.b8",
+        "ld.b16",
+        "ld.b32",
+        "ld.b64",
+        "st.u8",
+        "st.u16",
+        "st.u32",
+        "st.u64",
+        "st.b8",
+        "st.b16",
+        "st.b32",
+        "st.b64",
+        "isspacep.global",
+    ];
+    const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
+        "atom.global.add.u32",
+        "atom.global.exch.b32",
+        "atom.global.cas.b32",
+        "atom.global.inc.u32",
+        "atom.global.dec.u32",
+        "atom.global.min.u32",
+        "atom.global.max.u32",
+        "atom.global.min.s32",
+        "atom.global.max.s32",
+        "atom.global.and.b32",
+        "atom.global.or.b32",
+        "atom.global.xor.b32",
+    ];
+    const POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
+        "atom.global.add.u32",
+        "atom.global.exch.b32",
+        "atom.global.cas.b32",
+        "atom.global.inc.u32",
+        "atom.global.dec.u32",
+        "atom.global.and.b32",
+    ];
+    const GLOBAL_REDUCTION_MNEMONICS: &[&str] = &[
+        "red.global.add.u32",
+        "red.global.inc.u32",
+        "red.global.dec.u32",
+        "red.global.min.u32",
+        "red.global.max.u32",
+        "red.global.min.s32",
+        "red.global.max.s32",
+        "red.global.and.b32",
+        "red.global.or.b32",
+        "red.global.xor.b32",
+    ];
+    const POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS: &[&str] = &[
+        "red.global.add.u32",
+        "red.global.inc.u32",
+        "red.global.dec.u32",
+        "red.global.and.b32",
+    ];
     const GLOBAL_STORE_CACHE_PREFIXES: &[&str] = &[
         "st.global.wb.",
         "st.global.cg.",
@@ -15340,6 +15998,14 @@ mod tests {
         "st.global.b16",
         "st.global.b32",
         "st.global.b64",
+        "ld.b8",
+        "ld.b16",
+        "ld.b32",
+        "ld.b64",
+        "st.b8",
+        "st.b16",
+        "st.b32",
+        "st.b64",
         "ld.const.b8",
         "ld.const.b16",
         "ld.const.b32",
@@ -16404,6 +17070,9 @@ mod tests {
             SCALAR_16BIT_SELP_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
             GLOBAL_STORE_MNEMONICS,
+            GENERIC_MEMORY_MNEMONICS,
+            GLOBAL_ATOMIC_MNEMONICS,
+            GLOBAL_REDUCTION_MNEMONICS,
             CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
@@ -16481,6 +17150,9 @@ mod tests {
             GLOBAL_LOAD_MNEMONICS,
             UNIFORM_GLOBAL_LOAD_MNEMONICS,
             GLOBAL_STORE_MNEMONICS,
+            GENERIC_MEMORY_MNEMONICS,
+            POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
+            POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
             CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
@@ -16694,6 +17366,22 @@ mod tests {
         })
     }
 
+    fn generic_load_width(mnemonic: &str) -> Option<u32> {
+        mnemonic
+            .strip_prefix("ld.")
+            .and_then(scalar_global_load_width)
+    }
+
+    fn generic_store_width(mnemonic: &str) -> Option<u32> {
+        mnemonic
+            .strip_prefix("st.")
+            .and_then(scalar_global_store_width)
+    }
+
+    fn generic_memory_width(mnemonic: &str) -> Option<u32> {
+        generic_load_width(mnemonic).or_else(|| generic_store_width(mnemonic))
+    }
+
     fn const_vector_width(mnemonic: &str) -> Option<u32> {
         mnemonic
             .strip_prefix("ld.const.")
@@ -16766,6 +17454,7 @@ mod tests {
     fn is_bit_memory_mnemonic(mnemonic: &str) -> bool {
         let is_memory = global_load_width(mnemonic).is_some()
             || global_store_width(mnemonic).is_some()
+            || generic_memory_width(mnemonic).is_some()
             || const_load_width(mnemonic).is_some()
             || local_memory_width(mnemonic).is_some()
             || shared_memory_width(mnemonic).is_some()
@@ -16826,6 +17515,31 @@ mod tests {
     fn has_body_global_store_roundtrip_access(ptx: &str, mnemonic: &str) -> bool {
         ptx.lines()
             .filter_map(body_global_store_roundtrip_access)
+            .any(|(op, _)| op == mnemonic)
+    }
+
+    fn body_generic_memory_access(line: &str) -> Option<(&str, u32)> {
+        let line = line.trim_start();
+        if !line.contains("[%rd8 + ") {
+            return None;
+        }
+        let mnemonic = body_mnemonic(line)?;
+        if generic_memory_width(mnemonic).is_none() {
+            return None;
+        }
+        let offset = line
+            .split("[%rd8 + ")
+            .nth(1)?
+            .split(']')
+            .next()?
+            .parse()
+            .ok()?;
+        Some((mnemonic, offset))
+    }
+
+    fn has_body_generic_memory_access(ptx: &str, mnemonic: &str) -> bool {
+        ptx.lines()
+            .filter_map(body_generic_memory_access)
             .any(|(op, _)| op == mnemonic)
     }
 
@@ -17018,9 +17732,17 @@ mod tests {
         })
     }
 
+    fn has_predicated_generic_memory_access(ptx: &str) -> bool {
+        ptx.lines().any(|line| {
+            line.contains("[%rd8 + ")
+                && predicated_mnemonic(line).is_some_and(|op| generic_memory_width(op).is_some())
+        })
+    }
+
     fn has_any_predicated_memory_access(ptx: &str) -> bool {
         has_predicated_global_load_access(ptx)
             || has_predicated_global_roundtrip_access(ptx)
+            || has_predicated_generic_memory_access(ptx)
             || has_predicated_memory_access(ptx, CONST_LOAD_MNEMONICS, "[%rd6 + ")
             || has_predicated_memory_access(ptx, LOCAL_MEM_LOAD_MNEMONICS, "[%rd6 + ")
             || has_predicated_memory_access(ptx, LOCAL_MEM_STORE_MNEMONICS, "[%rd6 + ")
@@ -18318,7 +19040,7 @@ mod tests {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; PACKED_ADD_MNEMONICS.len()];
 
-        for seed in 0..4096 {
+        for seed in 0..8192 {
             let bytes = bytes_from_seed(seed, 32768);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for op in ptx.lines().filter_map(predicated_mnemonic) {
@@ -18410,7 +19132,7 @@ mod tests {
         let cfg = coverage_heavy_config();
         let mut found = vec![false; PACKED_MINMAX_MNEMONICS.len()];
 
-        for seed in 0..8192 {
+        for seed in 0..16384 {
             let bytes = bytes_from_seed(seed, 32768);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for op in ptx.lines().filter_map(predicated_mnemonic) {
@@ -18929,7 +19651,7 @@ mod tests {
         };
 
         let mut saw_unsigned = false;
-        for seed in 0..4096 {
+        for seed in 0..8192 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in SIGNED_MAD_CARRY_MNEMONICS {
@@ -18961,7 +19683,7 @@ mod tests {
             ..coverage_heavy_config()
         };
 
-        for seed in 0..8192 {
+        for seed in 0..16384 {
             let bytes = bytes_from_seed(seed, 32768);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             if has_predicated_mad_carry(&ptx) {
@@ -19145,7 +19867,7 @@ mod tests {
             ..coverage_heavy_config()
         };
 
-        for seed in 0..4096 {
+        for seed in 0..8192 {
             let bytes = bytes_from_seed(seed, 32768);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             if has_register_prmt_control(&ptx) {
@@ -19553,6 +20275,8 @@ mod tests {
     fn global_store_roundtrip_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_global_store_roundtrips: false,
+            emit_global_atomics: false,
+            emit_global_reductions: false,
             ..coverage_heavy_config()
         };
 
@@ -19572,6 +20296,270 @@ mod tests {
     }
 
     #[test]
+    fn generic_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GENERIC_MEMORY_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in GENERIC_MEMORY_MNEMONICS.iter().enumerate() {
+                found[i] |= if *mnemonic == "isspacep.global" {
+                    has_mnemonic(&ptx, mnemonic)
+                } else {
+                    has_body_generic_memory_access(&ptx, mnemonic)
+                };
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GENERIC_MEMORY_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit generic memory {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_generic_memory_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if has_predicated_generic_memory_access(&ptx) {
+                return;
+            }
+        }
+
+        panic!("sample did not emit predicated generic memory");
+    }
+
+    #[test]
+    fn generic_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_generic_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in GENERIC_MEMORY_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_generic_memory_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_generic_memory: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_predicated_generic_memory_access(&ptx),
+                "seed {seed:x} emitted predicated generic memory"
+            );
+        }
+    }
+
+    #[test]
+    fn global_atomic_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GLOBAL_ATOMIC_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in GLOBAL_ATOMIC_MNEMONICS.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GLOBAL_ATOMIC_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn predicated_global_atomic_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GLOBAL_ATOMIC_MNEMONICS.len()];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in GLOBAL_ATOMIC_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GLOBAL_ATOMIC_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn global_atomic_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_atomics: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in GLOBAL_ATOMIC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_global_atomic_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_global_atomics: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !GLOBAL_ATOMIC_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn global_reduction_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GLOBAL_REDUCTION_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in GLOBAL_REDUCTION_MNEMONICS.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GLOBAL_REDUCTION_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn predicated_global_reduction_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; GLOBAL_REDUCTION_MNEMONICS.len()];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in GLOBAL_REDUCTION_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = GLOBAL_REDUCTION_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn global_reduction_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_reductions: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in GLOBAL_REDUCTION_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_global_reduction_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_global_reductions: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !GLOBAL_REDUCTION_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn global_store_roundtrip_offsets_are_bounded_and_aligned() {
         let cfg = coverage_heavy_config();
 
@@ -19582,6 +20570,28 @@ mod tests {
                 let width = global_load_width(mnemonic)
                     .or_else(|| global_store_width(mnemonic))
                     .unwrap();
+                assert_eq!(
+                    offset % width,
+                    0,
+                    "seed {seed:x} emitted unaligned {mnemonic} offset {offset}"
+                );
+                assert!(
+                    offset + width <= N_OUTPUTS * 4,
+                    "seed {seed:x} emitted out-of-output-slice {mnemonic} offset {offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generic_memory_offsets_are_bounded_and_aligned() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..512 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (mnemonic, offset) in ptx.lines().filter_map(body_generic_memory_access) {
+                let width = generic_memory_width(mnemonic).unwrap();
                 assert_eq!(
                     offset % width,
                     0,
@@ -21944,6 +22954,8 @@ mod tests {
     fn mul_wide_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_mul_wide: false,
+            emit_global_atomics: false,
+            emit_global_reductions: false,
             ..GenConfig::default()
         };
 
@@ -22315,6 +23327,8 @@ mod tests {
     fn wide_int_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_wide_int: false,
+            emit_global_atomics: false,
+            emit_global_reductions: false,
             ..GenConfig::default()
         };
 

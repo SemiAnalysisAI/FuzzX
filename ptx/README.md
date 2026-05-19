@@ -281,6 +281,12 @@ that feature.
 | `DIV_DISABLE_GLOBAL_LOADS` | Bounded read-only `ld.global.{u8,s8,u16,s16,u32,u64,s64}` loads from the input buffer. |
 | `DIV_DISABLE_UNIFORM_GLOBAL_LOADS` | Uniform-address scalar/vector `ldu.global` loads from the input buffer. |
 | `DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS` | Per-thread `st.global.{u8,u16,u32,u64}` plus `ld.global.{u8,s8,u16,s16,u32,u64,s64}` roundtrips through the output buffer. |
+| `DIV_DISABLE_GLOBAL_ATOMICS` | Per-thread `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}` roundtrips through the output buffer. |
+| `DIV_DISABLE_PREDICATED_GLOBAL_ATOMICS` | Predicated per-thread global atomic roundtrips. |
+| `DIV_DISABLE_GLOBAL_REDUCTIONS` | Per-thread `red.global.{add,inc,dec,min,max,and,or,xor}` roundtrips through the output buffer. |
+| `DIV_DISABLE_PREDICATED_GLOBAL_REDUCTIONS` | Predicated per-thread global reduction roundtrips. |
+| `DIV_DISABLE_GENERIC_MEMORY` | Generic-address `ld`/`st` roundtrips through the output buffer, plus `isspacep.global`. |
+| `DIV_DISABLE_PREDICATED_GENERIC_MEMORY` | Predicated generic-address `ld`/`st` roundtrips. |
 | `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32,u64,s64}` loads from a module-scope constant buffer. |
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips, including 64-bit forms. |
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips, including 64-bit forms. |
