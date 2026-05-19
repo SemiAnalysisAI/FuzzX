@@ -333,7 +333,7 @@ that feature.
 | `DIV_DISABLE_F32_COMPARE` | Sanitized ordered/unordered `set.*.u32.f32` and `setp.*.f32` comparisons, including `.ftz` forms, plus `testp.*.f32` classification. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32`, including `.ftz` forms, feeding `selp.f32`. |
 | `DIV_DISABLE_F16_ARITH` | Deterministic prologue coverage for scalar `.f16` and packed `.f16x2` add/sub/mul/fma/min/max/abs/neg. |
-| `DIV_DISABLE_F16_COMPARE` | Deterministic prologue coverage for scalar `.f16` `setp` comparisons. |
+| `DIV_DISABLE_F16_COMPARE` | Deterministic prologue coverage for scalar `.f16` `set`, `setp`, and predicate-fed `selp.b16`. |
 | `DIV_DISABLE_F64_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f64` arithmetic. |
 | `DIV_DISABLE_F64_ROUNDING` | Sanitized `.rz/.rm/.rp` f64 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F64_UNARY` | Sanitized `abs.f64` and `neg.f64`. |

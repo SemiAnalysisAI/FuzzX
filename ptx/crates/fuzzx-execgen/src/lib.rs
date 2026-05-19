@@ -10400,11 +10400,21 @@ impl<'a> Generator<'a> {
         }
         if self.cfg.emit_f16_compare {
             let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    set.lt.u32.f16  %r{scratch}, %h0, %h1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    set.ge.u32.f16  %r{scratch}, %h1, %h0;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    setp.lt.f16     %p0, %h0, %h1;").unwrap();
             writeln!(s, "    setp.ge.f16     %p1, %h1, %h0;").unwrap();
             writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p0;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.b16        %h2, %h0, %h1, %p0;").unwrap();
+            writeln!(s, "    selp.b16        %h3, %h1, %h0, %p1;").unwrap();
+            writeln!(s, "    cvt.u32.u16     %r{scratch}, %h2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.u32.u16     %r{scratch}, %h3;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_warp_barriers {
@@ -17343,7 +17353,13 @@ mod tests {
         "abs.f16x2",
         "neg.f16x2",
     ];
-    const F16_COMPARE_MNEMONICS: &[&str] = &["setp.lt.f16", "setp.ge.f16"];
+    const F16_COMPARE_MNEMONICS: &[&str] = &[
+        "set.lt.u32.f16",
+        "set.ge.u32.f16",
+        "setp.lt.f16",
+        "setp.ge.f16",
+        "selp.b16",
+    ];
     const F64_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f64",
         "sub.rn.f64",
