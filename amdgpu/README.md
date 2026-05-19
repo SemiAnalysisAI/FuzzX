@@ -217,6 +217,8 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M046_V4I16_CTTZ=1` | unset | Re-enable `llvm.cttz.v4i16` shapes for [m046](known-miscompiles/m046-v4i16-cttz-funnel-loop/NOTES.md). |
 | `FUZZX_ALLOW_M047_V8I8_SHL=1` | unset | Re-enable `<8 x i8>` vector `shl` shapes for [m047](known-miscompiles/m047-bytedot-v8i8-shl-loop/NOTES.md). |
 | `FUZZX_ALLOW_M048_V8I8_UADD_SAT=1` | unset | Re-enable `llvm.uadd.sat.v8i8` shapes for [m048](known-miscompiles/m048-v8i8-uadd-sat-vecreduce-loop/NOTES.md). |
+| `FUZZX_ALLOW_M049_VECTOR_FSHL=1` | unset | Re-enable vector `llvm.fshl` calls for [m049](known-miscompiles/m049-vector-fshl-zero/NOTES.md); the legacy `FUZZX_ALLOW_M049_VECTOR_FSHL_ZERO=1` flag is also accepted. |
+| `FUZZX_ALLOW_M050_AND_SUB_ZERO=1` | unset | Re-enable `and X, (sub X, 0)` shapes for [m050](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -306,6 +308,8 @@ Tested toolchains as of 2026-05-19:
 | [m046-v4i16-cttz-funnel-loop](known-miscompiles/m046-v4i16-cttz-funnel-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` miscomputes a dynamic-trip nested loop whose body extracts a lane from `llvm.cttz.v4i16` and feeds a funnel-shift-shaped scalar expression. |
 | [m047-bytedot-v8i8-shl-loop](known-miscompiles/m047-bytedot-v8i8-shl-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` folds a byte-dot-style dynamic loop with a `<8 x i8>` vector shift to `4` for lanes where `-O0` produces smaller values. |
 | [m048-v8i8-uadd-sat-vecreduce-loop](known-miscompiles/m048-v8i8-uadd-sat-vecreduce-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` miscomputes a loop using `llvm.uadd.sat.v8i8` followed by byte extraction and a two-lane vector-reduce xor/and idiom, changing the low bits by two. |
+| [m049-vector-fshl-zero](known-miscompiles/m049-vector-fshl-zero/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers vector `llvm.fshl.v4i32(x, 0, 0)` through a 64-bit shift-by-`-1` sequence that returns zero instead of the selected vector lane. |
+| [m050-bitcount-and-sub-zero](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `and X, (X - 0)` feeding `ctpop` through `v_bitop3_b32` and computes `ctpop(X) - 0` instead of `ctpop(X) - ctpop(X)`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

@@ -927,11 +927,36 @@ bool triggersM015M016ScalarFshl(const Instruction &I) {
          Callee->getIntrinsicID() == Intrinsic::fshl;
 }
 
+bool triggersM049VectorFshl(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call || !isa<FixedVectorType>(Call->getType()))
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::fshl;
+}
+
 bool isAndWithOperand(const Value *MaybeAnd, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
   if (!BO || BO->getOpcode() != Instruction::And)
     return false;
   return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
+}
+
+bool isSubOfValueAndZero(const Value *MaybeSub, const Value *Base) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeSub);
+  return BO && BO->getOpcode() == Instruction::Sub &&
+         BO->getType()->isIntegerTy(32) && BO->getOperand(0) == Base &&
+         hasI32ConstantValue(BO->getOperand(1), 0);
+}
+
+bool triggersM050AndSubZero(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isSubOfValueAndZero(BO->getOperand(0), BO->getOperand(1)) ||
+         isSubOfValueAndZero(BO->getOperand(1), BO->getOperand(0));
 }
 
 bool isI32XorWithOperand(const Value *MaybeXor, const Value *Operand) {
@@ -1693,6 +1718,10 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM046 = envFlag("FUZZX_ALLOW_M046_V4I16_CTTZ", false);
   bool AllowM047 = envFlag("FUZZX_ALLOW_M047_V8I8_SHL", false);
   bool AllowM048 = envFlag("FUZZX_ALLOW_M048_V8I8_UADD_SAT", false);
+  bool AllowM049 =
+      envFlag("FUZZX_ALLOW_M049_VECTOR_FSHL", false) ||
+      envFlag("FUZZX_ALLOW_M049_VECTOR_FSHL_ZERO", false);
+  bool AllowM050 = envFlag("FUZZX_ALLOW_M050_AND_SUB_ZERO", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1735,6 +1764,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM046 && triggersM046V4I16Cttz(I)) ||
               (!AllowM047 && triggersM047V8I8Shl(I)) ||
               (!AllowM048 && triggersM048V8I8UAddSat(I)) ||
+              (!AllowM049 && triggersM049VectorFshl(I)) ||
+              (!AllowM050 && triggersM050AndSubZero(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
