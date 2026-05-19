@@ -368,6 +368,43 @@ fn ptxas_accepts_prefetch_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_cache_policy_helpers_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry cache_policy_smoke(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<4>;
+
+    ld.param.u64 %rd0, [in_ptr];
+    ld.param.u64 %rd1, [out_ptr];
+    cvta.to.global.u64 %rd0, %rd0;
+    cvta.to.global.u64 %rd1, %rd1;
+    createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64 %rd2, 0.5;
+    applypriority.global.L2::evict_normal [%rd0], 128;
+    ld.global.L2::cache_hint.u32 %r0, [%rd0], %rd2;
+    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd2, [%rd0], 64, 128;
+    ld.global.L2::cache_hint.u32 %r1, [%rd0], %rd2;
+    add.u32 %r0, %r0, %r1;
+    st.global.u32 [%rd1], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_warp_barrier_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

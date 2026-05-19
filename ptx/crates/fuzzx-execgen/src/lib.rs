@@ -135,6 +135,7 @@ pub struct GenConfig {
     pub emit_cta_barriers: bool,
     pub emit_cta_barrier_reductions: bool,
     pub emit_prefetch: bool,
+    pub emit_cache_policy_helpers: bool,
     pub emit_helper_calls: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
@@ -382,6 +383,7 @@ impl Default for GenConfig {
             emit_cta_barriers: true,
             emit_cta_barrier_reductions: true,
             emit_prefetch: true,
+            emit_cache_policy_helpers: true,
             emit_helper_calls: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
@@ -10363,6 +10365,33 @@ impl<'a> Generator<'a> {
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
+        if self.cfg.emit_cache_policy_helpers {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
+            writeln!(
+                s,
+                "    createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64 %rd7, 0.5;"
+            )
+            .unwrap();
+            writeln!(s, "    applypriority.global.L2::evict_normal [%rd6], 128;").unwrap();
+            writeln!(
+                s,
+                "    ld.global.L2::cache_hint.u32 %r{scratch}, [%rd6], %rd7;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd7, [%rd6], 64, 128;"
+            )
+            .unwrap();
+            writeln!(
+                s,
+                "    ld.global.L2::cache_hint.u32 %r{scratch}, [%rd6], %rd7;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
         if self.cfg.emit_pred_logic {
             let scratch = self.wide_scratch_hi_reg();
             writeln!(s, "    setp.lt.u32     %p0, %r{tid_reg}, 16;").unwrap();
@@ -16682,6 +16711,12 @@ mod tests {
         "prefetch.global.L2::evict_normal",
         "prefetchu.L1",
     ];
+    const CACHE_POLICY_HELPER_MNEMONICS: &[&str] = &[
+        "createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64",
+        "createpolicy.range.global.L2::evict_last.L2::evict_first.b64",
+        "applypriority.global.L2::evict_normal",
+        "ld.global.L2::cache_hint.u32",
+    ];
     const HELPER_CALL_MNEMONICS: &[&str] = &["call.uni"];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.global.add.u32",
@@ -18054,6 +18089,7 @@ mod tests {
             CTA_BARRIER_REDUCTION_MNEMONICS,
             BRANCH_TABLE_MNEMONICS,
             HELPER_CALL_MNEMONICS,
+            CACHE_POLICY_HELPER_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
             SHARED_ATOMIC_MNEMONICS,
@@ -18149,6 +18185,7 @@ mod tests {
             BRANCH_TABLE_MNEMONICS,
             PREFETCH_MNEMONICS,
             HELPER_CALL_MNEMONICS,
+            CACHE_POLICY_HELPER_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
             POST_KNOWN_SHARED_ATOMIC_MNEMONICS,
@@ -22105,6 +22142,32 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cache_policy_helper_generation_is_reachable() {
+        assert_mnemonic_coverage(
+            &coverage_heavy_config(),
+            4096,
+            1,
+            CACHE_POLICY_HELPER_MNEMONICS,
+        );
+    }
+
+    #[test]
+    fn cache_policy_helper_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_cache_policy_helpers: false,
+            ..coverage_heavy_config()
+        };
+
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
+        for mnemonic in CACHE_POLICY_HELPER_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled cache policy helper still emitted {mnemonic}"
+            );
         }
     }
 
