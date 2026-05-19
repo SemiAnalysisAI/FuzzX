@@ -201,6 +201,63 @@ fn ptxas_accepts_cvt_pack_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_bf16_tf32_conversion_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry bf16_tf32_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b16 %h<8>;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<1>;
+    .reg .f32 %f<8>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.b32 %r0, 0x3f800000;
+    mov.b32 %r1, 0x40000000;
+    mov.b32 %f0, %r0;
+    mov.b32 %f1, %r1;
+    cvt.rn.bf16.f32 %h0, %f0;
+    cvt.rz.bf16.f32 %h1, %f1;
+    cvt.rn.relu.bf16.f32 %h2, %f0;
+    cvt.f32.bf16 %f2, %h0;
+    mov.b32 %r2, %f2;
+    cvt.f32.bf16 %f3, %h1;
+    mov.b32 %r3, %f3;
+    cvt.rn.bf16x2.f32 %r4, %f0, %f1;
+    cvt.rz.bf16x2.f32 %r5, %f0, %f1;
+    cvt.rn.relu.bf16x2.f32 %r6, %f0, %f1;
+    cvt.rna.tf32.f32 %r7, %f0;
+    add.u32 %r2, %r2, %r3;
+    add.u32 %r2, %r2, %r4;
+    add.u32 %r2, %r2, %r5;
+    add.u32 %r2, %r2, %r6;
+    add.u32 %r2, %r2, %r7;
+    cvt.rn.tf32.f32 %r7, %f1;
+    add.u32 %r2, %r2, %r7;
+    cvt.rz.relu.tf32.f32 %r7, %f0;
+    add.u32 %r2, %r2, %r7;
+    cvt.u32.u16 %r7, %h0;
+    add.u32 %r2, %r2, %r7;
+    cvt.u32.u16 %r7, %h1;
+    add.u32 %r2, %r2, %r7;
+    st.global.u32 [%rd0], %r2;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_helper_call_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(
