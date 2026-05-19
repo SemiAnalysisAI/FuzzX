@@ -10477,6 +10477,28 @@ impl<'a> Generator<'a> {
             )
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            if self.cfg.emit_global_atomics {
+                writeln!(s, "    mov.u32         %r{scratch}, %r{tid_reg};").unwrap();
+                writeln!(s, "    st.global.u32   [%rd8 + 4], %r{scratch};").unwrap();
+                writeln!(s, "    mov.u32         %r{scratch}, 1;").unwrap();
+                writeln!(
+                    s,
+                    "    atom.global.add.L2::cache_hint.u32 %r{scratch}, [%rd8 + 4], %r{scratch}, %rd7;"
+                )
+                .unwrap();
+                writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            }
+            if self.cfg.emit_global_reductions {
+                writeln!(s, "    st.global.u32   [%rd8 + 8], %r0;").unwrap();
+                writeln!(s, "    mov.u32         %r{scratch}, 1;").unwrap();
+                writeln!(
+                    s,
+                    "    red.global.add.L2::cache_hint.u32 [%rd8 + 8], %r{scratch}, %rd7;"
+                )
+                .unwrap();
+                writeln!(s, "    ld.global.u32   %r{scratch}, [%rd8 + 8];").unwrap();
+                writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            }
             writeln!(
                 s,
                 "    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd7, [%rd6], 64, 128;"
@@ -16830,6 +16852,10 @@ mod tests {
         "ld.global.nc.L2::cache_hint.u32",
         "st.global.L2::cache_hint.u32",
     ];
+    const CACHE_POLICY_ATOMIC_REDUCTION_MNEMONICS: &[&str] = &[
+        "atom.global.add.L2::cache_hint.u32",
+        "red.global.add.L2::cache_hint.u32",
+    ];
     const HELPER_CALL_MNEMONICS: &[&str] = &["call.uni"];
     const RICH_HELPER_CALL_MNEMONICS: &[&str] = &["call"];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
@@ -18220,6 +18246,7 @@ mod tests {
             HELPER_CALL_MNEMONICS,
             RICH_HELPER_CALL_MNEMONICS,
             CACHE_POLICY_HELPER_MNEMONICS,
+            CACHE_POLICY_ATOMIC_REDUCTION_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
             SHARED_ATOMIC_MNEMONICS,
@@ -22291,6 +22318,12 @@ mod tests {
             1,
             CACHE_POLICY_HELPER_MNEMONICS,
         );
+        assert_mnemonic_coverage(
+            &coverage_heavy_config(),
+            4096,
+            1,
+            CACHE_POLICY_ATOMIC_REDUCTION_MNEMONICS,
+        );
     }
 
     #[test]
@@ -22307,6 +22340,36 @@ mod tests {
                 "disabled cache policy helper still emitted {mnemonic}"
             );
         }
+        for mnemonic in CACHE_POLICY_ATOMIC_REDUCTION_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled cache policy helper still emitted {mnemonic}"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_policy_atomic_reduction_consumers_follow_family_suppressors() {
+        let no_atomics = GenConfig {
+            emit_global_atomics: false,
+            ..coverage_heavy_config()
+        };
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &no_atomics).unwrap();
+        assert!(
+            !has_mnemonic(&ptx, "atom.global.add.L2::cache_hint.u32"),
+            "disabled global atomics still emitted cache-hint atom"
+        );
+
+        let no_reductions = GenConfig {
+            emit_global_reductions: false,
+            ..coverage_heavy_config()
+        };
+        let ptx =
+            generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &no_reductions).unwrap();
+        assert!(
+            !has_mnemonic(&ptx, "red.global.add.L2::cache_hint.u32"),
+            "disabled global reductions still emitted cache-hint red"
+        );
     }
 
     #[test]

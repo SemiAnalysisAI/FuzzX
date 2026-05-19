@@ -502,6 +502,15 @@ fn ptxas_accepts_cache_policy_helpers_at_both_opt_levels() {
     add.u32 %r0, %r0, %r1;
     ld.global.nc.L2::cache_hint.u32 %r1, [%rd0], %rd2;
     add.u32 %r0, %r0, %r1;
+    st.global.u32 [%rd1 + 4], %r0;
+    mov.u32 %r1, 1;
+    atom.global.add.L2::cache_hint.u32 %r1, [%rd1 + 4], %r1, %rd2;
+    add.u32 %r0, %r0, %r1;
+    st.global.u32 [%rd1 + 8], %r0;
+    mov.u32 %r1, 1;
+    red.global.add.L2::cache_hint.u32 [%rd1 + 8], %r1, %rd2;
+    ld.global.u32 %r1, [%rd1 + 8];
+    add.u32 %r0, %r0, %r1;
     createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd2, [%rd0], 64, 128;
     ld.global.L2::cache_hint.u32 %r1, [%rd0], %rd2;
     add.u32 %r0, %r0, %r1;

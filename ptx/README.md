@@ -326,7 +326,7 @@ that feature.
 | `DIV_DISABLE_CTA_BARRIERS` | Full-CTA `bar.sync` and `barrier.sync` emitted before generated divergent control flow. |
 | `DIV_DISABLE_CTA_BARRIER_REDUCTIONS` | Full-CTA `bar.red` and `barrier.red` reductions emitted before generated divergent control flow. |
 | `DIV_DISABLE_PREFETCH` | Bounded `prefetch.global.*` and `prefetchu.L1` cache hints against the input buffer. |
-| `DIV_DISABLE_CACHE_POLICY_HELPERS` | Deterministic prologue coverage for `createpolicy`, `applypriority`, `ld.global.L2::cache_hint`, `ld.global.nc.L2::cache_hint`, and `st.global.L2::cache_hint` cache policy forms. |
+| `DIV_DISABLE_CACHE_POLICY_HELPERS` | Deterministic prologue coverage for `createpolicy`, `applypriority`, cache-hint `ld.global`, `ld.global.nc`, `st.global`, and, when enabled, cache-hint global atomic/reduction forms. |
 | `DIV_DISABLE_HELPER_CALLS` | Deterministic calls to a generated leaf `.func` in the entry prologue. |
 | `DIV_DISABLE_RICH_HELPER_CALLS` | Deterministic prologue coverage for multi-argument and multi-return helper `.func` calls. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
