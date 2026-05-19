@@ -918,6 +918,15 @@ bool triggersM001AShrI16ZExt(const Instruction &I) {
   return isConstantIntOrVectorBelow(BO->getOperand(1), 16);
 }
 
+bool triggersM015M016ScalarFshl(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call || !Call->getType()->isIntegerTy(32))
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::fshl;
+}
+
 bool isAndWithOperand(const Value *MaybeAnd, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
   if (!BO || BO->getOpcode() != Instruction::And)
@@ -1463,6 +1472,13 @@ bool triggersM041AShrHighBytePack(const Instruction &I) {
   return false;
 }
 
+bool triggersM043SelfXor(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  return BO && BO->getOpcode() == Instruction::Xor &&
+         BO->getType()->isIntegerTy(32) &&
+         BO->getOperand(0) == BO->getOperand(1);
+}
+
 bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
   return BO && BO->getOpcode() == Instruction::LShr &&
@@ -1579,6 +1595,9 @@ bool validateMemoryShape(Function &Kernel) {
 
 bool validateIRCorpusModule(Module &M) {
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
+  bool AllowM015M016 =
+      envFlag("FUZZX_ALLOW_M016_SCALAR_FSHL", false) ||
+      envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
@@ -1592,6 +1611,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
   bool AllowM041 = envFlag("FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK", false);
   bool AllowM042 = envFlag("FUZZX_ALLOW_M042_OR_LSHR_ZERO", false);
+  bool AllowM043 = envFlag("FUZZX_ALLOW_M043_SELF_XOR", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1614,6 +1634,7 @@ bool validateIRCorpusModule(Module &M) {
               !isValidFPConversionInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
               (!AllowM001 && triggersM001AShrI16ZExt(I)) ||
+              (!AllowM015M016 && triggersM015M016ScalarFshl(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
               (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
@@ -1627,6 +1648,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM040 && triggersM040SignedDivRem24(I)) ||
               (!AllowM041 && triggersM041AShrHighBytePack(I)) ||
               (!AllowM042 && triggersM042OrLShrZero(I)) ||
+              (!AllowM043 && triggersM043SelfXor(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;

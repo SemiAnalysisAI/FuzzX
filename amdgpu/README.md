@@ -197,6 +197,7 @@ rediscovering the same issue.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable `zext i16 (ashr i16 X, C)` shapes for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
+| `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable scalar `llvm.fshl.i32` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) and [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md); the legacy `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` flag is also accepted. |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
 | `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) \| base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
 | `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
@@ -210,6 +211,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
 | `FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK=1` | unset | Re-enable high-byte extraction from `ashr i32` values feeding byte-pack shapes for [m041](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_M042_OR_LSHR_ZERO=1` | unset | Re-enable redundant `or x, (lshr x, 0)` shapes for [m042](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md). |
+| `FUZZX_ALLOW_M043_SELF_XOR=1` | unset | Re-enable scalar `xor x, x` shapes for [m043](known-miscompiles/m043-zext-i8-self-xor/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -241,7 +243,7 @@ differential test: ✅ means no mismatch was observed for that reproducer, and
 Confirmed compiler ICEs should be recorded here too, with the table entry
 describing the crashing toolchain and phase instead of a differential result.
 
-Tested toolchains as of 2026-05-18:
+Tested toolchains as of 2026-05-19:
 
 | Column | Toolchain |
 | --- | --- |
@@ -293,6 +295,7 @@ Tested toolchains as of 2026-05-18:
 | [m040-sdivrem24-boundary](known-miscompiles/m040-sdivrem24-boundary/NOTES.md) | ❌ | ❌ | ❌ | `-O2` applies the signed 24-bit reciprocal division lowering when the positive numerator has bit 23 set, returning a quotient one too large. |
 | [m041-ashr-highbyte-pack](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a byte pack after `ashr i32` to `v_perm_b32` with the wrong high-byte lane. |
 | [m042-or-lshr-zero-xor](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `or x, (lshr x, 0)` where `x` is `(a ^ b) \| ((a ^ b) >> 1)` through `v_bitop3_b32` as `a \| b \| ((a ^ b) >> 1)`. |
+| [m043-zext-i8-self-xor](known-miscompiles/m043-zext-i8-self-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `xor x, x`, where `x` is `zext(trunc(workitem.id.x)) ^ 1`, through `v_bitop3_b32` and returns `1` instead of zero. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

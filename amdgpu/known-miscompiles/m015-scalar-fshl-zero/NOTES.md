@@ -52,3 +52,6 @@ The directed C++ fuzzer avoids generating zero-count `llvm.fshl.i32` by default.
 After m016, generated `fshl` is also suppressed broadly. Set
 `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` to re-enable this zero-count bug class and
 permit generated `fshl` again.
+
+This suppression was restored after the 2026-05-19 HEAD campaign rediscovered
+the same bug through a reduced `llvm.fshl.i32(x, 0, 0)` testcase.
