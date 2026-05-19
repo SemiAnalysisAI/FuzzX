@@ -893,6 +893,51 @@ impl CvtPackOp {
 }
 
 #[derive(Clone, Copy)]
+enum HelperCallOp {
+    Basic,
+    Pair,
+    Chain,
+    PredicatedBody,
+    MixedParam,
+    Param,
+    Wide,
+    MixedReturn,
+    F32Bit,
+    F64Bit,
+}
+
+impl HelperCallOp {
+    fn function_name(self) -> &'static str {
+        match self {
+            HelperCallOp::Basic => "fuzzx_helper",
+            HelperCallOp::Pair => "fuzzx_helper_pair",
+            HelperCallOp::Chain => "fuzzx_helper_chain",
+            HelperCallOp::PredicatedBody => "fuzzx_predicated_helper",
+            HelperCallOp::MixedParam => "fuzzx_mixed_param_helper",
+            HelperCallOp::Param => "fuzzx_param_helper",
+            HelperCallOp::Wide => "fuzzx_wide_helper",
+            HelperCallOp::MixedReturn => "fuzzx_mixed_return_helper",
+            HelperCallOp::F32Bit => "fuzzx_f32_bit_helper",
+            HelperCallOp::F64Bit => "fuzzx_f64_bit_helper",
+        }
+    }
+
+    /// True if this variant requires the rich helper library
+    /// (`emit_rich_helper_calls`); false if `emit_helper_calls` alone suffices.
+    fn requires_rich(self) -> bool {
+        !matches!(self, HelperCallOp::Basic)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct HelperCallIsland {
+    op: HelperCallOp,
+    /// When true, emit as `call.uni`; otherwise emit as a plain `call`. Both
+    /// are valid in the uniform prologue prefix where islands are placed.
+    uniform: bool,
+}
+
+#[derive(Clone, Copy)]
 enum WarpCollectiveOp {
     Activemask,
     VoteAll,
@@ -6139,6 +6184,7 @@ struct Generator<'a> {
     lop3_result_regs: Vec<u32>,
     branch_table_labels: u32,
     warp_collective_islands: Vec<WarpCollectiveIsland>,
+    helper_call_islands: Vec<HelperCallIsland>,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -6160,6 +6206,7 @@ impl<'a> Generator<'a> {
             lop3_result_regs: Vec::new(),
             branch_table_labels: 0,
             warp_collective_islands: Vec::new(),
+            helper_call_islands: Vec::new(),
             counters: Vec::new(),
         }
     }
@@ -6220,6 +6267,7 @@ impl<'a> Generator<'a> {
         }
 
         self.gen_warp_collective_islands(u)?;
+        self.gen_helper_call_islands(u)?;
         let min_blocks = self.cfg.min_blocks.max(1);
         let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
         for i in 0..n_blocks {
@@ -6248,6 +6296,7 @@ impl<'a> Generator<'a> {
 
     fn build_structured(mut self, u: &mut Unstructured) -> Result<String> {
         self.gen_warp_collective_islands(u)?;
+        self.gen_helper_call_islands(u)?;
         let min_blocks = self.cfg.min_blocks.max(1);
         let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
         let body = self.gen_structured_seq(u, n_blocks, 0)?;
@@ -8426,6 +8475,41 @@ impl<'a> Generator<'a> {
                 pred,
                 out_pred,
             });
+        }
+        Ok(())
+    }
+
+    fn gen_helper_call_islands(&mut self, u: &mut Unstructured) -> Result<()> {
+        if !self.cfg.emit_helper_calls {
+            return Ok(());
+        }
+        let rich = self.cfg.emit_rich_helper_calls;
+        let all_ops = [
+            HelperCallOp::Basic,
+            HelperCallOp::Pair,
+            HelperCallOp::Chain,
+            HelperCallOp::PredicatedBody,
+            HelperCallOp::MixedParam,
+            HelperCallOp::Param,
+            HelperCallOp::Wide,
+            HelperCallOp::MixedReturn,
+            HelperCallOp::F32Bit,
+            HelperCallOp::F64Bit,
+        ];
+        let ops: Vec<HelperCallOp> = all_ops
+            .iter()
+            .copied()
+            .filter(|op| rich || !op.requires_rich())
+            .collect();
+        let n_islands = u.int_in_range(1..=3)?;
+        for _ in 0..n_islands {
+            let op = *u.choose(&ops)?;
+            // Plain `call` only naturally appears in rich-helper output today,
+            // so islands keep it gated on rich to preserve the existing
+            // `rich_helper_call_generation_can_be_disabled` invariant.
+            let uniform = if rich { u.arbitrary::<bool>()? } else { true };
+            self.helper_call_islands
+                .push(HelperCallIsland { op, uniform });
         }
         Ok(())
     }
@@ -11049,6 +11133,125 @@ impl<'a> Generator<'a> {
         s
     }
 
+    fn emit_helper_call_islands(&self, s: &mut String) {
+        if self.helper_call_islands.is_empty() {
+            return;
+        }
+        let tid_reg = self.tid_reg();
+        let scratch = self.wide_scratch_hi_reg();
+        for island in &self.helper_call_islands {
+            let kw = if island.uniform { "call.uni" } else { "call" };
+            writeln!(
+                s,
+                "    // fuzzx_random_helper_call {}",
+                island.op.function_name()
+            )
+            .unwrap();
+            match island.op {
+                HelperCallOp::Basic => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r{scratch}), fuzzx_helper, (%r{tid_reg}, %r2);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::Pair => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r1, %r2), fuzzx_helper_pair, (%r{tid_reg}, %r0, %r2);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r1;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r2;").unwrap();
+                }
+                HelperCallOp::Chain => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r{scratch}), fuzzx_helper_chain, (%r1, %r2, %r{tid_reg}, %r0);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::PredicatedBody => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r{scratch}), fuzzx_predicated_helper, (%r0, %r1, %r2);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::MixedParam => {
+                    writeln!(s, "    st.param.b32    [fuzzx_param_a], %r0;").unwrap();
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r{scratch}), fuzzx_mixed_param_helper, (%r1, fuzzx_param_a, %r2);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::Param => {
+                    writeln!(s, "    st.param.b32    [fuzzx_param_a], %r0;").unwrap();
+                    writeln!(s, "    st.param.b32    [fuzzx_param_b], %r{tid_reg};").unwrap();
+                    writeln!(
+                        s,
+                        "    {kw:<16}(fuzzx_param_ret), fuzzx_param_helper, (fuzzx_param_a, fuzzx_param_b);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    ld.param.u32    %r{scratch}, [fuzzx_param_ret];").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::Wide => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%rd8), fuzzx_wide_helper, (%rd4, %rd5, %r1);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r{scratch}, %rd8;").unwrap();
+                    writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r1, %rd9;").unwrap();
+                    writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r1;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::MixedReturn => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r1, %rd8), fuzzx_mixed_return_helper, (%r0, %rd4, %r2);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r{scratch}, %rd8;").unwrap();
+                    writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r2, %rd9;").unwrap();
+                    writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r2;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r1;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::F32Bit => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%f2), fuzzx_f32_bit_helper, (%f0, %f1, %r0);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    mov.b32         %r{scratch}, %f2;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+                HelperCallOp::F64Bit => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%fd2), fuzzx_f64_bit_helper, (%fd0, %fd1, %r0);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    mov.b64         %rd8, %fd2;").unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r{scratch}, %rd8;").unwrap();
+                    writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
+                    writeln!(s, "    cvt.u32.u64     %r1, %rd9;").unwrap();
+                    writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r1;").unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
+            }
+        }
+    }
+
     fn emit_warp_collective_islands(&self, s: &mut String) {
         let scratch = self.wide_scratch_hi_reg();
         for island in &self.warp_collective_islands {
@@ -11557,6 +11760,9 @@ impl<'a> Generator<'a> {
             writeln!(s, "    cvt.u32.u64     %r1, %rd9;").unwrap();
             writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
+        if self.cfg.emit_helper_calls {
+            self.emit_helper_call_islands(s);
         }
         if self.cfg.emit_special_regs {
             let scratch = self.wide_scratch_hi_reg();
@@ -24487,6 +24693,50 @@ mod tests {
         assert!(
             ptx.contains("[fuzzx_param_ret]"),
             "missing param ABI return load"
+        );
+    }
+
+    #[test]
+    fn randomized_helper_call_island_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let helper_names = [
+            "fuzzx_helper",
+            "fuzzx_helper_pair",
+            "fuzzx_helper_chain",
+            "fuzzx_predicated_helper",
+            "fuzzx_mixed_param_helper",
+            "fuzzx_param_helper",
+            "fuzzx_wide_helper",
+            "fuzzx_mixed_return_helper",
+            "fuzzx_f32_bit_helper",
+            "fuzzx_f64_bit_helper",
+        ];
+        let mut found = vec![false; helper_names.len()];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                ptx.contains("fuzzx_random_helper_call"),
+                "seed {seed:x} did not emit a random helper call island"
+            );
+            for (i, name) in helper_names.iter().enumerate() {
+                let marker = format!("// fuzzx_random_helper_call {name}");
+                found[i] |= ptx.contains(&marker);
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = helper_names
+            .iter()
+            .zip(found)
+            .filter_map(|(name, seen)| (!seen).then_some(*name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit random helper-call islands for {missing:?}"
         );
     }
 
