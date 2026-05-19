@@ -213,6 +213,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M042_OR_LSHR_ZERO=1` | unset | Re-enable redundant `or x, (lshr x, 0)` shapes for [m042](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md). |
 | `FUZZX_ALLOW_M043_SELF_XOR=1` | unset | Re-enable scalar `xor x, x` shapes for [m043](known-miscompiles/m043-zext-i8-self-xor/NOTES.md). |
 | `FUZZX_ALLOW_M044_V4I32_SELF_AND=1` | unset | Re-enable `<4 x i32>` vector identity `and` shapes for [m044](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md). |
+| `FUZZX_ALLOW_M045_UREM_OR_ONE=1` | unset | Re-enable `urem x, (x \| 1)` shapes for [m045](known-miscompiles/m045-urem-or-one-known24/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -298,6 +299,7 @@ Tested toolchains as of 2026-05-19:
 | [m042-or-lshr-zero-xor](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `or x, (lshr x, 0)` where `x` is `(a ^ b) \| ((a ^ b) >> 1)` through `v_bitop3_b32` as `a \| b \| ((a ^ b) >> 1)`. |
 | [m043-zext-i8-self-xor](known-miscompiles/m043-zext-i8-self-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `xor x, x`, where `x` is `zext(trunc(workitem.id.x)) ^ 1`, through `v_bitop3_b32` and returns `1` instead of zero. |
 | [m044-v4i32-self-and-zero-shuffle](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers a `<4 x i32>` `and x, x` lane ORed with a shuffle of an explicitly zero-inserted vector through `v_bitop3_b32` and drops the nonzero lane. |
+| [m045-urem-or-one-known24](known-miscompiles/m045-urem-or-one-known24/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `urem x, (x \| 1)` with known 24-bit `x` to `0x00ffffff` instead of `x` when even `x` is smaller than `x \| 1`; explicit masking can make `-O0` wrong too. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

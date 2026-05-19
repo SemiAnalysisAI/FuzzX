@@ -1505,6 +1505,24 @@ bool triggersM044V4I32SelfAnd(const Instruction &I) {
          isIdentityShuffleOf(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool isI32OrOneOf(const Value *MaybeOr, const Value *Operand) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return (BO->getOperand(0) == Operand &&
+          hasI32ConstantValue(BO->getOperand(1), 1)) ||
+         (BO->getOperand(1) == Operand &&
+          hasI32ConstantValue(BO->getOperand(0), 1));
+}
+
+bool triggersM045URemOrOne(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  return BO && BO->getOpcode() == Instruction::URem &&
+         BO->getType()->isIntegerTy(32) &&
+         isI32OrOneOf(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
   return BO && BO->getOpcode() == Instruction::LShr &&
@@ -1639,6 +1657,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM042 = envFlag("FUZZX_ALLOW_M042_OR_LSHR_ZERO", false);
   bool AllowM043 = envFlag("FUZZX_ALLOW_M043_SELF_XOR", false);
   bool AllowM044 = envFlag("FUZZX_ALLOW_M044_V4I32_SELF_AND", false);
+  bool AllowM045 = envFlag("FUZZX_ALLOW_M045_UREM_OR_ONE", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1677,6 +1696,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM042 && triggersM042OrLShrZero(I)) ||
               (!AllowM043 && triggersM043SelfXor(I)) ||
               (!AllowM044 && triggersM044V4I32SelfAnd(I)) ||
+              (!AllowM045 && triggersM045URemOrOne(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
