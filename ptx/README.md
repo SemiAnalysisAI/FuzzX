@@ -117,6 +117,7 @@ Version | Description |
 | 13.0.88 | [m061-f32-div-pred-neg-cvt-fold](known-miscompiles/m061-f32-div-pred-neg-cvt-fold/NOTES.md): `div.approx.ftz.f32` feeding `cvt.rzi.s32.f32` and a skipped predicated `neg.f32` loses the fallback move at `-O0`. |
 | 13.0.88 | [m062-packed-max-u16x2-liveout-fold](known-miscompiles/m062-packed-max-u16x2-liveout-fold/NOTES.md): `max.u16x2` in a live-range-heavy block corrupts later global roundtrip live-outs under optimized ptxas. |
 | 13.0.88 | [m063-f32-approx-div-cvt-boundary](known-miscompiles/m063-f32-approx-div-cvt-boundary/NOTES.md): `div.approx.ftz.f32` can legally straddle an integer boundary before `cvt.rzi.s32.f32`, producing an exact-output oracle mismatch. |
+| 13.0.88 | [m064-scalar16-max-cvt-predicate-fold](known-miscompiles/m064-scalar16-max-cvt-predicate-fold/NOTES.md): Scalar `max.u16` through `.b16` scratch registers folds a following zero predicate incorrectly. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
@@ -244,7 +245,7 @@ that feature.
 | `DIV_DISABLE_PREDICATED_PACKED_MINMAX` | Predicated `min/max.{u16x2,s16x2}` instructions. |
 | `DIV_DISABLE_SCALAR_16BIT` | Scalar 16-bit ALU through `.b16` scratch registers. |
 | `DIV_DISABLE_SIGNED_SCALAR_16BIT` | Signed scalar 16-bit ALU while retaining unsigned `u16` ops. |
-| `DIV_DISABLE_SCALAR_16BIT_MIN` | `min.u16` and `min.s16` while retaining scalar 16-bit max and arithmetic instructions. |
+| `DIV_DISABLE_SCALAR_16BIT_MIN` | Scalar 16-bit `min.{u16,s16}` and `max.{u16,s16}` while retaining other scalar 16-bit arithmetic instructions. |
 | `DIV_DISABLE_SCALAR_16BIT_SIGNED_UNARY` | `abs.s16` and `neg.s16` while retaining other scalar 16-bit ALU instructions. |
 | `DIV_DISABLE_SCALAR_16BIT_BITWISE` | `and.b16`, `or.b16`, `xor.b16`, and `not.b16`. |
 | `DIV_DISABLE_SCALAR_16BIT_SHIFTS` | `shl.b16`, `shr.u16`, and `shr.s16` with immediate counts in `0..15`. |

@@ -14177,12 +14177,11 @@ fn pick_scalar_16(
     let mut ops = vec![
         Scalar16Op::AddU16,
         Scalar16Op::SubU16,
-        Scalar16Op::MaxU16,
         Scalar16Op::MulLoU16,
         Scalar16Op::MulHiU16,
     ];
     if emit_scalar_16bit_min {
-        ops.push(Scalar16Op::MinU16);
+        ops.extend_from_slice(&[Scalar16Op::MinU16, Scalar16Op::MaxU16]);
     }
     if emit_scalar_16bit_bitwise {
         ops.extend_from_slice(&[
@@ -14199,12 +14198,11 @@ fn pick_scalar_16(
         ops.extend_from_slice(&[
             Scalar16Op::AddS16,
             Scalar16Op::SubS16,
-            Scalar16Op::MaxS16,
             Scalar16Op::MulLoS16,
             Scalar16Op::MulHiS16,
         ]);
         if emit_scalar_16bit_min {
-            ops.push(Scalar16Op::MinS16);
+            ops.extend_from_slice(&[Scalar16Op::MinS16, Scalar16Op::MaxS16]);
         }
         if emit_scalar_16bit_signed_unary {
             ops.extend_from_slice(&[Scalar16Op::AbsS16, Scalar16Op::NegS16]);
@@ -15089,12 +15087,10 @@ mod tests {
     const SCALAR_16BIT_POST_KNOWN_MNEMONICS: &[&str] = &[
         "add.u16",
         "sub.u16",
-        "max.u16",
         "mul.lo.u16",
         "mul.hi.u16",
         "add.s16",
         "sub.s16",
-        "max.s16",
         "mul.lo.s16",
         "mul.hi.s16",
         "and.b16",
@@ -18543,13 +18539,12 @@ mod tests {
     }
 
     #[test]
-    fn scalar_16bit_min_generation_can_be_disabled() {
+    fn scalar_16bit_minmax_generation_can_be_disabled() {
         let cfg = GenConfig {
             emit_scalar_16bit_min: false,
             ..coverage_heavy_config()
         };
 
-        let mut saw_max = false;
         for seed in 0..2048 {
             let bytes = bytes_from_seed(seed, 4096);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
@@ -18561,9 +18556,15 @@ mod tests {
                 !has_mnemonic(&ptx, "min.s16"),
                 "seed {seed:x} emitted min.s16"
             );
-            saw_max |= has_mnemonic(&ptx, "max.u16") || has_mnemonic(&ptx, "max.s16");
+            assert!(
+                !has_mnemonic(&ptx, "max.u16"),
+                "seed {seed:x} emitted max.u16"
+            );
+            assert!(
+                !has_mnemonic(&ptx, "max.s16"),
+                "seed {seed:x} emitted max.s16"
+            );
         }
-        assert!(saw_max, "sample did not retain scalar 16-bit max coverage");
     }
 
     #[test]
