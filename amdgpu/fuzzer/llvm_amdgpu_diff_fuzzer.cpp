@@ -1793,6 +1793,41 @@ bool triggersM055I64BytePermuteLoopPhi(const Instruction &I) {
   return false;
 }
 
+bool triggersM056HalfDotLowBitBranch(const Instruction &I) {
+  const auto *And = dyn_cast<BinaryOperator>(&I);
+  if (!And || And->getOpcode() != Instruction::And ||
+      !And->getType()->isIntegerTy(32))
+    return false;
+
+  const Value *Other = nullptr;
+  if (hasI32ConstantValue(And->getOperand(0), 3))
+    Other = And->getOperand(1);
+  else if (hasI32ConstantValue(And->getOperand(1), 3))
+    Other = And->getOperand(0);
+  else
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(Other, "fuzz.cfg.halfdot.idiom.pack", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Other, "fuzz.halfdot.idiom.pack", Seen);
+}
+
+bool triggersM057RotCascadeStore(const Instruction &I) {
+  const auto *Store = dyn_cast<StoreInst>(&I);
+  if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(Store->getValueOperand(),
+                          "fuzz.rotcascade.idiom.acc.next", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Store->getValueOperand(),
+                             "fuzz.cfg.rotcascade.idiom.acc.next", Seen);
+}
+
 bool isFuzzInputLoadIndex(const Value *V, Function &Kernel) {
   const auto *ZExt = dyn_cast<ZExtInst>(V);
   if (!ZExt || !hasNameStartingWith(ZExt, "fuzz.load.idx64") ||
@@ -1896,6 +1931,8 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM053 = envFlag("FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT", false);
   bool AllowM054 = envFlag("FUZZX_ALLOW_M054_I64_PAIR_LOW_ADD", false);
   bool AllowM055 = envFlag("FUZZX_ALLOW_M055_I64BYTEPERM_LOOP", false);
+  bool AllowM056 = envFlag("FUZZX_ALLOW_M056_HALFDOT_BRANCH", false);
+  bool AllowM057 = envFlag("FUZZX_ALLOW_M057_ROTCASCADE_STORE", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1945,6 +1982,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM053 && triggersM053ByteDotHighBit(I)) ||
               (!AllowM054 && triggersM054I64PairLowAdd(I)) ||
               (!AllowM055 && triggersM055I64BytePermuteLoopPhi(I)) ||
+              (!AllowM056 && triggersM056HalfDotLowBitBranch(I)) ||
+              (!AllowM057 && triggersM057RotCascadeStore(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;

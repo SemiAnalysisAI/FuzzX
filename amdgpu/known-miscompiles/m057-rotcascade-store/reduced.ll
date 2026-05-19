@@ -1,0 +1,276 @@
+; RUN-INPUTS: 0x0,0x1,0x0*254
+; RUN-LLVM-BUILD: build/llvm-fuzzer
+source_filename = "known-miscompiles/m057-rotcascade-store/reduced.ll"
+target datalayout = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:32:32-p4:64:64-p5:32:32-p6:32:32-p7:160:256:256:32-p8:128:128:128:48-p9:192:256:256:32-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024-v2048:2048-n32:64-S32-A5-G1-ni:7:8:9"
+target triple = "amdgcn-amd-amdhsa"
+
+; Function Attrs: convergent nounwind
+define amdgpu_kernel void @fuzz_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out) #0 {
+entry:
+  %wg = call i32 @llvm.amdgcn.workgroup.id.x()
+  %wi = call i32 @llvm.amdgcn.workitem.id.x()
+  %block.base = mul i32 %wg, 256
+  %idx = add i32 %block.base, %wi
+  %idx64 = zext i32 %idx to i64
+  %in.ptr = getelementptr i32, ptr addrspace(1) %in, i64 %idx64
+  %v = load i32, ptr addrspace(1) %in.ptr, align 4
+  %salt = mul i32 %idx, -1640531527
+  %mix = xor i32 %v, %salt
+  %out.ptr = getelementptr i32, ptr addrspace(1) %out, i64 %idx64
+  %fuzz.rotcascade.idiom.shift.seed = add i32 -2147483648, 1
+  %fuzz.rotcascade.idiom.shift = and i32 %fuzz.rotcascade.idiom.shift.seed, 31
+  %fuzz.rotcascade.idiom.inv.raw = sub i32 32, %fuzz.rotcascade.idiom.shift
+  %fuzz.rotcascade.idiom.inv = and i32 %fuzz.rotcascade.idiom.inv.raw, 31
+  %fuzz.rotcascade.idiom.rotl.lo = shl i32 %mix, %fuzz.rotcascade.idiom.shift
+  %fuzz.rotcascade.idiom.rotl.hi = lshr i32 %mix, %fuzz.rotcascade.idiom.inv
+  %fuzz.rotcascade.idiom.rotl = or i32 %fuzz.rotcascade.idiom.rotl.lo, %fuzz.rotcascade.idiom.rotl.hi
+  %fuzz.rotcascade.idiom.rotr.lo = lshr i32 -2147483648, %fuzz.rotcascade.idiom.shift
+  %fuzz.rotcascade.idiom.rotr.hi = shl i32 -2147483648, %fuzz.rotcascade.idiom.inv
+  %fuzz.rotcascade.idiom.rotr = or i32 %fuzz.rotcascade.idiom.rotr.lo, %fuzz.rotcascade.idiom.rotr.hi
+  %fuzz.rotcascade.idiom.pop = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl)
+  %fuzz.rotcascade.idiom.lt = icmp ult i32 %fuzz.rotcascade.idiom.pop, 17
+  %fuzz.rotcascade.idiom.mask.select = select i1 %fuzz.rotcascade.idiom.lt, i32 -1, i32 0
+  %fuzz.rotcascade.idiom.merge.l = and i32 %fuzz.rotcascade.idiom.rotl, %fuzz.rotcascade.idiom.mask.select
+  %fuzz.rotcascade.idiom.mask.not = xor i32 %fuzz.rotcascade.idiom.mask.select, -1
+  %fuzz.rotcascade.idiom.merge.r = and i32 %fuzz.rotcascade.idiom.rotr, %fuzz.rotcascade.idiom.mask.not
+  %fuzz.rotcascade.idiom.merge = or i32 %fuzz.rotcascade.idiom.merge.l, %fuzz.rotcascade.idiom.merge.r
+  %fuzz.rotcascade.idiom.acc.pop = add i32 %mix, %fuzz.rotcascade.idiom.pop
+  %fuzz.rotcascade.idiom.acc.next = xor i32 %fuzz.rotcascade.idiom.merge, %fuzz.rotcascade.idiom.acc.pop
+  %fuzz.rotcascade.idiom.seed.next = add i32 -2147483648, %fuzz.rotcascade.idiom.rotl
+  %fuzz.rotcascade.idiom.shift.seed1 = add i32 %fuzz.rotcascade.idiom.seed.next, 8
+  %fuzz.rotcascade.idiom.shift2 = and i32 %fuzz.rotcascade.idiom.shift.seed1, 31
+  %fuzz.rotcascade.idiom.inv.raw3 = sub i32 32, %fuzz.rotcascade.idiom.shift2
+  %fuzz.rotcascade.idiom.inv4 = and i32 %fuzz.rotcascade.idiom.inv.raw3, 31
+  %fuzz.rotcascade.idiom.rotl.lo5 = shl i32 %fuzz.rotcascade.idiom.acc.next, %fuzz.rotcascade.idiom.shift2
+  %fuzz.rotcascade.idiom.rotl.hi6 = lshr i32 %fuzz.rotcascade.idiom.acc.next, %fuzz.rotcascade.idiom.inv4
+  %fuzz.rotcascade.idiom.rotl7 = or i32 %fuzz.rotcascade.idiom.rotl.lo5, %fuzz.rotcascade.idiom.rotl.hi6
+  %fuzz.rotcascade.idiom.rotr.lo8 = lshr i32 %fuzz.rotcascade.idiom.seed.next, %fuzz.rotcascade.idiom.shift2
+  %fuzz.rotcascade.idiom.rotr.hi9 = shl i32 %fuzz.rotcascade.idiom.seed.next, %fuzz.rotcascade.idiom.inv4
+  %fuzz.rotcascade.idiom.rotr10 = or i32 %fuzz.rotcascade.idiom.rotr.lo8, %fuzz.rotcascade.idiom.rotr.hi9
+  %fuzz.rotcascade.idiom.pop11 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl7)
+  %fuzz.rotcascade.idiom.lt12 = icmp ult i32 %fuzz.rotcascade.idiom.pop11, 17
+  %fuzz.rotcascade.idiom.mask.sext = sext i1 %fuzz.rotcascade.idiom.lt12 to i32
+  %fuzz.rotcascade.idiom.merge.l13 = and i32 %fuzz.rotcascade.idiom.rotl7, %fuzz.rotcascade.idiom.mask.sext
+  %fuzz.rotcascade.idiom.mask.not14 = xor i32 %fuzz.rotcascade.idiom.mask.sext, -1
+  %fuzz.rotcascade.idiom.merge.r15 = and i32 %fuzz.rotcascade.idiom.rotr10, %fuzz.rotcascade.idiom.mask.not14
+  %fuzz.rotcascade.idiom.merge16 = or i32 %fuzz.rotcascade.idiom.merge.l13, %fuzz.rotcascade.idiom.merge.r15
+  %fuzz.rotcascade.idiom.acc.pop17 = add i32 %fuzz.rotcascade.idiom.acc.next, %fuzz.rotcascade.idiom.pop11
+  %fuzz.rotcascade.idiom.acc.next18 = xor i32 %fuzz.rotcascade.idiom.merge16, %fuzz.rotcascade.idiom.acc.pop17
+  %fuzz.rotcascade.idiom.seed.next19 = add i32 %fuzz.rotcascade.idiom.seed.next, %fuzz.rotcascade.idiom.rotl7
+  %fuzz.rotcascade.idiom.shift.seed20 = add i32 %fuzz.rotcascade.idiom.seed.next19, 15
+  %fuzz.rotcascade.idiom.shift21 = and i32 %fuzz.rotcascade.idiom.shift.seed20, 31
+  %fuzz.rotcascade.idiom.inv.raw22 = sub i32 32, %fuzz.rotcascade.idiom.shift21
+  %fuzz.rotcascade.idiom.inv23 = and i32 %fuzz.rotcascade.idiom.inv.raw22, 31
+  %fuzz.rotcascade.idiom.rotl.lo24 = shl i32 %fuzz.rotcascade.idiom.acc.next18, %fuzz.rotcascade.idiom.shift21
+  %fuzz.rotcascade.idiom.rotl.hi25 = lshr i32 %fuzz.rotcascade.idiom.acc.next18, %fuzz.rotcascade.idiom.inv23
+  %fuzz.rotcascade.idiom.rotl26 = or i32 %fuzz.rotcascade.idiom.rotl.lo24, %fuzz.rotcascade.idiom.rotl.hi25
+  %fuzz.rotcascade.idiom.rotr.lo27 = lshr i32 %fuzz.rotcascade.idiom.seed.next19, %fuzz.rotcascade.idiom.shift21
+  %fuzz.rotcascade.idiom.rotr.hi28 = shl i32 %fuzz.rotcascade.idiom.seed.next19, %fuzz.rotcascade.idiom.inv23
+  %fuzz.rotcascade.idiom.rotr29 = or i32 %fuzz.rotcascade.idiom.rotr.lo27, %fuzz.rotcascade.idiom.rotr.hi28
+  %fuzz.rotcascade.idiom.pop30 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl26)
+  %fuzz.rotcascade.idiom.lt31 = icmp ult i32 %fuzz.rotcascade.idiom.pop30, 17
+  %fuzz.rotcascade.idiom.mask.select32 = select i1 %fuzz.rotcascade.idiom.lt31, i32 -1, i32 0
+  %fuzz.rotcascade.idiom.merge.l33 = and i32 %fuzz.rotcascade.idiom.rotl26, %fuzz.rotcascade.idiom.mask.select32
+  %fuzz.rotcascade.idiom.mask.not34 = xor i32 %fuzz.rotcascade.idiom.mask.select32, -1
+  %fuzz.rotcascade.idiom.merge.r35 = and i32 %fuzz.rotcascade.idiom.rotr29, %fuzz.rotcascade.idiom.mask.not34
+  %fuzz.rotcascade.idiom.merge36 = or i32 %fuzz.rotcascade.idiom.merge.l33, %fuzz.rotcascade.idiom.merge.r35
+  %fuzz.rotcascade.idiom.acc.pop37 = add i32 %fuzz.rotcascade.idiom.acc.next18, %fuzz.rotcascade.idiom.pop30
+  %fuzz.rotcascade.idiom.acc.next38 = xor i32 %fuzz.rotcascade.idiom.merge36, %fuzz.rotcascade.idiom.acc.pop37
+  %fuzz.rotcascade.idiom.seed.next39 = add i32 %fuzz.rotcascade.idiom.seed.next19, %fuzz.rotcascade.idiom.rotl26
+  %fuzz.rotcascade.idiom.shift.seed40 = add i32 %fuzz.rotcascade.idiom.seed.next39, 22
+  %fuzz.rotcascade.idiom.shift41 = and i32 %fuzz.rotcascade.idiom.shift.seed40, 31
+  %fuzz.rotcascade.idiom.inv.raw42 = sub i32 32, %fuzz.rotcascade.idiom.shift41
+  %fuzz.rotcascade.idiom.inv43 = and i32 %fuzz.rotcascade.idiom.inv.raw42, 31
+  %fuzz.rotcascade.idiom.rotl.lo44 = shl i32 %fuzz.rotcascade.idiom.acc.next38, %fuzz.rotcascade.idiom.shift41
+  %fuzz.rotcascade.idiom.rotl.hi45 = lshr i32 %fuzz.rotcascade.idiom.acc.next38, %fuzz.rotcascade.idiom.inv43
+  %fuzz.rotcascade.idiom.rotl46 = or i32 %fuzz.rotcascade.idiom.rotl.lo44, %fuzz.rotcascade.idiom.rotl.hi45
+  %fuzz.rotcascade.idiom.rotr.lo47 = lshr i32 %fuzz.rotcascade.idiom.seed.next39, %fuzz.rotcascade.idiom.shift41
+  %fuzz.rotcascade.idiom.rotr.hi48 = shl i32 %fuzz.rotcascade.idiom.seed.next39, %fuzz.rotcascade.idiom.inv43
+  %fuzz.rotcascade.idiom.rotr49 = or i32 %fuzz.rotcascade.idiom.rotr.lo47, %fuzz.rotcascade.idiom.rotr.hi48
+  %fuzz.rotcascade.idiom.pop50 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl46)
+  %fuzz.rotcascade.idiom.lt51 = icmp ult i32 %fuzz.rotcascade.idiom.pop50, 17
+  %fuzz.rotcascade.idiom.mask.sext52 = sext i1 %fuzz.rotcascade.idiom.lt51 to i32
+  %fuzz.rotcascade.idiom.merge.l53 = and i32 %fuzz.rotcascade.idiom.rotl46, %fuzz.rotcascade.idiom.mask.sext52
+  %fuzz.rotcascade.idiom.mask.not54 = xor i32 %fuzz.rotcascade.idiom.mask.sext52, -1
+  %fuzz.rotcascade.idiom.merge.r55 = and i32 %fuzz.rotcascade.idiom.rotr49, %fuzz.rotcascade.idiom.mask.not54
+  %fuzz.rotcascade.idiom.merge56 = or i32 %fuzz.rotcascade.idiom.merge.l53, %fuzz.rotcascade.idiom.merge.r55
+  %fuzz.rotcascade.idiom.acc.pop57 = add i32 %fuzz.rotcascade.idiom.acc.next38, %fuzz.rotcascade.idiom.pop50
+  %fuzz.rotcascade.idiom.acc.next58 = xor i32 %fuzz.rotcascade.idiom.merge56, %fuzz.rotcascade.idiom.acc.pop57
+  %fuzz.rotcascade.idiom.seed.next59 = add i32 %fuzz.rotcascade.idiom.seed.next39, %fuzz.rotcascade.idiom.rotl46
+  %fuzz.rotcascade.idiom.seed.hi = lshr i32 %fuzz.rotcascade.idiom.seed.next59, 16
+  %fuzz.rotcascade.idiom.seed.add = add i32 %fuzz.rotcascade.idiom.acc.next58, %fuzz.rotcascade.idiom.seed.hi
+  %fuzz.bitfield.idiom.shift = and i32 %fuzz.rotcascade.idiom.seed.next19, 15
+  %fuzz.bitfield.idiom.width.m1 = and i32 1431655765, 15
+  %fuzz.bitfield.idiom.width = add i32 %fuzz.bitfield.idiom.width.m1, 1
+  %fuzz.bitfield.idiom.invwidth.raw = sub i32 32, %fuzz.bitfield.idiom.width
+  %fuzz.bitfield.idiom.invwidth = and i32 %fuzz.bitfield.idiom.invwidth.raw, 31
+  %fuzz.bitfield.idiom.mask = lshr i32 -1, %fuzz.bitfield.idiom.invwidth
+  %fuzz.bitfield.idiom.shifted = lshr i32 %fuzz.rotcascade.idiom.seed.add, %fuzz.bitfield.idiom.shift
+  %fuzz.bitfield.idiom.extracted = and i32 %fuzz.bitfield.idiom.shifted, %fuzz.bitfield.idiom.mask
+  %fuzz.bitfield.idiom.fieldmask = shl i32 %fuzz.bitfield.idiom.mask, %fuzz.bitfield.idiom.shift
+  %fuzz.bitfield.idiom.notfieldmask = xor i32 %fuzz.bitfield.idiom.fieldmask, -1
+  %fuzz.bitfield.idiom.clear = and i32 %fuzz.rotcascade.idiom.seed.add, %fuzz.bitfield.idiom.notfieldmask
+  %fuzz.bitfield.idiom.payload.masked = and i32 %fuzz.rotcascade.idiom.seed.next19, %fuzz.bitfield.idiom.mask
+  %fuzz.bitfield.idiom.payload.shifted = shl i32 %fuzz.bitfield.idiom.payload.masked, %fuzz.bitfield.idiom.shift
+  %fuzz.bitfield.idiom.insert = or i32 %fuzz.bitfield.idiom.clear, %fuzz.bitfield.idiom.payload.shifted
+  %fuzz.bitdeposit.idiom.src.shr = lshr i32 %fuzz.bitfield.idiom.insert, 11
+  %fuzz.bitdeposit.idiom.bit = and i32 %fuzz.bitdeposit.idiom.src.shr, 1
+  %fuzz.bitdeposit.idiom.compress.shl = shl i32 %fuzz.bitdeposit.idiom.bit, 0
+  %fuzz.bitdeposit.idiom.compress = or i32 0, %fuzz.bitdeposit.idiom.compress.shl
+  %fuzz.bitdeposit.idiom.deposit.shl = shl i32 %fuzz.bitdeposit.idiom.bit, 26
+  %fuzz.bitdeposit.idiom.deposit = or i32 0, %fuzz.bitdeposit.idiom.deposit.shl
+  %fuzz.bitdeposit.idiom.parity = xor i32 0, %fuzz.bitdeposit.idiom.bit
+  %fuzz.bitdeposit.idiom.src.shr1 = lshr i32 %fuzz.rotcascade.idiom.mask.sext52, 26
+  %fuzz.bitdeposit.idiom.bit2 = and i32 %fuzz.bitdeposit.idiom.src.shr1, 1
+  %fuzz.bitdeposit.idiom.compress.shl3 = shl i32 %fuzz.bitdeposit.idiom.bit2, 1
+  %fuzz.bitdeposit.idiom.compress4 = or i32 %fuzz.bitdeposit.idiom.compress, %fuzz.bitdeposit.idiom.compress.shl3
+  %fuzz.bitdeposit.idiom.deposit.shl5 = shl i32 %fuzz.bitdeposit.idiom.bit2, 18
+  %fuzz.bitdeposit.idiom.deposit6 = or i32 %fuzz.bitdeposit.idiom.deposit, %fuzz.bitdeposit.idiom.deposit.shl5
+  %fuzz.bitdeposit.idiom.parity7 = xor i32 %fuzz.bitdeposit.idiom.parity, %fuzz.bitdeposit.idiom.bit2
+  %fuzz.bitdeposit.idiom.src.shr8 = lshr i32 %fuzz.bitfield.idiom.insert, 25
+  %fuzz.bitdeposit.idiom.bit9 = and i32 %fuzz.bitdeposit.idiom.src.shr8, 1
+  %fuzz.bitdeposit.idiom.compress.shl10 = shl i32 %fuzz.bitdeposit.idiom.bit9, 2
+  %fuzz.bitdeposit.idiom.compress11 = or i32 %fuzz.bitdeposit.idiom.compress4, %fuzz.bitdeposit.idiom.compress.shl10
+  %fuzz.bitdeposit.idiom.deposit.shl12 = shl i32 %fuzz.bitdeposit.idiom.bit9, 4
+  %fuzz.bitdeposit.idiom.deposit13 = or i32 %fuzz.bitdeposit.idiom.deposit6, %fuzz.bitdeposit.idiom.deposit.shl12
+  %fuzz.bitdeposit.idiom.parity14 = xor i32 %fuzz.bitdeposit.idiom.parity7, %fuzz.bitdeposit.idiom.bit9
+  %fuzz.bitdeposit.idiom.src.shr15 = lshr i32 %fuzz.rotcascade.idiom.mask.sext52, 0
+  %fuzz.bitdeposit.idiom.bit16 = and i32 %fuzz.bitdeposit.idiom.src.shr15, 1
+  %fuzz.bitdeposit.idiom.compress.shl17 = shl i32 %fuzz.bitdeposit.idiom.bit16, 3
+  %fuzz.bitdeposit.idiom.compress18 = or i32 %fuzz.bitdeposit.idiom.compress11, %fuzz.bitdeposit.idiom.compress.shl17
+  %fuzz.bitdeposit.idiom.deposit.shl19 = shl i32 %fuzz.bitdeposit.idiom.bit16, 6
+  %fuzz.bitdeposit.idiom.deposit20 = or i32 %fuzz.bitdeposit.idiom.deposit13, %fuzz.bitdeposit.idiom.deposit.shl19
+  %fuzz.bitdeposit.idiom.parity21 = xor i32 %fuzz.bitdeposit.idiom.parity14, %fuzz.bitdeposit.idiom.bit16
+  %fuzz.bitdeposit.idiom.src.shr22 = lshr i32 %fuzz.bitfield.idiom.insert, 15
+  %fuzz.bitdeposit.idiom.bit23 = and i32 %fuzz.bitdeposit.idiom.src.shr22, 1
+  %fuzz.bitdeposit.idiom.compress.shl24 = shl i32 %fuzz.bitdeposit.idiom.bit23, 4
+  %fuzz.bitdeposit.idiom.compress25 = or i32 %fuzz.bitdeposit.idiom.compress18, %fuzz.bitdeposit.idiom.compress.shl24
+  %fuzz.bitdeposit.idiom.deposit.shl26 = shl i32 %fuzz.bitdeposit.idiom.bit23, 17
+  %fuzz.bitdeposit.idiom.deposit27 = or i32 %fuzz.bitdeposit.idiom.deposit20, %fuzz.bitdeposit.idiom.deposit.shl26
+  %fuzz.bitdeposit.idiom.parity28 = xor i32 %fuzz.bitdeposit.idiom.parity21, %fuzz.bitdeposit.idiom.bit23
+  %fuzz.bitdeposit.idiom.src.shr29 = lshr i32 %fuzz.rotcascade.idiom.mask.sext52, 14
+  %fuzz.bitdeposit.idiom.bit30 = and i32 %fuzz.bitdeposit.idiom.src.shr29, 1
+  %fuzz.bitdeposit.idiom.compress.shl31 = shl i32 %fuzz.bitdeposit.idiom.bit30, 5
+  %fuzz.bitdeposit.idiom.compress32 = or i32 %fuzz.bitdeposit.idiom.compress25, %fuzz.bitdeposit.idiom.compress.shl31
+  %fuzz.bitdeposit.idiom.deposit.shl33 = shl i32 %fuzz.bitdeposit.idiom.bit30, 15
+  %fuzz.bitdeposit.idiom.deposit34 = or i32 %fuzz.bitdeposit.idiom.deposit27, %fuzz.bitdeposit.idiom.deposit.shl33
+  %fuzz.bitdeposit.idiom.parity35 = xor i32 %fuzz.bitdeposit.idiom.parity28, %fuzz.bitdeposit.idiom.bit30
+  %fuzz.bitdeposit.idiom.src.shr36 = lshr i32 %fuzz.bitfield.idiom.insert, 25
+  %fuzz.bitdeposit.idiom.bit37 = and i32 %fuzz.bitdeposit.idiom.src.shr36, 1
+  %fuzz.bitdeposit.idiom.compress.shl38 = shl i32 %fuzz.bitdeposit.idiom.bit37, 6
+  %fuzz.bitdeposit.idiom.compress39 = or i32 %fuzz.bitdeposit.idiom.compress32, %fuzz.bitdeposit.idiom.compress.shl38
+  %fuzz.bitdeposit.idiom.deposit.shl40 = shl i32 %fuzz.bitdeposit.idiom.bit37, 27
+  %fuzz.bitdeposit.idiom.deposit41 = or i32 %fuzz.bitdeposit.idiom.deposit34, %fuzz.bitdeposit.idiom.deposit.shl40
+  %fuzz.bitdeposit.idiom.parity42 = xor i32 %fuzz.bitdeposit.idiom.parity35, %fuzz.bitdeposit.idiom.bit37
+  %fuzz.bitdeposit.idiom.src.shr43 = lshr i32 %fuzz.rotcascade.idiom.mask.sext52, 12
+  %fuzz.bitdeposit.idiom.bit44 = and i32 %fuzz.bitdeposit.idiom.src.shr43, 1
+  %fuzz.bitdeposit.idiom.compress.shl45 = shl i32 %fuzz.bitdeposit.idiom.bit44, 7
+  %fuzz.bitdeposit.idiom.compress46 = or i32 %fuzz.bitdeposit.idiom.compress39, %fuzz.bitdeposit.idiom.compress.shl45
+  %fuzz.bitdeposit.idiom.deposit.shl47 = shl i32 %fuzz.bitdeposit.idiom.bit44, 8
+  %fuzz.bitdeposit.idiom.deposit48 = or i32 %fuzz.bitdeposit.idiom.deposit41, %fuzz.bitdeposit.idiom.deposit.shl47
+  %fuzz.bitdeposit.idiom.parity49 = xor i32 %fuzz.bitdeposit.idiom.parity42, %fuzz.bitdeposit.idiom.bit44
+  %fuzz.bitdeposit.idiom.brev = call i32 @llvm.bitreverse.i32(i32 %fuzz.bitdeposit.idiom.compress46)
+  %fuzz.bitdeposit.idiom.brev.hi = lshr i32 %fuzz.bitdeposit.idiom.brev, 24
+  %fuzz.bitdeposit.idiom.xor = xor i32 %fuzz.bitdeposit.idiom.deposit48, %fuzz.bitdeposit.idiom.compress46
+  %fuzz.rotcascade.idiom.shift.seed2 = add i32 255, 1
+  %fuzz.rotcascade.idiom.shift3 = and i32 %fuzz.rotcascade.idiom.shift.seed2, 31
+  %fuzz.rotcascade.idiom.inv.raw4 = sub i32 32, %fuzz.rotcascade.idiom.shift3
+  %fuzz.rotcascade.idiom.inv5 = and i32 %fuzz.rotcascade.idiom.inv.raw4, 31
+  %fuzz.rotcascade.idiom.rotl.lo6 = shl i32 %fuzz.bitdeposit.idiom.xor, %fuzz.rotcascade.idiom.shift3
+  %fuzz.rotcascade.idiom.rotl.hi7 = lshr i32 %fuzz.bitdeposit.idiom.xor, %fuzz.rotcascade.idiom.inv5
+  %fuzz.rotcascade.idiom.rotl8 = or i32 %fuzz.rotcascade.idiom.rotl.lo6, %fuzz.rotcascade.idiom.rotl.hi7
+  %fuzz.rotcascade.idiom.rotr.lo9 = lshr i32 255, %fuzz.rotcascade.idiom.shift3
+  %fuzz.rotcascade.idiom.rotr.hi10 = shl i32 255, %fuzz.rotcascade.idiom.inv5
+  %fuzz.rotcascade.idiom.rotr11 = or i32 %fuzz.rotcascade.idiom.rotr.lo9, %fuzz.rotcascade.idiom.rotr.hi10
+  %fuzz.rotcascade.idiom.pop12 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl8)
+  %fuzz.rotcascade.idiom.lt13 = icmp ult i32 %fuzz.rotcascade.idiom.pop12, 17
+  %fuzz.rotcascade.idiom.mask.select14 = select i1 %fuzz.rotcascade.idiom.lt13, i32 -1, i32 0
+  %fuzz.rotcascade.idiom.merge.l15 = and i32 %fuzz.rotcascade.idiom.rotl8, %fuzz.rotcascade.idiom.mask.select14
+  %fuzz.rotcascade.idiom.mask.not16 = xor i32 %fuzz.rotcascade.idiom.mask.select14, -1
+  %fuzz.rotcascade.idiom.merge.r17 = and i32 %fuzz.rotcascade.idiom.rotr11, %fuzz.rotcascade.idiom.mask.not16
+  %fuzz.rotcascade.idiom.merge18 = or i32 %fuzz.rotcascade.idiom.merge.l15, %fuzz.rotcascade.idiom.merge.r17
+  %fuzz.rotcascade.idiom.acc.pop19 = add i32 %fuzz.bitdeposit.idiom.xor, %fuzz.rotcascade.idiom.pop12
+  %fuzz.rotcascade.idiom.acc.next20 = xor i32 %fuzz.rotcascade.idiom.merge18, %fuzz.rotcascade.idiom.acc.pop19
+  %fuzz.rotcascade.idiom.seed.next21 = add i32 255, %fuzz.rotcascade.idiom.rotl8
+  %fuzz.rotcascade.idiom.shift.seed22 = add i32 %fuzz.rotcascade.idiom.seed.next21, 8
+  %fuzz.rotcascade.idiom.shift23 = and i32 %fuzz.rotcascade.idiom.shift.seed22, 31
+  %fuzz.rotcascade.idiom.inv.raw24 = sub i32 32, %fuzz.rotcascade.idiom.shift23
+  %fuzz.rotcascade.idiom.inv25 = and i32 %fuzz.rotcascade.idiom.inv.raw24, 31
+  %fuzz.rotcascade.idiom.rotl.lo26 = shl i32 %fuzz.rotcascade.idiom.acc.next20, %fuzz.rotcascade.idiom.shift23
+  %fuzz.rotcascade.idiom.rotl.hi27 = lshr i32 %fuzz.rotcascade.idiom.acc.next20, %fuzz.rotcascade.idiom.inv25
+  %fuzz.rotcascade.idiom.rotl28 = or i32 %fuzz.rotcascade.idiom.rotl.lo26, %fuzz.rotcascade.idiom.rotl.hi27
+  %fuzz.rotcascade.idiom.rotr.lo29 = lshr i32 %fuzz.rotcascade.idiom.seed.next21, %fuzz.rotcascade.idiom.shift23
+  %fuzz.rotcascade.idiom.rotr.hi30 = shl i32 %fuzz.rotcascade.idiom.seed.next21, %fuzz.rotcascade.idiom.inv25
+  %fuzz.rotcascade.idiom.rotr31 = or i32 %fuzz.rotcascade.idiom.rotr.lo29, %fuzz.rotcascade.idiom.rotr.hi30
+  %fuzz.rotcascade.idiom.pop32 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl28)
+  %fuzz.rotcascade.idiom.lt33 = icmp ult i32 %fuzz.rotcascade.idiom.pop32, 17
+  %fuzz.rotcascade.idiom.mask.sext34 = sext i1 %fuzz.rotcascade.idiom.lt33 to i32
+  %fuzz.rotcascade.idiom.merge.l35 = and i32 %fuzz.rotcascade.idiom.rotl28, %fuzz.rotcascade.idiom.mask.sext34
+  %fuzz.rotcascade.idiom.mask.not36 = xor i32 %fuzz.rotcascade.idiom.mask.sext34, -1
+  %fuzz.rotcascade.idiom.merge.r37 = and i32 %fuzz.rotcascade.idiom.rotr31, %fuzz.rotcascade.idiom.mask.not36
+  %fuzz.rotcascade.idiom.merge38 = or i32 %fuzz.rotcascade.idiom.merge.l35, %fuzz.rotcascade.idiom.merge.r37
+  %fuzz.rotcascade.idiom.acc.pop39 = add i32 %fuzz.rotcascade.idiom.acc.next20, %fuzz.rotcascade.idiom.pop32
+  %fuzz.rotcascade.idiom.acc.next40 = xor i32 %fuzz.rotcascade.idiom.merge38, %fuzz.rotcascade.idiom.acc.pop39
+  %fuzz.rotcascade.idiom.seed.next41 = add i32 %fuzz.rotcascade.idiom.seed.next21, %fuzz.rotcascade.idiom.rotl28
+  %fuzz.rotcascade.idiom.shift.seed42 = add i32 %fuzz.rotcascade.idiom.seed.next41, 15
+  %fuzz.rotcascade.idiom.shift43 = and i32 %fuzz.rotcascade.idiom.shift.seed42, 31
+  %fuzz.rotcascade.idiom.inv.raw44 = sub i32 32, %fuzz.rotcascade.idiom.shift43
+  %fuzz.rotcascade.idiom.inv45 = and i32 %fuzz.rotcascade.idiom.inv.raw44, 31
+  %fuzz.rotcascade.idiom.rotl.lo46 = shl i32 %fuzz.rotcascade.idiom.acc.next40, %fuzz.rotcascade.idiom.shift43
+  %fuzz.rotcascade.idiom.rotl.hi47 = lshr i32 %fuzz.rotcascade.idiom.acc.next40, %fuzz.rotcascade.idiom.inv45
+  %fuzz.rotcascade.idiom.rotl48 = or i32 %fuzz.rotcascade.idiom.rotl.lo46, %fuzz.rotcascade.idiom.rotl.hi47
+  %fuzz.rotcascade.idiom.rotr.lo49 = lshr i32 %fuzz.rotcascade.idiom.seed.next41, %fuzz.rotcascade.idiom.shift43
+  %fuzz.rotcascade.idiom.rotr.hi50 = shl i32 %fuzz.rotcascade.idiom.seed.next41, %fuzz.rotcascade.idiom.inv45
+  %fuzz.rotcascade.idiom.rotr51 = or i32 %fuzz.rotcascade.idiom.rotr.lo49, %fuzz.rotcascade.idiom.rotr.hi50
+  %fuzz.rotcascade.idiom.pop52 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl48)
+  %fuzz.rotcascade.idiom.lt53 = icmp ult i32 %fuzz.rotcascade.idiom.pop52, 17
+  %fuzz.rotcascade.idiom.mask.select54 = select i1 %fuzz.rotcascade.idiom.lt53, i32 -1, i32 0
+  %fuzz.rotcascade.idiom.merge.l55 = and i32 %fuzz.rotcascade.idiom.rotl48, %fuzz.rotcascade.idiom.mask.select54
+  %fuzz.rotcascade.idiom.mask.not56 = xor i32 %fuzz.rotcascade.idiom.mask.select54, -1
+  %fuzz.rotcascade.idiom.merge.r57 = and i32 %fuzz.rotcascade.idiom.rotr51, %fuzz.rotcascade.idiom.mask.not56
+  %fuzz.rotcascade.idiom.merge58 = or i32 %fuzz.rotcascade.idiom.merge.l55, %fuzz.rotcascade.idiom.merge.r57
+  %fuzz.rotcascade.idiom.acc.pop59 = add i32 %fuzz.rotcascade.idiom.acc.next40, %fuzz.rotcascade.idiom.pop52
+  %fuzz.rotcascade.idiom.acc.next60 = xor i32 %fuzz.rotcascade.idiom.merge58, %fuzz.rotcascade.idiom.acc.pop59
+  %fuzz.rotcascade.idiom.seed.next61 = add i32 %fuzz.rotcascade.idiom.seed.next41, %fuzz.rotcascade.idiom.rotl48
+  %fuzz.rotcascade.idiom.shift.seed62 = add i32 %fuzz.rotcascade.idiom.seed.next61, 22
+  %fuzz.rotcascade.idiom.shift63 = and i32 %fuzz.rotcascade.idiom.shift.seed62, 31
+  %fuzz.rotcascade.idiom.inv.raw64 = sub i32 32, %fuzz.rotcascade.idiom.shift63
+  %fuzz.rotcascade.idiom.inv65 = and i32 %fuzz.rotcascade.idiom.inv.raw64, 31
+  %fuzz.rotcascade.idiom.rotl.lo66 = shl i32 %fuzz.rotcascade.idiom.acc.next60, %fuzz.rotcascade.idiom.shift63
+  %fuzz.rotcascade.idiom.rotl.hi67 = lshr i32 %fuzz.rotcascade.idiom.acc.next60, %fuzz.rotcascade.idiom.inv65
+  %fuzz.rotcascade.idiom.rotl68 = or i32 %fuzz.rotcascade.idiom.rotl.lo66, %fuzz.rotcascade.idiom.rotl.hi67
+  %fuzz.rotcascade.idiom.rotr.lo69 = lshr i32 %fuzz.rotcascade.idiom.seed.next61, %fuzz.rotcascade.idiom.shift63
+  %fuzz.rotcascade.idiom.rotr.hi70 = shl i32 %fuzz.rotcascade.idiom.seed.next61, %fuzz.rotcascade.idiom.inv65
+  %fuzz.rotcascade.idiom.rotr71 = or i32 %fuzz.rotcascade.idiom.rotr.lo69, %fuzz.rotcascade.idiom.rotr.hi70
+  %fuzz.rotcascade.idiom.pop72 = call i32 @llvm.ctpop.i32(i32 %fuzz.rotcascade.idiom.rotl68)
+  %fuzz.rotcascade.idiom.lt73 = icmp ult i32 %fuzz.rotcascade.idiom.pop72, 17
+  %fuzz.rotcascade.idiom.mask.sext74 = sext i1 %fuzz.rotcascade.idiom.lt73 to i32
+  %fuzz.rotcascade.idiom.merge.l75 = and i32 %fuzz.rotcascade.idiom.rotl68, %fuzz.rotcascade.idiom.mask.sext74
+  %fuzz.rotcascade.idiom.mask.not76 = xor i32 %fuzz.rotcascade.idiom.mask.sext74, -1
+  %fuzz.rotcascade.idiom.merge.r77 = and i32 %fuzz.rotcascade.idiom.rotr71, %fuzz.rotcascade.idiom.mask.not76
+  %fuzz.rotcascade.idiom.merge78 = or i32 %fuzz.rotcascade.idiom.merge.l75, %fuzz.rotcascade.idiom.merge.r77
+  %fuzz.rotcascade.idiom.acc.pop79 = add i32 %fuzz.rotcascade.idiom.acc.next60, %fuzz.rotcascade.idiom.pop72
+  %fuzz.rotcascade.idiom.acc.next80 = xor i32 %fuzz.rotcascade.idiom.merge78, %fuzz.rotcascade.idiom.acc.pop79
+  %fuzz.rotcascade.idiom.seed.next81 = add i32 %fuzz.rotcascade.idiom.seed.next61, %fuzz.rotcascade.idiom.rotl68
+  store i32 %fuzz.rotcascade.idiom.acc.next80, ptr addrspace(1) %out.ptr, align 4
+  ret void
+}
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare noundef i32 @llvm.amdgcn.workgroup.id.x() #1
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare noundef range(i32 0, 1024) i32 @llvm.amdgcn.workitem.id.x() #1
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i32 @llvm.ctpop.i32(i32) #2
+
+; Function Attrs: nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i32 @llvm.bitreverse.i32(i32) #2
+
+; uselistorder directives
+uselistorder ptr @llvm.ctpop.i32, { 7, 6, 5, 4, 3, 2, 1, 0 }
+
+attributes #0 = { convergent nounwind "amdgpu-flat-work-group-size"="1,256" "target-cpu"="gfx950" "uniform-work-group-size"="true" }
+attributes #1 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #2 = { nocallback nofree nosync nounwind speculatable willreturn memory(none) }
