@@ -19041,6 +19041,93 @@ Value *emitRandomVOP3FusedFoldIdiom(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomClpeakImadChainIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                      Value *Bv,
+                                      std::minstd_rand &Gen,
+                                      StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // Clpeak-style integer mad chain (modeled after llvm/test/CodeGen/AMDGPU/
+  // integer-mad-patterns.ll) that exercises the AMDGPU "imad pattern"
+  // selection.  Repeats `(acc + 1) * y` style chains so the selector
+  // sees multiple mul/add fusion opportunities in sequence.
+  Value *X = A;
+  Value *Y = B.CreateOr(Bv, ci32(Ctx, 1u),
+                        Twine(NamePrefix) + ".y.nz");
+  Value *Step1 = B.CreateAdd(X, ci32(Ctx, 1u),
+                             Twine(NamePrefix) + ".step1.add");
+  Value *Step2 = B.CreateMul(Step1, Y,
+                             Twine(NamePrefix) + ".step2.mul");
+  Value *Step3 = B.CreateAdd(Step2, Step1,
+                             Twine(NamePrefix) + ".step3.add");
+  Value *Step4 = B.CreateMul(Step3, Y,
+                             Twine(NamePrefix) + ".step4.mul");
+  Value *Step5 = B.CreateAdd(Step2, ci32(Ctx, 1u),
+                             Twine(NamePrefix) + ".step5.add");
+  Value *Step6 = B.CreateMul(Step4, Step5,
+                             Twine(NamePrefix) + ".step6.mul");
+  Value *Step7 = B.CreateAdd(Step6, Step4,
+                             Twine(NamePrefix) + ".step7.add");
+  Value *Step8 = B.CreateMul(Step7, Step4,
+                             Twine(NamePrefix) + ".step8.mul");
+  Value *Result = B.CreateAdd(Step8, Step7,
+                              Twine(NamePrefix) + ".step9.add");
+
+  switch (Gen() % 4) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateXor(Result, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Result, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Y, Result, Twine(NamePrefix) + ".y.sub");
+  }
+}
+
+Value *emitRandomVectorI16ClpeakImadIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                          Value *Bv,
+                                          std::minstd_rand &Gen,
+                                          StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I16 = Type::getInt16Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  constexpr unsigned Lanes = 2;
+  auto *VecTy = FixedVectorType::get(I16, Lanes);
+  // Vector variant — should trigger V_PK_MAD_I16 / V_PK_MAD_U16 selection
+  // on gfx9+, as in the integer-mad-patterns.ll test file.
+  Value *AVec = B.CreateBitCast(A, VecTy,
+                                Twine(NamePrefix) + ".a.bitcast");
+  Value *BVec = B.CreateBitCast(Bv, VecTy,
+                                Twine(NamePrefix) + ".b.bitcast");
+  Value *BNz = B.CreateOr(BVec,
+                          ConstantVector::getSplat(
+                              ElementCount::getFixed(Lanes),
+                              ConstantInt::get(I16, 1)),
+                          Twine(NamePrefix) + ".b.nz");
+  Value *One = ConstantVector::getSplat(ElementCount::getFixed(Lanes),
+                                        ConstantInt::get(I16, 1));
+  Value *S1 = B.CreateAdd(AVec, One, Twine(NamePrefix) + ".s1.add");
+  Value *S2 = B.CreateMul(S1, BNz, Twine(NamePrefix) + ".s2.mul");
+  Value *S3 = B.CreateAdd(S2, S1, Twine(NamePrefix) + ".s3.add");
+  Value *S4 = B.CreateMul(S3, BNz, Twine(NamePrefix) + ".s4.mul");
+  Value *S5 = B.CreateAdd(S2, One, Twine(NamePrefix) + ".s5.add");
+  Value *S6 = B.CreateMul(S4, S5, Twine(NamePrefix) + ".s6.mul");
+  Value *S7 = B.CreateAdd(S6, S4, Twine(NamePrefix) + ".s7.add");
+
+  Value *AsI32 = B.CreateBitCast(S7, I32,
+                                 Twine(NamePrefix) + ".result.bitcast");
+  switch (Gen() % 4) {
+  case 0:
+    return AsI32;
+  case 1:
+    return B.CreateXor(AsI32, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(AsI32, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Bv, AsI32, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -19050,7 +19137,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1586) {
+  switch (Gen() % 1602) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -21097,6 +21184,26 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1585:
     return emitRandomVOP3FusedFoldIdiom(
         B, M, A, Bv, Gen, "fuzz.vop3fused.idiom");
+  case 1586:
+  case 1587:
+  case 1588:
+  case 1589:
+  case 1590:
+  case 1591:
+  case 1592:
+  case 1593:
+    return emitRandomClpeakImadChainIdiom(
+        B, A, Bv, Gen, "fuzz.clpeakimad.idiom");
+  case 1594:
+  case 1595:
+  case 1596:
+  case 1597:
+  case 1598:
+  case 1599:
+  case 1600:
+  case 1601:
+    return emitRandomVectorI16ClpeakImadIdiom(
+        B, A, Bv, Gen, "fuzz.veci16clpeakimad.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -21131,7 +21238,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1578) {
+  switch (Gen() % 1594) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -23175,6 +23282,26 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1577:
     return emitRandomVOP3FusedFoldIdiom(
         B, M, A, Bv, Gen, "fuzz.cfg.vop3fused.idiom");
+  case 1578:
+  case 1579:
+  case 1580:
+  case 1581:
+  case 1582:
+  case 1583:
+  case 1584:
+  case 1585:
+    return emitRandomClpeakImadChainIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.clpeakimad.idiom");
+  case 1586:
+  case 1587:
+  case 1588:
+  case 1589:
+  case 1590:
+  case 1591:
+  case 1592:
+  case 1593:
+    return emitRandomVectorI16ClpeakImadIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.veci16clpeakimad.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
