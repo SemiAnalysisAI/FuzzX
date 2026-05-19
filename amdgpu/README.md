@@ -95,9 +95,11 @@ rotate-add idioms, pure-IR vector compare bitmask idioms, pure-IR byte carry
 propagation idioms, pure-IR bit-slice boolean idioms, pure-IR vector
 splat/blend idioms, pure-IR i64 compare/pack idioms, pure-IR nibble
 carry-chain idioms, pure-IR halfword saturating-difference idioms, pure-IR i64
-bitfield-mix idioms, and pure-IR vector lane mix/pack idioms, alongside LLVM
-bit, min/max, saturation, absolute-value, funnel-shift, and integer overflow
-intrinsics. It also emits a small AMDGPU-specific pure
+bitfield-mix idioms, pure-IR vector lane mix/pack idioms, pure-IR byte
+saturating pack idioms, pure-IR halfword multiply-high idioms, pure-IR i64
+prefix-fold idioms, and pure-IR vector byte rotate/pack idioms, alongside
+LLVM bit, min/max, saturation, absolute-value, funnel-shift, and integer
+overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
 packed SAD/MQSAD, `alignbyte`, signed first-bit-high, `mbcnt`, `perm`,
 explicit `bitop3`, `readfirstlane`, wave reductions, and integer dot-product
