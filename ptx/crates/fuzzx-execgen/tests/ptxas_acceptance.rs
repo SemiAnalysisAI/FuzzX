@@ -110,6 +110,35 @@ fn ptxas_accepts_prefetch_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_warp_barrier_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry warp_barrier_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<1>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    bar.warp.sync 0xffffffff;
+    mov.u32 %r0, 1;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_shared_atomic_reduction_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

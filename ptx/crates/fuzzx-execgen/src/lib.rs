@@ -130,6 +130,7 @@ pub struct GenConfig {
     pub emit_volatile_memory: bool,
     pub emit_bit_memory: bool,
     pub emit_memory_fences: bool,
+    pub emit_warp_barriers: bool,
     pub emit_prefetch: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
@@ -366,6 +367,7 @@ impl Default for GenConfig {
             emit_volatile_memory: true,
             emit_bit_memory: true,
             emit_memory_fences: true,
+            emit_warp_barriers: true,
             emit_prefetch: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
@@ -10307,6 +10309,9 @@ impl<'a> Generator<'a> {
         for &(reg, init) in &self.counters {
             writeln!(s, "    mov.u32         %r{reg}, {init};").unwrap();
         }
+        if self.cfg.emit_warp_barriers {
+            writeln!(s, "    bar.warp.sync   0xffffffff;").unwrap();
+        }
         writeln!(s).unwrap();
     }
 
@@ -16345,6 +16350,7 @@ mod tests {
         "fence.sc.gpu",
         "fence.sc.sys",
     ];
+    const WARP_BARRIER_MNEMONICS: &[&str] = &["bar.warp.sync"];
     const PREFETCH_MNEMONICS: &[&str] = &[
         "prefetch.global.L1",
         "prefetch.global.L2",
@@ -17741,6 +17747,7 @@ mod tests {
             GLOBAL_STORE_MNEMONICS,
             GENERIC_MEMORY_MNEMONICS,
             MEMORY_FENCE_MNEMONICS,
+            WARP_BARRIER_MNEMONICS,
             PREFETCH_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
@@ -21527,6 +21534,33 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in MEMORY_FENCE_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn warp_barrier_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in WARP_BARRIER_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+    }
+
+    #[test]
+    fn warp_barrier_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_warp_barriers: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WARP_BARRIER_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"
