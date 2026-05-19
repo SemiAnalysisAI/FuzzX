@@ -18715,6 +18715,174 @@ Value *emitRandomI64ByteCompactPackIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomSignedAShrHighbytePackIdiom(IRBuilder<NoFolder> &B,
+                                             Value *A, Value *Bv,
+                                             std::minstd_rand &Gen,
+                                             StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // Variant of the m041 / m039 family: feed an ashr i32 result through a
+  // byte-pack chain that may invoke v_perm_b32 with sign-extended lanes.
+  SmallVector<Value *, 4> Bytes;
+  Value *AAshr =
+      B.CreateAShr(A, ci32(Ctx, ((Gen() & 7u) + 8u)),
+                   Twine(NamePrefix) + ".a.ashr");
+  Value *BAshr =
+      B.CreateAShr(Bv, ci32(Ctx, ((Gen() & 7u) + 16u)),
+                   Twine(NamePrefix) + ".b.ashr");
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *Src = (I & 1u) ? BAshr : AAshr;
+    unsigned ShiftAmt = ((Gen() + I * 5u) & 3u) * 8u;
+    Value *Shifted = B.CreateAShr(Src, ci32(Ctx, ShiftAmt),
+                                  Twine(NamePrefix) + ".byte.shr");
+    Value *Byte = B.CreateAnd(Shifted, ci32(Ctx, 0xff),
+                              Twine(NamePrefix) + ".byte.mask");
+    Value *Other = extractSignedByteAsI32(B, (I & 2u) ? A : Bv,
+                                          (I + 1u) & 3u,
+                                          Twine(NamePrefix) + ".other");
+    Value *Combined = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      Combined = B.CreateXor(Byte, B.CreateAnd(Other, ci32(Ctx, 0xff),
+                                               Twine(NamePrefix) + ".other.mask"),
+                              Twine(NamePrefix) + ".byte.xor");
+      break;
+    case 1:
+      Combined = B.CreateAdd(Byte, B.CreateAnd(Other, ci32(Ctx, 0xff),
+                                               Twine(NamePrefix) + ".other.mask"),
+                              Twine(NamePrefix) + ".byte.add");
+      break;
+    case 2:
+      Combined = unsignedMinMaxSelect(B, Byte,
+                                      B.CreateAnd(Other, ci32(Ctx, 0xff),
+                                                  Twine(NamePrefix) + ".other.mask"),
+                                      (Gen() & 1u) != 0,
+                                      Twine(NamePrefix) + ".byte.mm");
+      break;
+    default:
+      Combined = B.CreateSelect(
+          B.CreateICmpSLT(Other, ci32(Ctx, 0),
+                          Twine(NamePrefix) + ".other.neg"),
+          B.CreateXor(Byte, ci32(Ctx, 0xff),
+                      Twine(NamePrefix) + ".byte.flip"),
+          Byte, Twine(NamePrefix) + ".byte.sel");
+      break;
+    }
+    Bytes.push_back(B.CreateAnd(Combined, ci32(Ctx, 0xff),
+                                Twine(NamePrefix) + ".byte.final"));
+  }
+  Value *Packed = packFourBytesAsI32(B, Bytes, (Gen() & 1u) != 0,
+                                     Twine(NamePrefix) + ".pack");
+  switch (Gen() % 4) {
+  case 0:
+    return Packed;
+  case 1:
+    return B.CreateXor(Packed, AAshr, Twine(NamePrefix) + ".ashr.xor");
+  case 2:
+    return B.CreateAdd(Packed, A, Twine(NamePrefix) + ".a.add");
+  default:
+    return B.CreateSub(Bv, Packed, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
+Value *emitRandomUMaxBitop3CascadeIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                        Value *Bv,
+                                        std::minstd_rand &Gen,
+                                        StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // Variant of the m026/m028 family: build umax-based bitop3 shapes that
+  // 198556 doesn't catch.  Mixes shifted operands and complements to
+  // create different truth-table combinations than the existing
+  // suppressed shapes.
+  Value *Mix = B.CreateXor(A, Bv, Twine(NamePrefix) + ".mix");
+  Value *NotA = B.CreateXor(A, ci32(Ctx, -1),
+                            Twine(NamePrefix) + ".not.a");
+  Value *NotB = B.CreateXor(Bv, ci32(Ctx, -1),
+                            Twine(NamePrefix) + ".not.b");
+
+  static constexpr unsigned Steps = 4;
+  Value *Acc = ci32(Ctx, 0);
+  for (unsigned I = 0; I != Steps; ++I) {
+    Value *X = nullptr;
+    Value *Y = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      X = B.CreateShl(A, ci32(Ctx, (I + 1u) & 31u),
+                      Twine(NamePrefix) + ".a.shl");
+      Y = Mix;
+      break;
+    case 1:
+      X = B.CreateAnd(Mix, NotA, Twine(NamePrefix) + ".mix.and.nota");
+      Y = Bv;
+      break;
+    case 2:
+      X = B.CreateLShr(Bv, ci32(Ctx, (I + 1u) & 31u),
+                       Twine(NamePrefix) + ".b.shr");
+      Y = NotB;
+      break;
+    default:
+      X = B.CreateOr(A, B.CreateLShr(Mix, ci32(Ctx, (I * 3u + 5u) & 31u),
+                                     Twine(NamePrefix) + ".mix.shr"),
+                      Twine(NamePrefix) + ".a.or.mix");
+      Y = NotA;
+      break;
+    }
+    Value *UMax = unsignedMinMaxSelect(B, X, Y, true,
+                                        Twine(NamePrefix) + ".umax");
+    Value *UMin = unsignedMinMaxSelect(B, X, Y, false,
+                                        Twine(NamePrefix) + ".umin");
+    Value *Lane = nullptr;
+    switch ((Gen() + I * 3u) % 4) {
+    case 0:
+      // (UMax ^ X) & Y -- bitop3 fodder
+      Lane = B.CreateAnd(B.CreateXor(UMax, X,
+                                     Twine(NamePrefix) + ".max.xor.x"),
+                          Y, Twine(NamePrefix) + ".lane.and");
+      break;
+    case 1:
+      // (UMin | X) ^ Y
+      Lane = B.CreateXor(B.CreateOr(UMin, X,
+                                     Twine(NamePrefix) + ".min.or.x"),
+                          Y, Twine(NamePrefix) + ".lane.xor");
+      break;
+    case 2:
+      // ((UMax ^ Y) & ~X) ^ UMin
+      Lane = B.CreateXor(
+          B.CreateAnd(B.CreateXor(UMax, Y,
+                                  Twine(NamePrefix) + ".max.xor.y"),
+                      B.CreateXor(X, ci32(Ctx, -1),
+                                  Twine(NamePrefix) + ".not.x"),
+                      Twine(NamePrefix) + ".max.xor.y.and.notx"),
+          UMin, Twine(NamePrefix) + ".lane.xor2");
+      break;
+    default:
+      // (UMin & UMax) | (X ^ Y)
+      Lane = B.CreateOr(
+          B.CreateAnd(UMin, UMax,
+                      Twine(NamePrefix) + ".min.and.max"),
+          B.CreateXor(X, Y, Twine(NamePrefix) + ".x.xor.y"),
+          Twine(NamePrefix) + ".lane.or");
+      break;
+    }
+    Acc = B.CreateAdd(B.CreateXor(Acc, Lane,
+                                  Twine(NamePrefix) + ".acc.xor"),
+                      ci32(Ctx, (I * 0x3au) + 1u),
+                      Twine(NamePrefix) + ".acc.next");
+  }
+  // Final ashr to high bit so the bitop3 chain feeds an extraction.
+  Value *Final = B.CreateAShr(Acc, ci32(Ctx, 31),
+                              Twine(NamePrefix) + ".final.ashr");
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return Final;
+  case 2:
+    return B.CreateAdd(Acc, A, Twine(NamePrefix) + ".a.add");
+  default:
+    return B.CreateSub(Bv, Acc, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -18724,7 +18892,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1554) {
+  switch (Gen() % 1570) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -20731,6 +20899,26 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1553:
     return emitRandomI64ByteCompactPackIdiom(
         B, A, Bv, Gen, "fuzz.i64bytecompact.idiom");
+  case 1554:
+  case 1555:
+  case 1556:
+  case 1557:
+  case 1558:
+  case 1559:
+  case 1560:
+  case 1561:
+    return emitRandomSignedAShrHighbytePackIdiom(
+        B, A, Bv, Gen, "fuzz.sashrhighbyte.idiom");
+  case 1562:
+  case 1563:
+  case 1564:
+  case 1565:
+  case 1566:
+  case 1567:
+  case 1568:
+  case 1569:
+    return emitRandomUMaxBitop3CascadeIdiom(
+        B, A, Bv, Gen, "fuzz.umaxbitop3cascade.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -20765,7 +20953,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1546) {
+  switch (Gen() % 1562) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -22769,6 +22957,26 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1545:
     return emitRandomI64ByteCompactPackIdiom(
         B, A, Bv, Gen, "fuzz.cfg.i64bytecompact.idiom");
+  case 1546:
+  case 1547:
+  case 1548:
+  case 1549:
+  case 1550:
+  case 1551:
+  case 1552:
+  case 1553:
+    return emitRandomSignedAShrHighbytePackIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.sashrhighbyte.idiom");
+  case 1554:
+  case 1555:
+  case 1556:
+  case 1557:
+  case 1558:
+  case 1559:
+  case 1560:
+  case 1561:
+    return emitRandomUMaxBitop3CascadeIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.umaxbitop3cascade.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
