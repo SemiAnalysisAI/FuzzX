@@ -273,6 +273,50 @@ fn ptxas_accepts_cta_barrier_reductions_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_brx_idx_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry brx_idx_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<2>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    and.b32 %r1, %r0, 3;
+brx_table: .branchtargets brx_0, brx_1, brx_2, brx_3;
+    brx.idx %r1, brx_table;
+brx_0:
+    add.u32 %r0, %r0, 1;
+    bra brx_done;
+brx_1:
+    add.u32 %r0, %r0, 2;
+    bra brx_done;
+brx_2:
+    add.u32 %r0, %r0, 3;
+    bra brx_done;
+brx_3:
+    add.u32 %r0, %r0, 4;
+    bra brx_done;
+brx_done:
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_shared_atomic_reduction_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

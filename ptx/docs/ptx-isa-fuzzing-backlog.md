@@ -29,7 +29,7 @@ made deterministic and race-free in the current differential oracle".
 | Uniform memory ordering | `membar.cta`, `membar.gl`, `membar.sys`, `fence.acq_rel.{cta,gpu,sys}`, `fence.sc.{cta,gpu,sys}` | No value result; emitted in uniform instruction stream only, so it cannot deadlock and only constrains memory ordering. |
 | Uniform synchronization | `bar.warp.sync`, `bar.sync`, `barrier.sync`, `bar.red`, `barrier.red` | Emitted in the entry prologue with full-warp or full-CTA participation before generated divergent control flow, so all 32 lanes reach the same barrier. |
 | Warp collectives | `activemask`, `vote.sync`, `match.sync`, `shfl.sync`, `redux.sync` | Full-mask forms are emitted in the entry prologue before generated divergent control flow, so all warp lanes participate and results are deterministic. |
-| Control flow | `bra`, predicated instructions, structured braces, `ret` | Generator emits arbitrary CFG or structured if/loop shapes with bounded loop counters. |
+| Control flow | `bra`, `brx.idx`, predicated instructions, structured braces, `ret` | Generator emits arbitrary CFG or structured if/loop shapes with bounded loop counters, plus a bounded prologue branch table whose targets rejoin normally. |
 | Special registers and predefined constants | `%tid`, `%ntid`, `%ctaid`, `%nctaid`, `%laneid`, `%nwarpid`, `WARP_SZ`, `%lanemask_*` | Read as deterministic scalar inputs; predicated forms exist for some paths. |
 
 ## Candidates
@@ -41,7 +41,7 @@ made deterministic and race-free in the current differential oracle".
 | High | `cvt.pack` and more packed conversions | `cvt.pack`, f16/bf16/tf32 conversions, narrower integer pack/unpack forms | Mostly pure dataflow; good optimizer surface around rounding, saturation, and bit packing. | Add typed scratch registers and avoid approximate/boundary cases unless marked intentionally inexact. |
 | High | More atomics/reductions | 64-bit integer atomics, floating add/exch/CAS where supported, and shared-memory variants beyond the current 32-bit integer set | Private shared slots and per-thread global slices preserve determinism; old/new values can be folded into outputs. | Extend atomic op/type matrix and add type-specific reload/folding logic. |
 | High | More warp collective dataflow | `elect.sync` and additional in-body uniform-island placements for the existing warp collectives | Full-mask prologue forms are covered; further coverage is plausible if the emitter can guarantee uniform participation and stable leader semantics. | Add a reusable "warp-uniform island" emitter and validate exact-output semantics for `elect.sync`. |
-| Medium | Branch table control flow | `brx.idx` | Safe if index is masked to an in-range table and every target rejoins normally. | Generate dense local label tables and bounded index computations. |
+| Medium | More branch table control flow | In-body `brx.idx` tables | Prologue branch tables are covered; in-body tables are safe if the index is masked to an in-range table and every target rejoins normally. | Generate dense local label tables inside generated CFG or structured regions. |
 | Medium | Device helper calls | `call`, explicit function ABI patterns | Deterministic helper functions can stress inliner, ABI lowering, and register passing. | Add a small generated `.func` library and marshal params/returns without recursion. |
 | Medium | Uniform synchronization | Barrier arrive variants and additional uniform-region placements | Barriers are safe only when all participating threads reach them. | Add more uniform-only insertion points and avoid divergent/early-exit paths. |
 | Medium | Cache policy helpers | `createpolicy`, `applypriority`, `discard` | Mostly compile/optimizer surface; some can be paired with later loads without changing semantics. | Emit valid policy operands and treat as low-oracle/no-output instructions unless paired with memory. |
@@ -74,4 +74,4 @@ made deterministic and race-free in the current differential oracle".
    forms and excluding approximations until the oracle is defined.
 2. Add a warp-uniform island emitter, then implement `shfl.sync`, `vote.sync`,
    `match.sync`, `activemask`, and `redux.sync`.
-3. Add `brx.idx` branch tables after the next long clean fuzz interval.
+3. Add more `brx.idx` insertion points after the next long clean fuzz interval.

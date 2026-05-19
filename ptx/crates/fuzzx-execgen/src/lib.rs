@@ -261,6 +261,7 @@ pub struct GenConfig {
     pub emit_predicated_set: bool,
     pub emit_predicated_selp: bool,
     pub emit_predicated_divrem: bool,
+    pub emit_branch_tables: bool,
     pub emit_sad: bool,
     pub emit_slct: bool,
     pub emit_predicated_sad: bool,
@@ -501,6 +502,7 @@ impl Default for GenConfig {
             emit_predicated_set: true,
             emit_predicated_selp: true,
             emit_predicated_divrem: true,
+            emit_branch_tables: true,
             emit_sad: true,
             emit_slct: true,
             emit_predicated_sad: true,
@@ -10415,6 +10417,22 @@ impl<'a> Generator<'a> {
             writeln!(s, "    selp.u32        %r{scratch}, 8, 0, %p2;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
+        if self.cfg.emit_branch_tables {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    and.b32         %r{scratch}, %r{tid_reg}, 3;").unwrap();
+            writeln!(
+                s,
+                "fuzzx_brx_table: .branchtargets fuzzx_brx_0, fuzzx_brx_1, fuzzx_brx_2, fuzzx_brx_3;"
+            )
+            .unwrap();
+            writeln!(s, "    brx.idx         %r{scratch}, fuzzx_brx_table;").unwrap();
+            for i in 0..4 {
+                writeln!(s, "fuzzx_brx_{i}:").unwrap();
+                writeln!(s, "    add.u32         %r0, %r0, {};", i + 1).unwrap();
+                writeln!(s, "    bra             fuzzx_brx_done;").unwrap();
+            }
+            writeln!(s, "fuzzx_brx_done:").unwrap();
+        }
         writeln!(s).unwrap();
     }
 
@@ -16477,6 +16495,7 @@ mod tests {
         "barrier.red.and.pred",
         "barrier.red.or.pred",
     ];
+    const BRANCH_TABLE_MNEMONICS: &[&str] = &["brx.idx"];
     const PREFETCH_MNEMONICS: &[&str] = &[
         "prefetch.global.L1",
         "prefetch.global.L2",
@@ -17795,6 +17814,7 @@ mod tests {
             WARP_COLLECTIVE_MNEMONICS,
             CTA_BARRIER_MNEMONICS,
             CTA_BARRIER_REDUCTION_MNEMONICS,
+            BRANCH_TABLE_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
             SHARED_ATOMIC_MNEMONICS,
@@ -17882,6 +17902,7 @@ mod tests {
             WARP_COLLECTIVE_MNEMONICS,
             CTA_BARRIER_MNEMONICS,
             CTA_BARRIER_REDUCTION_MNEMONICS,
+            BRANCH_TABLE_MNEMONICS,
             PREFETCH_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
@@ -21777,6 +21798,34 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in CTA_BARRIER_REDUCTION_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn branch_table_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in BRANCH_TABLE_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+        assert!(ptx.contains(".branchtargets"), "missing .branchtargets");
+    }
+
+    #[test]
+    fn branch_table_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_branch_tables: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in BRANCH_TABLE_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"

@@ -343,6 +343,7 @@ that feature.
 | `DIV_DISABLE_REG_DIVREM` | Register-divisor `div.u32` and `rem.u32` with sanitized divisors. |
 | `DIV_DISABLE_PREDICATED_REG_DIVREM` | Predicated register-divisor `div.u32` and `rem.u32`. |
 | `DIV_DISABLE_PREDICATED_DIVREM` | Predicated `div` and `rem` instructions. |
+| `DIV_DISABLE_BRANCH_TABLES` | Bounded prologue `brx.idx` branch table with four rejoining targets. |
 | `DIV_DISABLE_FUNNEL` | `shf.{l,r}.{wrap,clamp}.b32`. |
 | `DIV_DISABLE_REG_FUNNEL` | Register-count `shf.{l,r}.{wrap,clamp}.b32`. |
 | `DIV_DISABLE_PREDICATED_FUNNEL` | Predicated `shf.{l,r}.{wrap,clamp}.b32`. |
