@@ -133,6 +133,43 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_helper_call_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.func (.reg .b32 ret0) fuzzx_helper(.reg .b32 a, .reg .b32 b)
+{{
+    add.u32 ret0, a, b;
+    ret;
+}}
+
+.visible .entry helper_call_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, 7;
+    call.uni (%r2), fuzzx_helper, (%r0, %r1);
+    add.u32 %r3, %r2, %r0;
+    st.global.u32 [%rd0], %r3;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_membar_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

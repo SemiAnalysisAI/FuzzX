@@ -135,6 +135,7 @@ pub struct GenConfig {
     pub emit_cta_barriers: bool,
     pub emit_cta_barrier_reductions: bool,
     pub emit_prefetch: bool,
+    pub emit_helper_calls: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -378,6 +379,7 @@ impl Default for GenConfig {
             emit_cta_barriers: true,
             emit_cta_barrier_reductions: true,
             emit_prefetch: true,
+            emit_helper_calls: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -10282,6 +10284,18 @@ impl<'a> Generator<'a> {
         }
         writeln!(s, "}};").unwrap();
         writeln!(s).unwrap();
+        if self.cfg.emit_helper_calls {
+            writeln!(
+                s,
+                ".func (.reg .b32 ret0) fuzzx_helper(.reg .b32 a, .reg .b32 b)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    add.u32         ret0, a, b;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+        }
         writeln!(s, ".visible .entry {KERNEL_NAME}(").unwrap();
         writeln!(s, "    .param .u64 in_ptr,").unwrap();
         writeln!(s, "    .param .u64 out_ptr,").unwrap();
@@ -10333,6 +10347,15 @@ impl<'a> Generator<'a> {
         }
         for &(reg, init) in &self.counters {
             writeln!(s, "    mov.u32         %r{reg}, {init};").unwrap();
+        }
+        if self.cfg.emit_helper_calls {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(
+                s,
+                "    call.uni        (%r{scratch}), fuzzx_helper, (%r{tid_reg}, %r2);"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_pred_logic {
             let scratch = self.wide_scratch_hi_reg();
@@ -16568,6 +16591,7 @@ mod tests {
         "prefetch.global.L2::evict_normal",
         "prefetchu.L1",
     ];
+    const HELPER_CALL_MNEMONICS: &[&str] = &["call.uni"];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.global.add.u32",
         "atom.global.exch.b32",
@@ -17899,6 +17923,7 @@ mod tests {
             CTA_BARRIER_MNEMONICS,
             CTA_BARRIER_REDUCTION_MNEMONICS,
             BRANCH_TABLE_MNEMONICS,
+            HELPER_CALL_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
             SHARED_ATOMIC_MNEMONICS,
@@ -17990,6 +18015,7 @@ mod tests {
             CTA_BARRIER_REDUCTION_MNEMONICS,
             BRANCH_TABLE_MNEMONICS,
             PREFETCH_MNEMONICS,
+            HELPER_CALL_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
             POST_KNOWN_SHARED_ATOMIC_MNEMONICS,
@@ -21943,6 +21969,38 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn helper_call_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in HELPER_CALL_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+        assert!(ptx.contains("fuzzx_helper"), "missing helper function");
+    }
+
+    #[test]
+    fn helper_call_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_helper_calls: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in HELPER_CALL_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+            assert!(
+                !ptx.contains("fuzzx_helper"),
+                "seed {seed:x} emitted helper function"
+            );
         }
     }
 
