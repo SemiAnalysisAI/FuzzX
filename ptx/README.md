@@ -127,6 +127,7 @@ Version | Description |
 | 13.2.78 | [m072-const-u16-highbits-fold](known-miscompiles/m072-const-u16-highbits-fold/NOTES.md): `ld.const.u16` into a reused 32-bit register preserves stale high bits under optimized ptxas. |
 | 13.2.78 | [m073-cached-global-load-loop-entry](known-miscompiles/m073-cached-global-load-loop-entry/NOTES.md): Likely related to m001; divergent loop-header entry drops a loop-body cached narrow global load under optimized ptxas. |
 | 13.2.78 | [m074-mad-hi-carry-loop-tripcount](known-miscompiles/m074-mad-hi-carry-loop-tripcount/NOTES.md): Likely related to m004; loop optimization drops `mad.hi.cc.s32` high-multiply carry-chain updates. |
+| 13.2.78 | [m075-wide-bfi-loop-liveout-fold](known-miscompiles/m075-wide-bfi-loop-liveout-fold/NOTES.md): Loop-carried `bfi.b64` live-out is folded to shifted or sign-shaped values under optimized ptxas. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
