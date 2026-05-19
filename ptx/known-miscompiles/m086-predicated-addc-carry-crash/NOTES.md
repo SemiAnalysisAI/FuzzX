@@ -64,10 +64,25 @@ ptxas fatal   : (C7907) Internal compiler error.
 ptxas fatal   : Ptx assembly aborted due to errors
 ```
 
+## Non-predicated variant
+
+After `DIV_DISABLE_PREDICATED_CARRY=1` was added to the suppressor
+list, the fuzzer found a second C7907 hit
+(`div-1779219584-18b10da6918142b6`) whose triggering carry chain is
+**non**-predicated — just an `add.cc.u32` followed by an `addc.u32`
+without any `@%p`. We have not yet isolated that variant down to a
+hand-tightened minimum; the line-by-line reducer floor is 33 lines.
+
+So the broader family is "ptxas optimiser miscompiles an
+`add.cc.u32` / `addc.u32` carry chain in some surrounding-context
+shapes" — the predicate is one such shape but not required.
+
 ## Suppressor
 
-The fuzzer-side suppressor used in the saved run is the existing
-`DIV_DISABLE_PREDICATED_CARRY=1` flag, which prevents the generator
-from emitting a predicated `add.cc.u32` / `addc.u32` pair. That is
-heavier than ideal — predicated non-carry adds are unaffected — but
-it is the single env flag that already gates the bug family.
+`DIV_DISABLE_PREDICATED_CARRY=1` removes the original (predicated)
+trigger. To also cover the non-predicated variant, add
+`DIV_DISABLE_CARRY_CHAIN=1` — that disables both the carry chain and
+its predicated form, but loses a lot of useful coverage. The
+fuzzer's saved run uses only the predicated suppressor; the
+non-predicated variant fires roughly once every 20–25 minutes with
+the rest of the suppressor list active.
