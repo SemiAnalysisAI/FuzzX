@@ -10413,6 +10413,16 @@ impl<'a> Generator<'a> {
             writeln!(s).unwrap();
             writeln!(
                 s,
+                ".func (.reg .f32 ret0) fuzzx_f32_bit_helper(.reg .f32 a, .reg .f32 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    mov.b32         ret0, a;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
                 ".func (.reg .b32 ret0) fuzzx_predicated_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c)"
             )
             .unwrap();
@@ -10594,6 +10604,15 @@ impl<'a> Generator<'a> {
             writeln!(s, "    cvt.u32.u64     %r2, %rd9;").unwrap();
             writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r2;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.b32         %f0, 0f3f800000;").unwrap();
+            writeln!(s, "    mov.b32         %f1, 0f40000000;").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (%f2), fuzzx_f32_bit_helper, (%f0, %f1, %r0);"
+            )
+            .unwrap();
+            writeln!(s, "    mov.b32         %r{scratch}, %f2;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_special_regs {
@@ -22620,6 +22639,14 @@ mod tests {
             "missing mixed-return helper call"
         );
         assert!(
+            ptx.contains("fuzzx_f32_bit_helper"),
+            "missing f32 bit-preserving helper function"
+        );
+        assert!(
+            ptx.contains("call.uni        (%f2), fuzzx_f32_bit_helper"),
+            "missing f32 bit-preserving helper call"
+        );
+        assert!(
             ptx.contains("fuzzx_param_helper"),
             "missing param ABI helper function"
         );
@@ -22688,6 +22715,10 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_mixed_return_helper"),
                 "seed {seed:x} emitted mixed-return helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_f32_bit_helper"),
+                "seed {seed:x} emitted f32 bit-preserving helper function"
             );
             assert!(
                 !ptx.contains("fuzzx_param_helper"),
