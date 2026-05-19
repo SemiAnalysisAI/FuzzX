@@ -897,6 +897,7 @@ enum HelperCallOp {
     Basic,
     Pair,
     Chain,
+    Nested,
     PredicatedBody,
     MixedParam,
     Param,
@@ -912,6 +913,7 @@ impl HelperCallOp {
             HelperCallOp::Basic => "fuzzx_helper",
             HelperCallOp::Pair => "fuzzx_helper_pair",
             HelperCallOp::Chain => "fuzzx_helper_chain",
+            HelperCallOp::Nested => "fuzzx_nested_helper",
             HelperCallOp::PredicatedBody => "fuzzx_predicated_helper",
             HelperCallOp::MixedParam => "fuzzx_mixed_param_helper",
             HelperCallOp::Param => "fuzzx_param_helper",
@@ -4164,10 +4166,13 @@ enum Inst {
         c: Operand,
     },
     /// Local `brx.idx` table whose targets all immediately rejoin.
+    /// `size_log2` is 2 (4 entries) or 3 (8 entries); the selector is masked
+    /// to the table size before dispatch so it cannot fall out of range.
     BranchTable {
         label: u32,
         dst: u32,
         selector: Operand,
+        size_log2: u32,
     },
     /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
     Scalar16Setp {
@@ -8427,10 +8432,13 @@ impl<'a> Generator<'a> {
         let label = self.alloc_branch_table_label();
         let dst = self.pick_dst(u)?;
         let selector = self.pick_operand(u)?;
+        // 2 (4-entry) by default; sometimes 3 (8-entry) for denser dispatch.
+        let size_log2 = if u.arbitrary::<bool>()? { 3 } else { 2 };
         Ok(Inst::BranchTable {
             label,
             dst,
             selector,
+            size_log2,
         })
     }
 
@@ -8488,6 +8496,7 @@ impl<'a> Generator<'a> {
             HelperCallOp::Basic,
             HelperCallOp::Pair,
             HelperCallOp::Chain,
+            HelperCallOp::Nested,
             HelperCallOp::PredicatedBody,
             HelperCallOp::MixedParam,
             HelperCallOp::Param,
@@ -11173,6 +11182,14 @@ impl<'a> Generator<'a> {
                     .unwrap();
                     writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
                 }
+                HelperCallOp::Nested => {
+                    writeln!(
+                        s,
+                        "    {kw:<16}(%r{scratch}), fuzzx_nested_helper, (%r1, %r2, %r{tid_reg}, %r0);"
+                    )
+                    .unwrap();
+                    writeln!(s, "    xor.b32         %r0, %r0, %r{scratch};").unwrap();
+                }
                 HelperCallOp::PredicatedBody => {
                     writeln!(
                         s,
@@ -12783,22 +12800,28 @@ impl<'a> Generator<'a> {
                 label,
                 dst,
                 selector,
+                size_log2,
             } => {
+                let n = 1u32 << size_log2;
+                let mask = n - 1;
                 let scratch = self.wide_scratch_hi_reg();
                 write!(s, "    and.b32       %r{scratch}, ").unwrap();
                 selector.emit(s);
-                writeln!(s, ", 3;").unwrap();
-                writeln!(
-                    s,
-                    "fuzzx_inline_brx_table_{label}: .branchtargets fuzzx_inline_brx_{label}_0, fuzzx_inline_brx_{label}_1, fuzzx_inline_brx_{label}_2, fuzzx_inline_brx_{label}_3;"
-                )
-                .unwrap();
+                writeln!(s, ", {mask};").unwrap();
+                write!(s, "fuzzx_inline_brx_table_{label}: .branchtargets ").unwrap();
+                for i in 0..n {
+                    if i > 0 {
+                        write!(s, ", ").unwrap();
+                    }
+                    write!(s, "fuzzx_inline_brx_{label}_{i}").unwrap();
+                }
+                writeln!(s, ";").unwrap();
                 writeln!(
                     s,
                     "    brx.idx         %r{scratch}, fuzzx_inline_brx_table_{label};"
                 )
                 .unwrap();
-                for i in 0..4 {
+                for i in 0..n {
                     writeln!(s, "fuzzx_inline_brx_{label}_{i}:").unwrap();
                     writeln!(s, "    add.u32         %r{dst}, %r{dst}, {};", i + 1).unwrap();
                     writeln!(s, "    bra             fuzzx_inline_brx_done_{label};").unwrap();
@@ -24703,6 +24726,7 @@ mod tests {
             "fuzzx_helper",
             "fuzzx_helper_pair",
             "fuzzx_helper_chain",
+            "fuzzx_nested_helper",
             "fuzzx_predicated_helper",
             "fuzzx_mixed_param_helper",
             "fuzzx_param_helper",
