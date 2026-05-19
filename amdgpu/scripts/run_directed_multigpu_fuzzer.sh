@@ -19,6 +19,7 @@ TMPDIR="${FUZZX_TMPDIR:-$RUNTIME_ROOT/tmp}"
 FUZZX_LOCALIZE_FUZZER="${FUZZX_LOCALIZE_FUZZER:-1}"
 FUZZX_CPUSET="${FUZZX_CPUSET:-auto}"
 FUZZX_CORPUS_MODE="${FUZZX_CORPUS_MODE:-shared}"
+FUZZX_IMPORT_CORPUS="${FUZZX_IMPORT_CORPUS:-}"
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 resolve_cpuset() {
@@ -69,6 +70,46 @@ PY
             printf '%s\n' "$FUZZX_CPUSET"
             ;;
     esac
+}
+
+import_one_corpus_entry() {
+    local src="$1"
+    local dst="$2"
+    local sum
+    local base
+    local target
+
+    [[ -s "$src" ]] || return 0
+    sum="$(cksum <"$src" | awk '{print $1 "-" $2}')"
+    base="$(basename "$src")"
+    target="$dst/import-$sum-$base"
+    [[ -e "$target" ]] && return 0
+    cp -p "$src" "$target" 2>/dev/null || cp "$src" "$target"
+}
+
+import_corpus_entries() {
+    local dst="$1"
+    local old_ifs="$IFS"
+    local src
+    local file
+    local -a imports
+
+    [[ -n "$FUZZX_IMPORT_CORPUS" ]] || return 0
+    IFS=:
+    read -r -a imports <<< "$FUZZX_IMPORT_CORPUS"
+    IFS="$old_ifs"
+    for src in "${imports[@]}"; do
+        [[ -n "$src" ]] || continue
+        if [[ -d "$src" ]]; then
+            while IFS= read -r -d '' file; do
+                import_one_corpus_entry "$file" "$dst"
+            done < <(find "$src" -type f -print0)
+        elif [[ -f "$src" ]]; then
+            import_one_corpus_entry "$src" "$dst"
+        else
+            echo "warning: corpus import path not found: $src" >&2
+        fi
+    done
 }
 
 if [[ ! -x "$FUZZER_BIN" ]]; then
@@ -131,6 +172,7 @@ SHARED_CORPUS="$CORPUS_ROOT/shared"
 if [[ "$FUZZX_CORPUS_MODE" == shared ]]; then
     mkdir -p "$SHARED_CORPUS"
     "$ROOT/scripts/seed_ir_corpus.sh" "$SHARED_CORPUS"
+    import_corpus_entries "$SHARED_CORPUS"
 fi
 for device in "${GPU_LIST[@]}"; do
     for ((worker = 0; worker < WORKERS_PER_GPU; ++worker)); do
@@ -147,6 +189,9 @@ for device in "${GPU_LIST[@]}"; do
         artifacts="$ARTIFACT_ROOT/$name"
         mkdir -p "$corpus" "$artifacts"
         "$ROOT/scripts/seed_ir_corpus.sh" "$corpus"
+        if [[ "$FUZZX_CORPUS_MODE" == isolated ]]; then
+            import_corpus_entries "$corpus"
+        fi
         HIP_DEVICE="$device" "${CPUSET_CMD[@]}" "$FUZZER_BIN" "$corpus" \
             -artifact_prefix="$artifacts/" \
             "$@" >"$LOG_DIR/$name.log" 2>&1 &
@@ -168,6 +213,7 @@ echo "artifacts: $ARTIFACT_ROOT"
 echo "findings: $FUZZX_FINDINGS_DIR"
 echo "tmp: $TMPDIR"
 echo "fuzzer: $FUZZER_BIN"
+echo "import_corpus: ${FUZZX_IMPORT_CORPUS:-<none>}"
 echo "cpuset: ${RESOLVED_CPUSET:-<default>}"
 echo "devices: ${#GPU_LIST[@]}"
 echo "workers_per_gpu: $WORKERS_PER_GPU"

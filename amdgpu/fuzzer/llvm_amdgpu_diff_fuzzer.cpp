@@ -957,22 +957,6 @@ bool isAndWithOperand(const Value *MaybeAnd, const Value *Operand) {
   return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
 }
 
-bool isSubOfValueAndZero(const Value *MaybeSub, const Value *Base) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeSub);
-  return BO && BO->getOpcode() == Instruction::Sub &&
-         BO->getType()->isIntegerTy(32) && BO->getOperand(0) == Base &&
-         hasI32ConstantValue(BO->getOperand(1), 0);
-}
-
-bool triggersM050AndSubZero(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::And ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  return isSubOfValueAndZero(BO->getOperand(0), BO->getOperand(1)) ||
-         isSubOfValueAndZero(BO->getOperand(1), BO->getOperand(0));
-}
-
 bool isI32XorWithOperand(const Value *MaybeXor, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
   if (!BO || BO->getOpcode() != Instruction::Xor ||
@@ -1574,57 +1558,6 @@ bool triggersM041AShrHighBytePack(const Instruction &I) {
   return false;
 }
 
-bool triggersM043SelfXor(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Xor ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  if (BO->getOperand(0) == BO->getOperand(1))
-    return true;
-
-  auto GetZExtI8TruncSource = [](const Value *V) -> const Value * {
-    const auto *ZExt = dyn_cast<ZExtInst>(V);
-    if (!ZExt || !ZExt->getType()->isIntegerTy(32) ||
-        !ZExt->getOperand(0)->getType()->isIntegerTy(8))
-      return nullptr;
-    const auto *Trunc = dyn_cast<TruncInst>(ZExt->getOperand(0));
-    if (!Trunc || !Trunc->getType()->isIntegerTy(8) ||
-        !Trunc->getOperand(0)->getType()->isIntegerTy(32))
-      return nullptr;
-    return Trunc->getOperand(0);
-  };
-
-  const Value *LHS = GetZExtI8TruncSource(BO->getOperand(0));
-  const Value *RHS = GetZExtI8TruncSource(BO->getOperand(1));
-  return LHS && LHS == RHS;
-}
-
-bool isIdentityShuffleOf(const Value *MaybeShuffle, const Value *Operand) {
-  const auto *Shuffle = dyn_cast<ShuffleVectorInst>(MaybeShuffle);
-  if (!Shuffle || Shuffle->getOperand(0) != Operand)
-    return false;
-  const auto *VT = dyn_cast<FixedVectorType>(Shuffle->getType());
-  if (!VT)
-    return false;
-  for (unsigned I = 0, E = VT->getNumElements(); I != E; ++I) {
-    int Mask = Shuffle->getMaskValue(I);
-    if (Mask != static_cast<int>(I))
-      return false;
-  }
-  return true;
-}
-
-bool triggersM044V4I32SelfAnd(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::And ||
-      !isFixedIntVectorType(BO->getType(), 32) ||
-      cast<FixedVectorType>(BO->getType())->getNumElements() != 4)
-    return false;
-  return BO->getOperand(0) == BO->getOperand(1) ||
-         isIdentityShuffleOf(BO->getOperand(0), BO->getOperand(1)) ||
-         isIdentityShuffleOf(BO->getOperand(1), BO->getOperand(0));
-}
-
 bool isI32OrOneOf(const Value *MaybeOr, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
   if (!BO || BO->getOpcode() != Instruction::Or ||
@@ -1673,22 +1606,6 @@ bool triggersM048V8I8UAddSat(const Instruction &I) {
   const Function *Callee = Call->getCalledFunction();
   return Callee && Callee->isIntrinsic() &&
          Callee->getIntrinsicID() == Intrinsic::uadd_sat;
-}
-
-bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
-  return BO && BO->getOpcode() == Instruction::LShr &&
-         BO->getType()->isIntegerTy(32) && BO->getOperand(0) == Operand &&
-         hasI32ConstantValue(BO->getOperand(1), 0);
-}
-
-bool triggersM042OrLShrZero(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Or ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  return isI32LShrByZeroOf(BO->getOperand(0), BO->getOperand(1)) ||
-         isI32LShrByZeroOf(BO->getOperand(1), BO->getOperand(0));
 }
 
 bool triggersC001SUDotISELICE(const Instruction &I) {
@@ -1946,9 +1863,6 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
   bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
   bool AllowM041 = envFlag("FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK", false);
-  bool AllowM042 = envFlag("FUZZX_ALLOW_M042_OR_LSHR_ZERO", false);
-  bool AllowM043 = envFlag("FUZZX_ALLOW_M043_SELF_XOR", false);
-  bool AllowM044 = envFlag("FUZZX_ALLOW_M044_V4I32_SELF_AND", false);
   bool AllowM045 = envFlag("FUZZX_ALLOW_M045_UREM_OR_ONE", false);
   bool AllowM046 = envFlag("FUZZX_ALLOW_M046_V4I16_CTTZ", false);
   bool AllowM047 = envFlag("FUZZX_ALLOW_M047_V8I8_SHL", false);
@@ -1956,7 +1870,6 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM049 =
       envFlag("FUZZX_ALLOW_M049_VECTOR_FSHL", false) ||
       envFlag("FUZZX_ALLOW_M049_VECTOR_FSHL_ZERO", false);
-  bool AllowM050 = envFlag("FUZZX_ALLOW_M050_AND_SUB_ZERO", false);
   bool AllowM051 = envFlag("FUZZX_ALLOW_M051_VECTOR_FSHR_LOOP", false);
   bool AllowM052 = envFlag("FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT", false);
   bool AllowM053 = envFlag("FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT", false);
@@ -2000,15 +1913,11 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
               (!AllowM040 && triggersM040SignedDivRem24(I)) ||
               (!AllowM041 && triggersM041AShrHighBytePack(I)) ||
-              (!AllowM042 && triggersM042OrLShrZero(I)) ||
-              (!AllowM043 && triggersM043SelfXor(I)) ||
-              (!AllowM044 && triggersM044V4I32SelfAnd(I)) ||
               (!AllowM045 && triggersM045URemOrOne(I)) ||
               (!AllowM046 && triggersM046V4I16Cttz(I)) ||
               (!AllowM047 && triggersM047V8I8Shl(I)) ||
               (!AllowM048 && triggersM048V8I8UAddSat(I)) ||
               (!AllowM049 && triggersM049VectorFshl(I)) ||
-              (!AllowM050 && triggersM050AndSubZero(I)) ||
               (!AllowM051 && triggersM051VectorFshr(I)) ||
               (!AllowM052 && triggersM052TernaryBlendShift(I)) ||
               (!AllowM053 && triggersM053ByteDotHighBit(I)) ||

@@ -173,13 +173,16 @@ reload inputs discovered by other workers while keeping per-worker logs and
 artifact directories. Set `FUZZX_CORPUS_MODE=isolated` to return to one
 independent corpus directory per worker.
 Fresh corpus directories are seeded with a valid LLVM bitcode module before
-libFuzzer starts.
+libFuzzer starts. Set `FUZZX_IMPORT_CORPUS` to one or more colon-separated
+files or directories to copy an older corpus into the fresh corpus before
+workers launch.
 
 For the current upstream-HEAD campaign, run multiple workers across all GPUs:
 
 ```bash
 GPUS="0 1 2 3 4 5 6 7" WORKERS_PER_GPU=12 \
   FUZZX_REQUIRE_LLVM_INTERPRETER_ORACLE=1 \
+  FUZZX_IMPORT_CORPUS=/tmp/old-run/corpus/directed-gpu/shared \
   scripts/run_directed_multigpu_fuzzer.sh \
     -max_total_time=900 -max_len=131072 -rss_limit_mb=8192 -use_value_profile=1
 ```
@@ -234,15 +237,11 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE=1` | unset | Re-enable `sext i8 to i32` values feeding high-byte extraction for [m039](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
 | `FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK=1` | unset | Re-enable high-byte extraction from `ashr i32` values feeding byte-pack shapes for [m041](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md). |
-| `FUZZX_ALLOW_M042_OR_LSHR_ZERO=1` | unset | Re-enable redundant `or x, (lshr x, 0)` shapes for [m042](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md). |
-| `FUZZX_ALLOW_M043_SELF_XOR=1` | unset | Re-enable scalar self-xor and duplicated `zext(trunc x)` xor shapes for [m043](known-miscompiles/m043-zext-i8-self-xor/NOTES.md). |
-| `FUZZX_ALLOW_M044_V4I32_SELF_AND=1` | unset | Re-enable `<4 x i32>` vector identity `and` shapes for [m044](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md). |
 | `FUZZX_ALLOW_M045_UREM_OR_ONE=1` | unset | Re-enable `urem x, (x \| 1)` shapes for [m045](known-miscompiles/m045-urem-or-one-known24/NOTES.md). |
 | `FUZZX_ALLOW_M046_V4I16_CTTZ=1` | unset | Re-enable `llvm.cttz.v4i16` shapes for [m046](known-miscompiles/m046-v4i16-cttz-funnel-loop/NOTES.md). |
 | `FUZZX_ALLOW_M047_V8I8_SHL=1` | unset | Re-enable `<8 x i8>` vector `shl` shapes for [m047](known-miscompiles/m047-bytedot-v8i8-shl-loop/NOTES.md). |
 | `FUZZX_ALLOW_M048_V8I8_UADD_SAT=1` | unset | Re-enable `llvm.uadd.sat.v8i8` shapes for [m048](known-miscompiles/m048-v8i8-uadd-sat-vecreduce-loop/NOTES.md). |
 | `FUZZX_ALLOW_M049_VECTOR_FSHL=1` | unset | Re-enable vector `llvm.fshl` calls for [m049](known-miscompiles/m049-vector-fshl-zero/NOTES.md); the legacy `FUZZX_ALLOW_M049_VECTOR_FSHL_ZERO=1` flag is also accepted. |
-| `FUZZX_ALLOW_M050_AND_SUB_ZERO=1` | unset | Re-enable `and X, (sub X, 0)` shapes for [m050](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md). |
 | `FUZZX_ALLOW_M051_VECTOR_FSHR_LOOP=1` | unset | Re-enable vector `llvm.fshr` calls for [m051](known-miscompiles/m051-vector-fshr-divergent-loop/NOTES.md). |
 | `FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT=1` | unset | Re-enable `((a ^ b) \| (b & ~(a ^ b))) & 31` shift masks for [m052](known-miscompiles/m052-ternary-blend-shift/NOTES.md). |
 | `FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT=1` | unset | Re-enable byte-dot result values feeding a high-bit mask for [m053](known-miscompiles/m053-bytedot-highbit/NOTES.md). |
@@ -259,10 +258,10 @@ rediscovering the same issue.
 | Path | Purpose |
 | --- | --- |
 | `third_party/llvm-project` | LLVM source checkout, pinned as a git submodule. |
-| `patches/llvm-pr-198373.diff` | Local patch for the current HEAD campaigns; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
+| `patches/llvm-pr-198373.diff` | Local source-fix patch for the current HEAD campaigns; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `patches/llvm-pr-196418.diff` | Local patch for unsigned `LowerDIVREM24`; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `patches/llvm-pr-198412.diff` | Local patch for non-add AMDGPU dot-product add-chain matching; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
-| `patches/llvm-pr-198419.diff` | Local patch for AMDGPU `BitOp3_Op` shared-source aliasing; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
+| `patches/llvm-pr-198419.diff` | Local source-fix patch for AMDGPU `BitOp3_Op` shared-source aliasing; `scripts/build_instrumented_llvm.sh` applies it by default to the selected `LLVM_PROJECT_DIR`. |
 | `scripts/build_instrumented_llvm.sh` | Helper for configuring a sanitizer-coverage LLVM source build. |
 | `scripts/build_directed_fuzzer.sh` | Builds the C++ GPU differential libFuzzer target. |
 | `scripts/seed_ir_corpus.sh` | Writes the initial LLVM bitcode corpus seed. |
@@ -333,15 +332,15 @@ Tested toolchains as of 2026-05-19:
 | [m039-sext-i8-highbyte-pack](known-miscompiles/m039-sext-i8-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` packs bytes after an `i8` sign-extension but clears the byte lanes contributed by the sign bits. |
 | [m040-sdivrem24-boundary](known-miscompiles/m040-sdivrem24-boundary/NOTES.md) | ❌ | ❌ | ❌ | `-O2` applies the signed 24-bit reciprocal division lowering when the positive numerator has bit 23 set, returning a quotient one too large. |
 | [m041-ashr-highbyte-pack](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a byte pack after `ashr i32` to `v_perm_b32` with the wrong high-byte lane. |
-| [m042-or-lshr-zero-xor](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `or x, (lshr x, 0)` where `x` is `(a ^ b) \| ((a ^ b) >> 1)` through `v_bitop3_b32` as `a \| b \| ((a ^ b) >> 1)`. |
-| [m043-zext-i8-self-xor](known-miscompiles/m043-zext-i8-self-xor/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `xor x, x`, where `x` is `zext(trunc(workitem.id.x)) ^ 1`, through `v_bitop3_b32` and returns `1` instead of zero. |
-| [m044-v4i32-self-and-zero-shuffle](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers a `<4 x i32>` `and x, x` lane ORed with a shuffle of an explicitly zero-inserted vector through `v_bitop3_b32` and drops the nonzero lane. |
+| [m042-or-lshr-zero-xor](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowered `or x, (lshr x, 0)` where `x` is `(a ^ b) \| ((a ^ b) >> 1)` through the wrong `v_bitop3_b32`; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m043-zext-i8-self-xor](known-miscompiles/m043-zext-i8-self-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowered `xor x, x`, where `x` is `zext(trunc(workitem.id.x)) ^ 1`, through `v_bitop3_b32`; LLVM HEAD passes after llvm/llvm-project#198373. |
+| [m044-v4i32-self-and-zero-shuffle](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowered a `<4 x i32>` `and x, x` lane ORed with a zero shuffle through `v_bitop3_b32`; LLVM HEAD passes after llvm/llvm-project#198373. |
 | [m045-urem-or-one-known24](known-miscompiles/m045-urem-or-one-known24/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers `urem x, (x \| 1)` with known 24-bit `x` to `0x00ffffff` instead of `x` when even `x` is smaller than `x \| 1`; explicit masking can make `-O0` wrong too. |
 | [m046-v4i16-cttz-funnel-loop](known-miscompiles/m046-v4i16-cttz-funnel-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` miscomputes a dynamic-trip nested loop whose body extracts a lane from `llvm.cttz.v4i16` and feeds a funnel-shift-shaped scalar expression. |
 | [m047-bytedot-v8i8-shl-loop](known-miscompiles/m047-bytedot-v8i8-shl-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` folds a byte-dot-style dynamic loop with a `<8 x i8>` vector shift to `4` for lanes where `-O0` produces smaller values. |
 | [m048-v8i8-uadd-sat-vecreduce-loop](known-miscompiles/m048-v8i8-uadd-sat-vecreduce-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` miscomputes a loop using `llvm.uadd.sat.v8i8` followed by byte extraction and a two-lane vector-reduce xor/and idiom, changing the low bits by two. |
 | [m049-vector-fshl-zero](known-miscompiles/m049-vector-fshl-zero/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers vector `llvm.fshl.v4i32(x, 0, 0)` through a 64-bit shift-by-`-1` sequence that returns zero instead of the selected vector lane. |
-| [m050-bitcount-and-sub-zero](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `and X, (X - 0)` feeding `ctpop` through `v_bitop3_b32` and computes `ctpop(X) - 0` instead of `ctpop(X) - ctpop(X)`. |
+| [m050-bitcount-and-sub-zero](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowered `and X, (X - 0)` feeding `ctpop` through the wrong `v_bitop3_b32`; LLVM HEAD passes after llvm/llvm-project#198373. |
 | [m051-vector-fshr-divergent-loop](known-miscompiles/m051-vector-fshr-divergent-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` scalarizes a vector `llvm.fshr.v2i32` loop tail and carries one scalar inner-loop result into divergent lanes that exited earlier. |
 | [m052-ternary-blend-shift](known-miscompiles/m052-ternary-blend-shift/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers `((a ^ b) \| (b & ~(a ^ b))) & 31` as `a & 31`, dropping `b` before a funnel-shift-like expression. |
 | [m053-bytedot-highbit](known-miscompiles/m053-bytedot-highbit/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` lower a byte-dot/high-bit expression through a changed `v_bitop3_b32` / `v_bfi_b32` sequence that clears a high bit before a final xor. |
@@ -350,6 +349,7 @@ Tested toolchains as of 2026-05-19:
 | [m056-halfdot-lowbit-branch](known-miscompiles/m056-halfdot-lowbit-branch/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` miscompute a low-bit branch key derived from a halfword-dot byte pack and store zero instead of `0xfffd7ffc`. |
 | [m057-rotcascade-store](known-miscompiles/m057-rotcascade-store/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` miscomputes a repeated rotate/popcount/bitselect cascade before the final store; ROCm 7.2.3 and ROCm HEAD pass. |
 | [m058-nibble-bytesel-highbit](known-miscompiles/m058-nibble-bytesel-highbit/NOTES.md) | ❌ | ❌ | ❌ | `-O0`/`-O2` disagree on the high bit of a funnel-shift-shaped final store when a byte-lane select carry is derived from a nibble-table pack; the original oracle finding has LLVM HEAD `-O0` wrong. |
+| [m059-srem-loop-branch](known-miscompiles/m059-srem-loop-branch/NOTES.md) | ✅ | ✅ | ✅ | A stale LLVM HEAD build missing llvm/llvm-project#198373 skipped a live lane when a multi-exit loop branch key came from `srem`; the current patched toolchains pass. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 

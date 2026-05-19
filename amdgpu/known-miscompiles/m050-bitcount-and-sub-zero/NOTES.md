@@ -7,16 +7,16 @@ amdgpu/known-miscompiles/run_ll_reproducer.sh \
   amdgpu/known-miscompiles/m050-bitcount-and-sub-zero/reduced.ll
 ```
 
-With the patched LLVM HEAD build at `amdgpu/build/llvm-fuzzer`, the reduced
-testcase produces:
+Before llvm/llvm-project#198373 was applied to the LLVM HEAD build, the reduced
+testcase produced:
 
 ```text
 [0] input=0x00000000 O0=0x0000001f O2=0x7fffffff mismatch=true
 any_mismatch=true
 ```
 
-ROCm 7.2.3 and patched ROCm HEAD do not reproduce this mismatch. Patched LLVM
-HEAD does reproduce it.
+ROCm 7.2.3 and patched ROCm HEAD do not reproduce this mismatch. Current
+patched LLVM HEAD also passes after llvm/llvm-project#198373.
 
 ## Root Cause Notes
 
@@ -47,12 +47,12 @@ therefore `%set` is also `0x7fffffff`. The expression:
 is defined to leave `%mix == %set`, because `%dec == %set` and both `ctpop`
 calls count the same value. At `-O2`, the testcase stores `0x7fffffff`.
 
-At `-O0`, patched LLVM HEAD lowers `%clear` through a `v_bitop3_b32` combine
-using the pieces that formed `%set`; that combine produces zero for `%clear`.
-The later scalar `ctpop` then computes `31 - 0`, so the stored value becomes
-`0x0000001f`.
+Without llvm/llvm-project#198373, `-O0` lowers `%clear` through a
+`v_bitop3_b32` combine using the pieces that formed `%set`; that combine
+produces zero for `%clear`. The later scalar `ctpop` then computes `31 - 0`,
+so the stored value becomes `0x0000001f`.
 
-## Fuzzer Suppression
+## Fuzzer Follow-Up
 
-The directed C++ fuzzer now suppresses `and X, (sub X, 0)` shapes by default.
-Set `FUZZX_ALLOW_M050_AND_SUB_ZERO=1` to re-enable this pattern.
+The directed C++ fuzzer allows `and X, (sub X, 0)` shapes with the current
+patched LLVM HEAD toolchain.

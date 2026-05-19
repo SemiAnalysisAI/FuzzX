@@ -1,17 +1,16 @@
 # m043: self-xor after `zext i8` lowers to nonzero `v_bitop3_b32`
 
-Found while fuzzing upstream LLVM HEAD with llvm/llvm-project#198373,
-llvm/llvm-project#196418, llvm/llvm-project#198412, and
-llvm/llvm-project#198419 applied. The original fuzzer program contained
-byte-pack and loop scaffolding; the reduced testcase keeps only the scalar
-identity expression that triggers the bad `-O0` lowering.
+Found while fuzzing an upstream LLVM HEAD build that was missing the source fix
+from llvm/llvm-project#198373. The original fuzzer program contained byte-pack
+and loop scaffolding; the reduced testcase keeps only the scalar identity
+expression that triggered the bad `-O0` lowering before #198373 was applied.
 
 ```bash
 known-miscompiles/run_ll_reproducer.sh \
   known-miscompiles/m043-zext-i8-self-xor/reduced.ll
 ```
 
-Observed result on LLVM HEAD with the local PR patches:
+Observed result before llvm/llvm-project#198373 was applied:
 
 ```text
 input=0x00000000
@@ -35,7 +34,7 @@ The defined result is therefore zero.
 
 ## Root Cause Notes
 
-At `-O0`, LLVM HEAD combines the expression into:
+Without llvm/llvm-project#198373, `-O0` combines the expression into:
 
 ```asm
 v_and_b32_e64 v0, v0, s0
@@ -52,13 +51,10 @@ pipeline folds the self-xor to zero before AMDGPU lowering.
 | Toolchain | Result |
 | --- | --- |
 | ROCm 7.2.3 source build from tag `rocm-7.2.3`, commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`, `Release`, sanitizer coverage, no ASan | Passes: `O0=0x00000000`, `O2=0x00000000`. |
-| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Reproduces: `O0=0x00000001`, `O2=0x00000000`. |
+| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
 | ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000000`, `O2=0x00000000`. |
 
 ## Fuzzer Follow-Up
 
-The fuzzer now rejects scalar `xor x, x` by default. It also rejects the same
-bug class when the two `xor` operands are separate `zext(trunc x)` instructions
-from the same `i32` source, because that rediscovered this lowering bug as a
-duplicated equivalent value rather than a single SSA value. Set
-`FUZZX_ALLOW_M043_SELF_XOR=1` to re-enable this bug class.
+The fuzzer allows scalar self-xor and duplicated `zext(trunc x)` xor shapes with
+the current patched LLVM HEAD toolchain.

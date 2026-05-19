@@ -1,8 +1,7 @@
 # m044: `<4 x i32>` self-and loses lane before zero shuffle OR
 
-Found while fuzzing upstream LLVM HEAD with llvm/llvm-project#198373,
-llvm/llvm-project#196418, llvm/llvm-project#198412, and
-llvm/llvm-project#198419 applied. The original oracle finding was:
+Found while fuzzing an upstream LLVM HEAD build that was missing the source fix
+from llvm/llvm-project#198373. The original oracle finding was:
 
 ```text
 input=0x00000000
@@ -18,7 +17,7 @@ known-miscompiles/run_ll_reproducer.sh \
   known-miscompiles/m044-v4i32-self-and-zero-shuffle/reduced.ll
 ```
 
-Observed result on LLVM HEAD with the local PR patches:
+Observed result before llvm/llvm-project#198373 was applied:
 
 ```text
 input=0x00000000
@@ -43,7 +42,7 @@ zero. The extracted lane of `%or` must be one.
 
 ## Root Cause Notes
 
-At `-O0`, LLVM HEAD lowers the reduced expression through:
+Without llvm/llvm-project#198373, `-O0` lowers the reduced expression through:
 
 ```asm
 s_mov_b32 s3, 1
@@ -64,10 +63,10 @@ stores `1`.
 | Toolchain | Result |
 | --- | --- |
 | ROCm 7.2.3 source build from tag `rocm-7.2.3`, commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`, `Release`, sanitizer coverage, no ASan | Passes: `O0=0x00000001`, `O2=0x00000001`. |
-| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Reproduces: `O0=0x00000000`, `O2=0x00000001`. |
+| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000001`, `O2=0x00000001`. |
 | ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000001`, `O2=0x00000001`. |
 
 ## Fuzzer Follow-Up
 
-The fuzzer now rejects `<4 x i32>` vector identity `and` shapes by default. Set
-`FUZZX_ALLOW_M044_V4I32_SELF_AND=1` to re-enable this bug class.
+The fuzzer allows `<4 x i32>` vector identity `and` shapes with the current
+patched LLVM HEAD toolchain.
