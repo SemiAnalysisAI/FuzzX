@@ -1479,6 +1479,32 @@ bool triggersM043SelfXor(const Instruction &I) {
          BO->getOperand(0) == BO->getOperand(1);
 }
 
+bool isIdentityShuffleOf(const Value *MaybeShuffle, const Value *Operand) {
+  const auto *Shuffle = dyn_cast<ShuffleVectorInst>(MaybeShuffle);
+  if (!Shuffle || Shuffle->getOperand(0) != Operand)
+    return false;
+  const auto *VT = dyn_cast<FixedVectorType>(Shuffle->getType());
+  if (!VT)
+    return false;
+  for (unsigned I = 0, E = VT->getNumElements(); I != E; ++I) {
+    int Mask = Shuffle->getMaskValue(I);
+    if (Mask != static_cast<int>(I))
+      return false;
+  }
+  return true;
+}
+
+bool triggersM044V4I32SelfAnd(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !isFixedIntVectorType(BO->getType(), 32) ||
+      cast<FixedVectorType>(BO->getType())->getNumElements() != 4)
+    return false;
+  return BO->getOperand(0) == BO->getOperand(1) ||
+         isIdentityShuffleOf(BO->getOperand(0), BO->getOperand(1)) ||
+         isIdentityShuffleOf(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
   return BO && BO->getOpcode() == Instruction::LShr &&
@@ -1612,6 +1638,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM041 = envFlag("FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK", false);
   bool AllowM042 = envFlag("FUZZX_ALLOW_M042_OR_LSHR_ZERO", false);
   bool AllowM043 = envFlag("FUZZX_ALLOW_M043_SELF_XOR", false);
+  bool AllowM044 = envFlag("FUZZX_ALLOW_M044_V4I32_SELF_AND", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1649,6 +1676,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM041 && triggersM041AShrHighBytePack(I)) ||
               (!AllowM042 && triggersM042OrLShrZero(I)) ||
               (!AllowM043 && triggersM043SelfXor(I)) ||
+              (!AllowM044 && triggersM044V4I32SelfAnd(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
