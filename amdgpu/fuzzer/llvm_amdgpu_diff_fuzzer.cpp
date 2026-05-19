@@ -1585,6 +1585,22 @@ bool triggersM041AShrHighBytePack(const Instruction &I) {
   return false;
 }
 
+bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
+  return BO && BO->getOpcode() == Instruction::LShr &&
+         BO->getType()->isIntegerTy(32) && BO->getOperand(0) == Operand &&
+         hasI32ConstantValue(BO->getOperand(1), 0);
+}
+
+bool triggersM042OrLShrZero(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isI32LShrByZeroOf(BO->getOperand(0), BO->getOperand(1)) ||
+         isI32LShrByZeroOf(BO->getOperand(1), BO->getOperand(0));
+}
+
 bool triggersC001SUDotISELICE(const Instruction &I) {
   const auto *Call = dyn_cast<CallInst>(&I);
   if (!Call)
@@ -1702,6 +1718,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM039 = envFlag("FUZZX_ALLOW_M039_SEXT_I8_HIGHBYTE", false);
   bool AllowM040 = envFlag("FUZZX_ALLOW_M040_SIGNED_DIVREM24", false);
   bool AllowM041 = envFlag("FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK", false);
+  bool AllowM042 = envFlag("FUZZX_ALLOW_M042_OR_LSHR_ZERO", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1741,6 +1758,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM039 && triggersM039SExtI8HighBytePack(I)) ||
               (!AllowM040 && triggersM040SignedDivRem24(I)) ||
               (!AllowM041 && triggersM041AShrHighBytePack(I)) ||
+              (!AllowM042 && triggersM042OrLShrZero(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
