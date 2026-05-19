@@ -55,11 +55,18 @@ these features are present together. No further root cause was isolated.
 
 ## Suppressor
 
-There is no single obvious suppressor: every category in the list is needed,
-and disabling any one of `DIV_DISABLE_CACHE_POLICY_HELPERS=1`,
-`DIV_DISABLE_CVT_PACK=1`, `DIV_DISABLE_BF16_TF32_CVT=1`,
-`DIV_DISABLE_CTA_BARRIER_REDUCTIONS=1`, `DIV_DISABLE_F16_ARITH=1`, or
-`DIV_DISABLE_WARP_COLLECTIVES=1` removes the trigger for this specific
-program. The fuzzer found this in ~7 minutes with the suppressor list that
-also covers m083 — i.e. the family is much rarer than m083 — so we did not
-add a dedicated suppressor flag.
+A second hit of this family (`div-1779216522-18b10bee34e3a8c7`) came in shortly
+after adding `DIV_DISABLE_CACHE_POLICY_HELPERS=1` to the suppressor list.
+That variant reduces to a 59-line program with a different soup of
+ingredients — `match.sync.any.b32`/`elect.sync`, `cvt.rna.tf32.f32`,
+`abs.f16x2`, `cvt.pack.sat.u8.s32.b32`, and `barrier.sync.aligned` — but
+shares the same overall shape: many uniform-region warp/CTA collectives and
+unrelated dataflow combined with `cvt.pack` and a bf16/tf32 conversion. So
+the bug is the same optimizer pass, not a per-feature bug.
+
+The one category common to both variants is the saturating byte-pack
+`cvt.pack.sat.u8.s32.b32`; removing it makes either repro stop crashing. We
+adopt `DIV_DISABLE_CVT_PACK=1` as the suppressor for this family. (That is
+heavier than ideal — it disables all of `cvt.pack.sat.{s16,u16,u8,s8,u4,s4,
+u2,s2}` coverage from the `d1b2e4b` commit — but it is the only single flag
+that gates the trigger and recently-added.)
