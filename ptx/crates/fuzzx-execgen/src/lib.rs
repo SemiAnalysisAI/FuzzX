@@ -862,6 +862,37 @@ enum Bf16Tf32CvtOp {
 }
 
 #[derive(Clone, Copy)]
+enum CvtPackOp {
+    S16,
+    U16,
+    U8,
+    S8,
+    U4,
+    S4,
+    U2,
+    S2,
+}
+
+impl CvtPackOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            CvtPackOp::S16 => "cvt.pack.sat.s16.s32",
+            CvtPackOp::U16 => "cvt.pack.sat.u16.s32",
+            CvtPackOp::U8 => "cvt.pack.sat.u8.s32.b32",
+            CvtPackOp::S8 => "cvt.pack.sat.s8.s32.b32",
+            CvtPackOp::U4 => "cvt.pack.sat.u4.s32.b32",
+            CvtPackOp::S4 => "cvt.pack.sat.s4.s32.b32",
+            CvtPackOp::U2 => "cvt.pack.sat.u2.s32.b32",
+            CvtPackOp::S2 => "cvt.pack.sat.s2.s32.b32",
+        }
+    }
+
+    fn has_accumulator_operand(self) -> bool {
+        !matches!(self, CvtPackOp::S16 | CvtPackOp::U16)
+    }
+}
+
+#[derive(Clone, Copy)]
 enum WarpCollectiveOp {
     Activemask,
     VoteAll,
@@ -4079,6 +4110,14 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// Randomized saturating integer pack conversion.
+    CvtPack {
+        op: CvtPackOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
     /// Local `brx.idx` table whose targets all immediately rejoin.
     BranchTable {
         label: u32,
@@ -4964,6 +5003,18 @@ enum Inst {
         dst: u32,
         a: Operand,
         b: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated randomized saturating integer pack conversion.
+    PredicatedCvtPack {
+        op: CvtPackOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -8290,6 +8341,39 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_cvt_pack(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            CvtPackOp::S16,
+            CvtPackOp::U16,
+            CvtPackOp::U8,
+            CvtPackOp::S8,
+            CvtPackOp::U4,
+            CvtPackOp::S4,
+            CvtPackOp::U2,
+            CvtPackOp::S2,
+        ];
+        let op = *u.choose(&ops)?;
+        let dst = self.pick_dst(u)?;
+        let a = self.pick_cvt_operand(u)?;
+        let b = self.pick_cvt_operand(u)?;
+        let c = self.pick_cvt_operand(u)?;
+        if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedCvtPack {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::CvtPack { op, dst, a, b, c })
+        }
+    }
+
     fn pick_branch_table(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let label = self.alloc_branch_table_label();
         let dst = self.pick_dst(u)?;
@@ -9338,6 +9422,9 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_bf16_tf32_cvt(u);
+            }
+            if self.cfg.emit_cvt_pack && u.int_in_range(0..=7)? == 0 {
+                return self.pick_cvt_pack(u);
             }
             if self.cfg.emit_f16_arith
                 && self.cfg.emit_bitwise_binops
@@ -10693,6 +10780,7 @@ impl<'a> Generator<'a> {
             | Inst::F16x2Arith { dst, .. }
             | Inst::F16Cvt { dst, .. }
             | Inst::Bf16Tf32Cvt { dst, .. }
+            | Inst::CvtPack { dst, .. }
             | Inst::BranchTable { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
@@ -10756,6 +10844,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedF16x2Arith { dst, .. }
             | Inst::PredicatedF16Cvt { dst, .. }
             | Inst::PredicatedBf16Tf32Cvt { dst, .. }
+            | Inst::PredicatedCvtPack { dst, .. }
             | Inst::PredicatedF16Selp { dst, .. }
             | Inst::PredicatedF16x2Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
@@ -12269,6 +12358,48 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn emit_cvt_pack(
+        &self,
+        s: &mut String,
+        op: CvtPackOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        pred: Option<u32>,
+    ) {
+        let a_reg = self.scratch_reg(0);
+        let b_reg = self.scratch_reg(1);
+        let c_reg = self.scratch_reg(2);
+        write!(s, "    mov.b32       %r{a_reg}, ").unwrap();
+        a.emit(s);
+        writeln!(s, ";").unwrap();
+        write!(s, "    mov.b32       %r{b_reg}, ").unwrap();
+        b.emit(s);
+        writeln!(s, ";").unwrap();
+        if op.has_accumulator_operand() {
+            write!(s, "    mov.b32       %r{c_reg}, ").unwrap();
+            c.emit(s);
+            writeln!(s, ";").unwrap();
+        }
+
+        if let Some(pred) = pred {
+            write!(
+                s,
+                "    {} {:<12} %r{dst}, %r{a_reg}, %r{b_reg}",
+                pred_guard(pred),
+                op.mnemonic()
+            )
+            .unwrap();
+        } else {
+            write!(s, "    {:<17} %r{dst}, %r{a_reg}, %r{b_reg}", op.mnemonic()).unwrap();
+        }
+        if op.has_accumulator_operand() {
+            write!(s, ", %r{c_reg}").unwrap();
+        }
+        writeln!(s, ";").unwrap();
+    }
+
     fn emit_raw_f32_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
         let cvt = if signed {
             "cvt.rn.f32.s32"
@@ -12438,6 +12569,9 @@ impl<'a> Generator<'a> {
             }
             Inst::Bf16Tf32Cvt { op, dst, a, b } => {
                 self.emit_bf16_tf32_cvt_chain(s, op, dst, a, b, None);
+            }
+            Inst::CvtPack { op, dst, a, b, c } => {
+                self.emit_cvt_pack(s, op, dst, a, b, c, None);
             }
             Inst::BranchTable {
                 label,
@@ -14665,6 +14799,20 @@ impl<'a> Generator<'a> {
             } => {
                 self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
                 self.emit_bf16_tf32_cvt_chain(s, op, dst, a, b, Some(pred));
+            }
+            Inst::PredicatedCvtPack {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_cvt_pack(s, op, dst, a, b, c, Some(pred));
             }
             Inst::PredicatedF16Selp {
                 cmp,
@@ -20894,6 +21042,7 @@ mod tests {
                 || F32_CVT_MNEMONICS.contains(&op)
                 || F64_CVT_MNEMONICS.contains(&op)
                 || BF16_TF32_CVT_MNEMONICS.contains(&op)
+                || CVT_PACK_MNEMONICS.contains(&op)
         })
     }
 
@@ -29111,6 +29260,43 @@ mod tests {
     #[test]
     fn cvt_pack_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, CVT_PACK_MNEMONICS);
+    }
+
+    #[test]
+    fn randomized_cvt_pack_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; CVT_PACK_MNEMONICS.len()];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in CVT_PACK_MNEMONICS.iter().enumerate() {
+                found[i] |= mnemonic_occurrences(&ptx, mnemonic) > 1;
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = CVT_PACK_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit randomized {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_randomized_cvt_pack_generation_is_reachable() {
+        assert_predicated_mnemonic_coverage(
+            &coverage_heavy_config(),
+            8192,
+            32768,
+            CVT_PACK_MNEMONICS,
+        );
     }
 
     #[test]

@@ -447,7 +447,7 @@ that feature.
 | `DIV_DISABLE_WIDE_CVT` | 64-bit-source `cvt` round-trips. |
 | `DIV_DISABLE_SIGNED_WIDE_CVT` | Signed 64-bit-source `cvt` round-trips. |
 | `DIV_DISABLE_PREDICATED_WIDE_CVT` | Predicated 64-bit-source `cvt` round-trips. |
-| `DIV_DISABLE_CVT_PACK` | Deterministic prologue coverage for saturating `cvt.pack` integer packing. |
+| `DIV_DISABLE_CVT_PACK` | Deterministic prologue and randomized in-body coverage for saturating `cvt.pack` integer packing, including predicated forms. |
 | `DIV_DISABLE_SZEXT` | `szext.{wrap,clamp}.{u32,s32}`. |
 | `DIV_DISABLE_SIGNED_SZEXT` | `szext.*.s32`. |
 | `DIV_DISABLE_PREDICATED_SZEXT` | Predicated `szext` instructions. |
