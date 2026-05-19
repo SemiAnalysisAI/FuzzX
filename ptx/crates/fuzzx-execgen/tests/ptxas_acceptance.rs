@@ -9,6 +9,34 @@ use fuzzx_execgen::{bytes_from_seed, generate_from_bytes, TARGET_ARCH};
 const PROGRAM_BYTES: usize = 4096;
 
 #[test]
+fn ptxas_accepts_warp_size_constant_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry warp_size_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<1>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, WARP_SZ;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_random_programs_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let mut failures: Vec<(u64, String, String)> = Vec::new();
