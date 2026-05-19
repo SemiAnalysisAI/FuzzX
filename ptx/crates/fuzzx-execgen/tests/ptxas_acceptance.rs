@@ -168,6 +168,10 @@ fn ptxas_accepts_warp_collectives_at_both_opt_levels() {
     add.u32 %r0, %r0, %r1;
     match.sync.all.b32 %r1|%p4, %r0, 0xffffffff;
     add.u32 %r0, %r0, %r1;
+    elect.sync %r1|%p4, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    selp.u32 %r1, 16, 0, %p4;
+    add.u32 %r0, %r0, %r1;
     shfl.sync.idx.b32 %r1, %r0, 0, 31, 0xffffffff;
     add.u32 %r0, %r0, %r1;
     shfl.sync.up.b32 %r1, %r0, 1, 31, 0xffffffff;

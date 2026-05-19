@@ -10357,6 +10357,10 @@ impl<'a> Generator<'a> {
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    selp.u32        %r{scratch}, 8, 0, %p4;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    elect.sync      %r{scratch}|%p4, 0xffffffff;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 16, 0, %p4;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(
                 s,
                 "    shfl.sync.idx.b32 %r{scratch}, %r{tid_reg}, 0, 31, 0xffffffff;"
@@ -16475,6 +16479,7 @@ mod tests {
         "vote.sync.ballot.b32",
         "match.sync.any.b32",
         "match.sync.all.b32",
+        "elect.sync",
         "shfl.sync.idx.b32",
         "shfl.sync.up.b32",
         "shfl.sync.down.b32",

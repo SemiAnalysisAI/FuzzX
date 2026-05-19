@@ -320,7 +320,7 @@ that feature.
 | `DIV_DISABLE_BIT_MEMORY` | Scalar/vector memory load/store type suffixes such as `.b8`, `.b16`, `.b32`, and `.b64`. |
 | `DIV_DISABLE_MEMORY_FENCES` | Uniform `membar.{cta,gl,sys}` and `fence.{acq_rel,sc}.{cta,gpu,sys}` memory-ordering instructions. |
 | `DIV_DISABLE_WARP_BARRIERS` | Full-warp `bar.warp.sync` emitted before generated divergent control flow. |
-| `DIV_DISABLE_WARP_COLLECTIVES` | Full-mask `activemask`, `vote.sync`, `match.sync`, `shfl.sync`, and `redux.sync` emitted before generated divergent control flow. |
+| `DIV_DISABLE_WARP_COLLECTIVES` | Full-mask `activemask`, `vote.sync`, `match.sync`, `elect.sync`, `shfl.sync`, and `redux.sync` emitted before generated divergent control flow. |
 | `DIV_DISABLE_CTA_BARRIERS` | Full-CTA `bar.sync` and `barrier.sync` emitted before generated divergent control flow. |
 | `DIV_DISABLE_CTA_BARRIER_REDUCTIONS` | Full-CTA `bar.red` and `barrier.red` reductions emitted before generated divergent control flow. |
 | `DIV_DISABLE_PREFETCH` | Bounded `prefetch.global.*` and `prefetchu.L1` cache hints against the input buffer. |
