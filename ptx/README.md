@@ -130,6 +130,7 @@ Version | Description |
 | 13.2.78 | [m075-wide-bfi-loop-liveout-fold](known-miscompiles/m075-wide-bfi-loop-liveout-fold/NOTES.md): Loop-carried `bfi.b64` live-out is folded to shifted or sign-shaped values under optimized ptxas. |
 | 13.2.78 | [m076-predicated-mad-loop-liveout-fold](known-miscompiles/m076-predicated-mad-loop-liveout-fold/NOTES.md): Loop-body predicated `mad.lo.u32` update is dropped, leaving `%tid.x` instead of `%lanemask_gt` under optimized ptxas. |
 | 13.2.78 | [m077-global-store-loop-liveout-fold](known-miscompiles/m077-global-store-loop-liveout-fold/NOTES.md): Loop-carried value reset after a per-thread global store is ignored, so the final `mad.lo.s32` uses stale pre-store state. |
+| 13.2.78 | [m078-mul-lo-loop-recurrence-fold](known-miscompiles/m078-mul-lo-loop-recurrence-fold/NOTES.md): Low-multiply loop recurrence is skipped for some lanes, leaving `input | 0x20` instead of the iterated value under optimized ptxas. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
