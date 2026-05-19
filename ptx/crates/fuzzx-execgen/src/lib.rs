@@ -251,6 +251,7 @@ pub struct GenConfig {
     pub emit_wide_cvt: bool,
     pub emit_signed_wide_cvt: bool,
     pub emit_predicated_wide_cvt: bool,
+    pub emit_cvt_pack: bool,
     pub emit_szext: bool,
     pub emit_signed_szext: bool,
     pub emit_predicated_szext: bool,
@@ -496,6 +497,7 @@ impl Default for GenConfig {
             emit_wide_cvt: true,
             emit_signed_wide_cvt: true,
             emit_predicated_wide_cvt: true,
+            emit_cvt_pack: true,
             emit_szext: true,
             emit_signed_szext: true,
             emit_predicated_szext: true,
@@ -10440,6 +10442,28 @@ impl<'a> Generator<'a> {
             writeln!(s, "    cvt.rn.f16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
+        if self.cfg.emit_cvt_pack {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    mov.s32         %r1, -40000;").unwrap();
+            writeln!(s, "    mov.s32         %r2, 40000;").unwrap();
+            writeln!(s, "    cvt.pack.sat.s16.s32 %r{scratch}, %r1, %r2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.u16.s32 %r{scratch}, %r1, %r2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.u32         %r3, 0x88776655;").unwrap();
+            writeln!(s, "    cvt.pack.sat.u8.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.s8.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.u4.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.s4.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.u2.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.pack.sat.s2.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
         if self.cfg.emit_warp_barriers {
             writeln!(s, "    bar.warp.sync   0xffffffff;").unwrap();
         }
@@ -17655,6 +17679,16 @@ mod tests {
     const WIDE_CVT_MNEMONICS: &[&str] =
         &["cvt.u32.u64", "cvt.s32.s64", "cvt.u32.s64", "cvt.s32.u64"];
     const SIGNED_WIDE_CVT_MNEMONICS: &[&str] = &["cvt.s32.s64", "cvt.u32.s64", "cvt.s32.u64"];
+    const CVT_PACK_MNEMONICS: &[&str] = &[
+        "cvt.pack.sat.s16.s32",
+        "cvt.pack.sat.u16.s32",
+        "cvt.pack.sat.u8.s32.b32",
+        "cvt.pack.sat.s8.s32.b32",
+        "cvt.pack.sat.u4.s32.b32",
+        "cvt.pack.sat.s4.s32.b32",
+        "cvt.pack.sat.u2.s32.b32",
+        "cvt.pack.sat.s2.s32.b32",
+    ];
     const SZEXT_MNEMONICS: &[&str] = &[
         "szext.wrap.u32",
         "szext.clamp.u32",
@@ -18012,6 +18046,7 @@ mod tests {
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
             WIDE_CVT_MNEMONICS,
+            CVT_PACK_MNEMONICS,
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
             PRMT_MODE_MNEMONICS,
@@ -18100,6 +18135,7 @@ mod tests {
             CVT_MNEMONICS,
             NARROW_CVT_MNEMONICS,
             WIDE_CVT_MNEMONICS,
+            CVT_PACK_MNEMONICS,
             SZEXT_MNEMONICS,
             FNS_MNEMONICS,
             BFE_MNEMONICS,
@@ -26432,6 +26468,27 @@ mod tests {
             assert!(
                 !has_predicated_wide_cvt(&ptx),
                 "seed {seed:x} emitted predicated wide cvt"
+            );
+        }
+    }
+
+    #[test]
+    fn cvt_pack_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, CVT_PACK_MNEMONICS);
+    }
+
+    #[test]
+    fn cvt_pack_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_cvt_pack: false,
+            ..coverage_heavy_config()
+        };
+
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
+        for mnemonic in CVT_PACK_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled cvt.pack still emitted {mnemonic}"
             );
         }
     }

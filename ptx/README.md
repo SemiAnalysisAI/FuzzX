@@ -103,6 +103,7 @@ Version | Description |
 | 13.2.78 | [m029-addc-mul-carry-fold](known-miscompiles/m029-addc-mul-carry-fold/NOTES.md): Likely same root cause as m017; `addc.u32` fold injects an incorrect carry-in after multiply-derived operands. |
 | 13.2.78 | [m018-subc-cnot-shift-borrow-fold](known-miscompiles/m018-subc-cnot-shift-borrow-fold/NOTES.md): `sub.cc.u32` / `subc.u32` fold injects an incorrect borrow-in after `cnot`. |
 | 13.2.78 | [m027-subc-shr-mul-borrow-fold](known-miscompiles/m027-subc-shr-mul-borrow-fold/NOTES.md): Likely same root cause as m018; `subc.u32` fold uses the wrong borrow source after shift and multiply. |
+| 13.2.78 | [m082-subc-shared-byte-borrow-fold](known-miscompiles/m082-subc-shared-byte-borrow-fold/NOTES.md): Likely same root cause as m018; `subc.u32` borrow-chain fold is wrong after a shared signed-byte roundtrip and scalar 16-bit producer. |
 | 13.2.78 | [m019-structured-loop-uniform-counter](known-miscompiles/m019-structured-loop-uniform-counter/NOTES.md): Structured loop counters are promoted to uniform state and lose per-lane values. |
 | 13.2.78 | [m020-mixed-minmax-signedness-fold](known-miscompiles/m020-mixed-minmax-signedness-fold/NOTES.md): Mixed signed/unsigned `min` / `max` fold drops the runtime input. |
 | 13.2.78 | [m021-cnot-funnel-add](known-miscompiles/m021-cnot-funnel-add/NOTES.md): `shf.r.wrap.b32` plus add fold loses part of the shifted value. |
@@ -443,6 +444,7 @@ that feature.
 | `DIV_DISABLE_WIDE_CVT` | 64-bit-source `cvt` round-trips. |
 | `DIV_DISABLE_SIGNED_WIDE_CVT` | Signed 64-bit-source `cvt` round-trips. |
 | `DIV_DISABLE_PREDICATED_WIDE_CVT` | Predicated 64-bit-source `cvt` round-trips. |
+| `DIV_DISABLE_CVT_PACK` | Deterministic prologue coverage for saturating `cvt.pack` integer packing. |
 | `DIV_DISABLE_SZEXT` | `szext.{wrap,clamp}.{u32,s32}`. |
 | `DIV_DISABLE_SIGNED_SZEXT` | `szext.*.s32`. |
 | `DIV_DISABLE_PREDICATED_SZEXT` | Predicated `szext` instructions. |

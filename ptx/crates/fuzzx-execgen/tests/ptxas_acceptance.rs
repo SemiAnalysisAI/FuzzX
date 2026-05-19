@@ -161,6 +161,46 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_cvt_pack_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry cvt_pack_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.s32 %r0, -40000;
+    mov.s32 %r1, 40000;
+    cvt.pack.sat.s16.s32 %r2, %r0, %r1;
+    cvt.pack.sat.u16.s32 %r3, %r0, %r1;
+    mov.u32 %r4, 0x88776655;
+    cvt.pack.sat.u8.s32.b32 %r5, %r0, %r1, %r4;
+    cvt.pack.sat.s8.s32.b32 %r5, %r0, %r1, %r5;
+    cvt.pack.sat.u4.s32.b32 %r5, %r0, %r1, %r5;
+    cvt.pack.sat.s4.s32.b32 %r5, %r0, %r1, %r5;
+    cvt.pack.sat.u2.s32.b32 %r5, %r0, %r1, %r5;
+    cvt.pack.sat.s2.s32.b32 %r5, %r0, %r1, %r5;
+    add.u32 %r2, %r2, %r3;
+    add.u32 %r2, %r2, %r5;
+    st.global.u32 [%rd0], %r2;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_helper_call_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(
