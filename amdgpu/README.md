@@ -250,6 +250,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M056_HALFDOT_BRANCH=1` | unset | Re-enable low-bit branch keys depending on halfword-dot pack values for [m056](known-miscompiles/m056-halfdot-lowbit-branch/NOTES.md). |
 | `FUZZX_ALLOW_M057_ROTCASCADE_STORE=1` | unset | Re-enable final stores depending on rotate-cascade values for [m057](known-miscompiles/m057-rotcascade-store/NOTES.md). |
 | `FUZZX_ALLOW_M058_NIBBLE_BYTESEL_HIGHBIT=1` | unset | Re-enable byte-lane select carry values derived from nibble-table packs for [m058](known-miscompiles/m058-nibble-bytesel-highbit/NOTES.md). |
+| `FUZZX_ALLOW_M060_PACKUNPACK_BYTEDOT=1` | unset | Re-enable final stores depending on generated `packunpack` byte-dot sums for [m060](known-miscompiles/m060-packunpack-bytedot-dot4/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -350,6 +351,7 @@ Tested toolchains as of 2026-05-19:
 | [m057-rotcascade-store](known-miscompiles/m057-rotcascade-store/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` miscomputes a repeated rotate/popcount/bitselect cascade before the final store; ROCm 7.2.3 and ROCm HEAD pass. |
 | [m058-nibble-bytesel-highbit](known-miscompiles/m058-nibble-bytesel-highbit/NOTES.md) | ❌ | ❌ | ❌ | `-O0`/`-O2` disagree on the high bit of a funnel-shift-shaped final store when a byte-lane select carry is derived from a nibble-table pack; the original oracle finding has LLVM HEAD `-O0` wrong. |
 | [m059-srem-loop-branch](known-miscompiles/m059-srem-loop-branch/NOTES.md) | ✅ | ✅ | ✅ | A stale LLVM HEAD build missing llvm/llvm-project#198373 skipped a live lane when a multi-exit loop branch key came from `srem`; the current patched toolchains pass. |
+| [m060-packunpack-bytedot-dot4](known-miscompiles/m060-packunpack-bytedot-dot4/NOTES.md) | ❌ | ❌ | ❌ | `-O2` folds a generated `packunpack` three-term byte-dot sum into `v_dot4_u32_u8` with the wrong packed byte or accumulator, returning `0x1e35` instead of `0x1f98`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
