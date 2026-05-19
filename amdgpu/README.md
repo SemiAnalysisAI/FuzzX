@@ -91,7 +91,9 @@ cross-lane fold idioms, pure-IR vector pairwise byte arithmetic idioms,
 pure-IR byte permute-control idioms, pure-IR bit-run mask idioms, pure-IR i64
 multiply-fold idioms, pure-IR halfword blend-network idioms, pure-IR byte
 ternary-blend idioms, pure-IR halfword prefix-sum idioms, pure-IR i64
-rotate-add idioms, and pure-IR vector compare bitmask idioms, alongside LLVM
+rotate-add idioms, pure-IR vector compare bitmask idioms, pure-IR byte carry
+propagation idioms, pure-IR bit-slice boolean idioms, pure-IR vector
+splat/blend idioms, and pure-IR i64 compare/pack idioms, alongside LLVM
 bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
 integer-intrinsic subset covering BFE, SAD/MSAD, `lerp`, 24-bit multiply,
@@ -229,7 +231,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M040_SIGNED_DIVREM24=1` | unset | Re-enable signed `sdiv` / `srem` by small odd denominators when the numerator is not known to fit signed 24-bit for [m040](known-miscompiles/m040-sdivrem24-boundary/NOTES.md). |
 | `FUZZX_ALLOW_M041_ASHR_HIGHBYTE_PACK=1` | unset | Re-enable high-byte extraction from `ashr i32` values feeding byte-pack shapes for [m041](known-miscompiles/m041-ashr-highbyte-pack/NOTES.md). |
 | `FUZZX_ALLOW_M042_OR_LSHR_ZERO=1` | unset | Re-enable redundant `or x, (lshr x, 0)` shapes for [m042](known-miscompiles/m042-or-lshr-zero-xor/NOTES.md). |
-| `FUZZX_ALLOW_M043_SELF_XOR=1` | unset | Re-enable scalar `xor x, x` shapes for [m043](known-miscompiles/m043-zext-i8-self-xor/NOTES.md). |
+| `FUZZX_ALLOW_M043_SELF_XOR=1` | unset | Re-enable scalar self-xor and duplicated `zext(trunc x)` xor shapes for [m043](known-miscompiles/m043-zext-i8-self-xor/NOTES.md). |
 | `FUZZX_ALLOW_M044_V4I32_SELF_AND=1` | unset | Re-enable `<4 x i32>` vector identity `and` shapes for [m044](known-miscompiles/m044-v4i32-self-and-zero-shuffle/NOTES.md). |
 | `FUZZX_ALLOW_M045_UREM_OR_ONE=1` | unset | Re-enable `urem x, (x \| 1)` shapes for [m045](known-miscompiles/m045-urem-or-one-known24/NOTES.md). |
 | `FUZZX_ALLOW_M046_V4I16_CTTZ=1` | unset | Re-enable `llvm.cttz.v4i16` shapes for [m046](known-miscompiles/m046-v4i16-cttz-funnel-loop/NOTES.md). |

@@ -57,5 +57,8 @@ pipeline folds the self-xor to zero before AMDGPU lowering.
 
 ## Fuzzer Follow-Up
 
-The fuzzer now rejects scalar `xor x, x` by default. Set
+The fuzzer now rejects scalar `xor x, x` by default. It also rejects the same
+bug class when the two `xor` operands are separate `zext(trunc x)` instructions
+from the same `i32` source, because that rediscovered this lowering bug as a
+duplicated equivalent value rather than a single SSA value. Set
 `FUZZX_ALLOW_M043_SELF_XOR=1` to re-enable this bug class.
