@@ -1,0 +1,449 @@
+diff --git a/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp b/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
+index ecf8d957fc80f..d63fe60c32d9b 100644
+--- a/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
++++ b/llvm/lib/Target/AMDGPU/AMDGPUISelDAGToDAG.cpp
+@@ -4401,17 +4401,53 @@ static std::pair<unsigned, uint8_t> BitOp3_Op(SDValue In,
+     }
+ 
+     // Recursion is naturally limited by the size of the operand vector.
++    //
++    // When LHS and RHS share a common sub-expression, one side's recursion
++    // may decompose that sub-expression and replace the Src slot the other
++    // side occupies with sub-operands via the "replace parent" path in
++    // getOperandBits. The other side's cached bit-pattern then refers to a
++    // slot whose contents changed, producing a wrong truth table.
++    //
++    // Track which Src slot each operand occupies so we can detect this in
++    // both directions (LHS corrupting RHS, or RHS corrupting LHS).
++    const uint8_t SrcBitsConst[3] = {0xf0, 0xcc, 0xaa};
++    auto findSlot = [&](uint8_t Bits, SDValue Op) -> int {
++      for (int I = 0; I < (int)Src.size(); I++)
++        if (Bits == SrcBitsConst[I] && Src[I] == Op)
++          return I;
++      return -1;
++    };
++    int LHSSlot = findSlot(LHSBits, LHS);
++    int RHSSlot = findSlot(RHSBits, RHS);
++    SmallVector<SDValue, 3> SrcBeforeRecurse(Src.begin(), Src.end());
++    uint8_t LHSBitsOrig = LHSBits;
++
+     auto Op = BitOp3_Op(LHS, Src);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       LHSBits = Op.second;
+     }
+ 
++    // Snapshot Src after LHS recursion so we can detect if RHS recursion
++    // modifies slots that LHSBits depends on.
++    SmallVector<SDValue, 3> SrcAfterLHS(Src.begin(), Src.end());
++
+     Op = BitOp3_Op(RHS, Src);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       RHSBits = Op.second;
+     }
++
++    // Check for cross-contamination between the two recursions.
++    bool RHSStale = !Op.first && RHSSlot >= 0 &&
++                    Src[RHSSlot] != SrcBeforeRecurse[RHSSlot];
++    bool LHSStale = LHSSlot >= 0 && LHSSlot < (int)Src.size() &&
++                    Src[LHSSlot] != SrcAfterLHS[LHSSlot];
++    if (RHSStale || LHSStale) {
++      Src = std::move(SrcBeforeRecurse);
++      LHSBits = LHSBitsOrig;
++      NumOpcodes = 0;
++    }
+     break;
+   }
+   default:
+diff --git a/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp b/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
+index 4bfd56c0c4007..ad5673a98fa40 100644
+--- a/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
++++ b/llvm/lib/Target/AMDGPU/AMDGPUInstructionSelector.cpp
+@@ -4233,17 +4233,53 @@ static std::pair<unsigned, uint8_t> BitOp3_Op(Register R,
+     }
+ 
+     // Recursion is naturally limited by the size of the operand vector.
++    //
++    // When LHS and RHS share a common sub-expression, one side's recursion
++    // may decompose that sub-expression and replace the Src slot the other
++    // side occupies with sub-operands via the "replace parent" path in
++    // getOperandBits. The other side's cached bit-pattern then refers to a
++    // slot whose contents changed, producing a wrong truth table.
++    //
++    // Track which Src slot each operand occupies so we can detect this in
++    // both directions (LHS corrupting RHS, or RHS corrupting LHS).
++    const uint8_t SrcBitsConst[3] = {0xf0, 0xcc, 0xaa};
++    auto findSlot = [&](uint8_t Bits, Register Op) -> int {
++      for (int I = 0; I < (int)Src.size(); I++)
++        if (Bits == SrcBitsConst[I] && Src[I] == Op)
++          return I;
++      return -1;
++    };
++    int LHSSlot = findSlot(LHSBits, LHS);
++    int RHSSlot = findSlot(RHSBits, RHS);
++    SmallVector<Register, 3> SrcBeforeRecurse(Src.begin(), Src.end());
++    uint8_t LHSBitsOrig = LHSBits;
++
+     auto Op = BitOp3_Op(LHS, Src, MRI);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       LHSBits = Op.second;
+     }
+ 
++    // Snapshot Src after LHS recursion so we can detect if RHS recursion
++    // modifies slots that LHSBits depends on.
++    SmallVector<Register, 3> SrcAfterLHS(Src.begin(), Src.end());
++
+     Op = BitOp3_Op(RHS, Src, MRI);
+     if (Op.first) {
+       NumOpcodes += Op.first;
+       RHSBits = Op.second;
+     }
++
++    // Check for cross-contamination between the two recursions.
++    bool RHSStale = !Op.first && RHSSlot >= 0 &&
++                    Src[RHSSlot] != SrcBeforeRecurse[RHSSlot];
++    bool LHSStale = LHSSlot >= 0 && LHSSlot < (int)Src.size() &&
++                    Src[LHSSlot] != SrcAfterLHS[LHSSlot];
++    if (RHSStale || LHSStale) {
++      Src = std::move(SrcBeforeRecurse);
++      LHSBits = LHSBitsOrig;
++      NumOpcodes = 0;
++    }
+     break;
+   }
+   default:
+diff --git a/llvm/test/CodeGen/AMDGPU/bitop3-shared-operand.ll b/llvm/test/CodeGen/AMDGPU/bitop3-shared-operand.ll
+new file mode 100644
+index 0000000000000..5b3a2a33ef3fa
+--- /dev/null
++++ b/llvm/test/CodeGen/AMDGPU/bitop3-shared-operand.ll
+@@ -0,0 +1,327 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 5
++; RUN: llc -global-isel=0 -mtriple=amdgcn-- -mcpu=gfx950 < %s | FileCheck -check-prefixes=GCN,SDAG %s
++; RUN: llc -global-isel -new-reg-bank-select -mtriple=amdgcn-- -mcpu=gfx950 < %s | FileCheck -check-prefixes=GCN,GISEL %s
++; RUN: llc -O0 -mtriple=amdgcn-- -mcpu=gfx950 < %s | FileCheck -check-prefix=O0 %s
++
++; Regression tests for v_bitop3_b32 truth table computation when LHS and RHS
++; of a boolean node share a common sub-expression.  The BitOp3_Op algorithm
++; can decompose the shared sub-expression on one side and invalidate the
++; bit-pattern assigned to the other side.
++
++; ((wi ^ x) & x) | mul, where x = (mul ^ C) & mul
++; x appears in both the XOR and the AND feeding the top OR.
++define amdgpu_ps float @bitop3_xor_and_or(i32 %wi, i32 %mul) {
++; GCN-LABEL: bitop3_xor_and_or:
++; GCN:       ; %bb.0:
++; GCN-NEXT:    s_mov_b32 s0, 0xaaaaaaaa
++; GCN-NEXT:    v_xor_b32_e32 v2, 0xaaaaaaaa, v1
++; GCN-NEXT:    v_bitop3_b32 v3, v1, v1, s0 bitop3:0x48
++; GCN-NEXT:    v_bitop3_b32 v0, v0, v2, v1 bitop3:0x78
++; GCN-NEXT:    v_and_or_b32 v0, v0, v3, v1
++; GCN-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_xor_and_or:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v2, v1
++; O0-NEXT:    s_mov_b32 s0, 0xaaaaaaaa
++; O0-NEXT:    v_xor_b32_e64 v3, v2, s0
++; O0-NEXT:    v_bitop3_b32 v1, v2, v2, s0 bitop3:0x48
++; O0-NEXT:    v_bitop3_b32 v0, v0, v3, v2 bitop3:0x78
++; O0-NEXT:    v_and_or_b32 v0, v0, v1, v2
++; O0-NEXT:    ; return to shader part epilog
++  %xor = xor i32 %mul, -1431655766
++  %x = and i32 %xor, %mul
++  %yxor = xor i32 %wi, %x
++  %and = and i32 %yxor, %x
++  %result = or i32 %and, %mul
++  %ret = bitcast i32 %result to float
++  ret float %ret
++}
++
++; (umax(masked, 2) & mix) & not, where mix = v ^ salt, not = ~mix
++; mix and not share the same sub-expression; AND of x and ~x is always 0.
++define amdgpu_ps float @bitop3_umax_and_not(i32 %v, i32 %salt, i32 %shl) {
++; GCN-LABEL: bitop3_umax_and_not:
++; GCN:       ; %bb.0:
++; GCN-NEXT:    v_mov_b32_e32 v0, 0
++; GCN-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_umax_and_not:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_accvgpr_write_b32 a0, v2 ; Reload Reuse
++; O0-NEXT:    v_mov_b32_e32 v2, v1
++; O0-NEXT:    v_mov_b32_e32 v1, v0
++; O0-NEXT:    v_accvgpr_read_b32 v0, a0 ; Reload Reuse
++; O0-NEXT:    v_bitop3_b32 v0, v0, v1, v2 bitop3:0x90
++; O0-NEXT:    s_mov_b32 s0, 2
++; O0-NEXT:    v_max_u32_e64 v0, v0, s0
++; O0-NEXT:    v_bitop3_b32 v0, v0, v1, v2 bitop3:0x80
++; O0-NEXT:    ; return to shader part epilog
++  %mix = xor i32 %v, %salt
++  %not = xor i32 %mix, -1
++  %masked = and i32 %shl, %not
++  %umax = call i32 @llvm.umax.i32(i32 %masked, i32 2)
++  %and0 = and i32 %umax, %mix
++  %result = and i32 %and0, %not
++  %ret = bitcast i32 %result to float
++  ret float %ret
++}
++
++; (xor(select, mix) & select) >> 31, where select = umax(shl(mix,8), mix)
++; mix appears in both the umax and the xor feeding the AND.
++define amdgpu_ps float @bitop3_umax_xor_and(i32 %v, i32 %salt) {
++; GCN-LABEL: bitop3_umax_xor_and:
++; GCN:       ; %bb.0:
++; GCN-NEXT:    v_xor_b32_e32 v0, v0, v1
++; GCN-NEXT:    v_lshlrev_b32_e32 v1, 8, v0
++; GCN-NEXT:    v_max_u32_e32 v1, v1, v0
++; GCN-NEXT:    v_bitop3_b32 v0, v1, v1, v0 bitop3:0x48
++; GCN-NEXT:    v_ashrrev_i32_e32 v0, 31, v0
++; GCN-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_umax_xor_and:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_xor_b32_e64 v1, v0, v1
++; O0-NEXT:    s_mov_b32 s0, 8
++; O0-NEXT:    v_lshlrev_b32_e64 v0, s0, v1
++; O0-NEXT:    v_max_u32_e64 v0, v0, v1
++; O0-NEXT:    v_bitop3_b32 v0, v0, v0, v1 bitop3:0x48
++; O0-NEXT:    s_mov_b32 s0, 31
++; O0-NEXT:    v_ashrrev_i32_e64 v0, s0, v0
++; O0-NEXT:    ; return to shader part epilog
++  %mix = xor i32 %v, %salt
++  %shl = shl i32 %mix, 8
++  %sel = call i32 @llvm.umax.i32(i32 %shl, i32 %mix)
++  %xor = xor i32 %sel, %mix
++  %and = and i32 %xor, %sel
++  %result = ashr i32 %and, 31
++  %ret = bitcast i32 %result to float
++  ret float %ret
++}
++
++; masked ^ (masked & 16), where masked = (tid ^ 16) & 18
++; masked is shared between LHS and RHS of the top XOR.
++; Reproducer for m017 (ROCm 7.2.3 -O0 dropped the vector lane clear).
++define amdgpu_ps float @bitop3_m017_xor_masked_and(i32 %tid) {
++; GCN-LABEL: bitop3_m017_xor_masked_and:
++; GCN:       ; %bb.0:
++; GCN-NEXT:    v_bitop3_b32 v1, v0, 18, 16 bitop3:0x48
++; GCN-NEXT:    v_bitop3_b32 v0, v0, 16, v0 bitop3:0xc
++; GCN-NEXT:    v_xor_b32_e32 v0, v1, v0
++; GCN-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m017_xor_masked_and:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v1, v0
++; O0-NEXT:    s_mov_b32 s1, 16
++; O0-NEXT:    v_xor_b32_e64 v0, v1, s1
++; O0-NEXT:    s_mov_b32 s0, 18
++; O0-NEXT:    v_mov_b32_e32 v2, s0
++; O0-NEXT:    v_bitop3_b32 v1, v1, s1, v2 bitop3:8
++; O0-NEXT:    v_bitop3_b32 v0, v0, v1, s0 bitop3:0x6c
++; O0-NEXT:    ; return to shader part epilog
++  %a = xor i32 %tid, 16
++  %masked = and i32 %a, 18
++  %e = and i32 %masked, 16
++  %r = xor i32 %masked, %e
++  %ret = bitcast i32 %r to float
++  ret float %ret
++}
++
++; or(and(mix, salt), 0x80000000) ^ and(mix, salt)
++; and is shared between the OR and the outer XOR.
++; Reproducer for m019.
++define amdgpu_ps float @bitop3_m019_highbit_or_xor(i32 %v, i32 %salt) {
++; SDAG-LABEL: bitop3_m019_highbit_or_xor:
++; SDAG:       ; %bb.0:
++; SDAG-NEXT:    s_brev_b32 s0, 1
++; SDAG-NEXT:    v_bitop3_b32 v2, v0, v1, v0 bitop3:0xc
++; SDAG-NEXT:    v_bitop3_b32 v0, v0, s0, v1 bitop3:0xce
++; SDAG-NEXT:    v_xor_b32_e32 v0, v0, v2
++; SDAG-NEXT:    ; return to shader part epilog
++;
++; GISEL-LABEL: bitop3_m019_highbit_or_xor:
++; GISEL:       ; %bb.0:
++; GISEL-NEXT:    v_bitop3_b32 v0, v0, v1, v0 bitop3:0xc
++; GISEL-NEXT:    v_or_b32_e32 v1, 0x80000000, v0
++; GISEL-NEXT:    v_xor_b32_e32 v0, v1, v0
++; GISEL-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m019_highbit_or_xor:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v2, v1
++; O0-NEXT:    v_bitop3_b32 v1, v0, v2, v0 bitop3:0xc
++; O0-NEXT:    s_mov_b32 s0, 0x80000000
++; O0-NEXT:    v_bitop3_b32 v0, v0, s0, v2 bitop3:0xce
++; O0-NEXT:    v_xor_b32_e64 v0, v0, v1
++; O0-NEXT:    ; return to shader part epilog
++  %mix = xor i32 %v, %salt
++  %and = and i32 %mix, %salt
++  %or = or i32 %and, -2147483648
++  %xor = xor i32 %or, %and
++  %ret = bitcast i32 %xor to float
++  ret float %ret
++}
++
++; (or3 ^ and) & or3, where or3 = (wi+25) | and, and = wi | 3
++; and is shared inside or3 and in the outer XOR.
++; Reproducer for m020.
++define amdgpu_ps float @bitop3_m020_or_xor_and(i32 %wi) {
++; GCN-LABEL: bitop3_m020_or_xor_and:
++; GCN:       ; %bb.0:
++; GCN-NEXT:    v_add_u32_e32 v1, 25, v0
++; GCN-NEXT:    v_bitop3_b32 v0, v1, v0, 3 bitop3:0x10
++; GCN-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m020_or_xor_and:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v2, v0
++; O0-NEXT:    s_mov_b32 s0, 25
++; O0-NEXT:    v_add_u32_e64 v0, v2, s0
++; O0-NEXT:    s_mov_b32 s0, 3
++; O0-NEXT:    v_or3_b32 v1, v2, s0, v0
++; O0-NEXT:    v_bitop3_b32 v0, v0, v2, s0 bitop3:0x10
++; O0-NEXT:    v_and_b32_e64 v0, v0, v1
++; O0-NEXT:    ; return to shader part epilog
++  %and = or i32 %wi, 3
++  %and1 = add i32 %wi, 25
++  %or3 = or i32 %and1, %and
++  %xor1 = xor i32 %or3, %and
++  %and3 = and i32 %xor1, %or3
++  %ret = bitcast i32 %and3 to float
++  ret float %ret
++}
++
++; (xor | and) ^ xor, where xor = fshl(and,0,5) ^ and
++; and is shared across multiple levels of the bitwise tree.
++; Reproducer for m021.
++define amdgpu_ps float @bitop3_m021_fshl_or_xor(i32 %v) {
++; SDAG-LABEL: bitop3_m021_fshl_or_xor:
++; SDAG:       ; %bb.0:
++; SDAG-NEXT:    v_xor_b32_e32 v1, 0x9e000000, v0
++; SDAG-NEXT:    v_ashrrev_i32_e32 v1, 24, v1
++; SDAG-NEXT:    v_and_b32_e32 v2, v1, v0
++; SDAG-NEXT:    v_lshlrev_b32_e32 v2, 5, v2
++; SDAG-NEXT:    v_bitop3_b32 v0, v2, v1, v0 bitop3:0x82
++; SDAG-NEXT:    ; return to shader part epilog
++;
++; GISEL-LABEL: bitop3_m021_fshl_or_xor:
++; GISEL:       ; %bb.0:
++; GISEL-NEXT:    v_xor_b32_e32 v1, 0x9e3779b9, v0
++; GISEL-NEXT:    v_ashrrev_i32_e32 v1, 24, v1
++; GISEL-NEXT:    v_and_b32_e32 v2, v1, v0
++; GISEL-NEXT:    v_alignbit_b32 v2, v2, 0, 27
++; GISEL-NEXT:    v_bitop3_b32 v3, v2, v1, v0 bitop3:0x78
++; GISEL-NEXT:    v_bitop3_b32 v0, v2, v1, v0 bitop3:0xf8
++; GISEL-NEXT:    v_xor_b32_e32 v0, v0, v3
++; GISEL-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m021_fshl_or_xor:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v3, v0
++; O0-NEXT:    s_mov_b32 s0, 0x9e3779b9
++; O0-NEXT:    v_xor_b32_e64 v0, v3, s0
++; O0-NEXT:    s_mov_b32 s0, 24
++; O0-NEXT:    v_ashrrev_i32_e64 v2, s0, v0
++; O0-NEXT:    v_and_b32_e64 v0, v2, v3
++; O0-NEXT:    s_mov_b32 s1, -5
++; O0-NEXT:    s_mov_b32 s0, 0
++; O0-NEXT:    v_mov_b32_e32 v1, s1
++; O0-NEXT:    v_alignbit_b32 v0, v0, s0, v1
++; O0-NEXT:    v_bitop3_b32 v1, v0, v2, v3 bitop3:0x78
++; O0-NEXT:    v_bitop3_b32 v0, v0, v2, v3 bitop3:0xf8
++; O0-NEXT:    v_xor_b32_e64 v0, v0, v1
++; O0-NEXT:    ; return to shader part epilog
++  %mix = xor i32 %v, -1640531527
++  %ashr = ashr i32 %mix, 24
++  %and = and i32 %ashr, %v
++  %fshl = call i32 @llvm.fshl.i32(i32 %and, i32 0, i32 5)
++  %xor = xor i32 %fshl, %and
++  %or = or i32 %xor, %and
++  %xor1 = xor i32 %or, %xor
++  %ret = bitcast i32 %xor1 to float
++  ret float %ret
++}
++
++; (x ^ C) & x, where x = (wi ^ salt) & salt
++; x is shared between the XOR and the outer AND.
++; Reproducer for m022.
++define amdgpu_ps float @bitop3_m022_and_xor_constant(i32 %wi, i32 %salt) {
++; SDAG-LABEL: bitop3_m022_and_xor_constant:
++; SDAG:       ; %bb.0:
++; SDAG-NEXT:    s_mov_b32 s0, 0x79ad5691
++; SDAG-NEXT:    v_bitop3_b32 v2, v0, v1, v0 bitop3:0xc
++; SDAG-NEXT:    v_bitop3_b32 v0, v0, s0, v1 bitop3:0xc6
++; SDAG-NEXT:    v_and_b32_e32 v0, v0, v2
++; SDAG-NEXT:    ; return to shader part epilog
++;
++; GISEL-LABEL: bitop3_m022_and_xor_constant:
++; GISEL:       ; %bb.0:
++; GISEL-NEXT:    v_bitop3_b32 v0, v0, v1, v0 bitop3:0xc
++; GISEL-NEXT:    v_xor_b32_e32 v1, 0x79ad5691, v0
++; GISEL-NEXT:    v_and_b32_e32 v0, v1, v0
++; GISEL-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m022_and_xor_constant:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v2, v1
++; O0-NEXT:    v_bitop3_b32 v1, v0, v2, v0 bitop3:0xc
++; O0-NEXT:    s_mov_b32 s0, 0x79ad5691
++; O0-NEXT:    v_bitop3_b32 v0, v0, s0, v2 bitop3:0xc6
++; O0-NEXT:    v_and_b32_e64 v0, v0, v1
++; O0-NEXT:    ; return to shader part epilog
++  %mix = xor i32 %wi, %salt
++  %x = and i32 %mix, %salt
++  %xor = xor i32 %x, 2041403025
++  %result = and i32 %xor, %x
++  %ret = bitcast i32 %result to float
++  ret float %ret
++}
++
++; (x & b) ^ x, where x = a ^ b, a = (wi+32)|9, b = (wi+32) ^ (32-wi)
++; x and b are both shared across the tree.
++; Reproducer for m023.
++define amdgpu_ps float @bitop3_m023_and_xor_identity(i32 %wi) {
++; SDAG-LABEL: bitop3_m023_and_xor_identity:
++; SDAG:       ; %bb.0:
++; SDAG-NEXT:    v_add_u32_e32 v1, 32, v0
++; SDAG-NEXT:    v_sub_u32_e32 v0, 32, v0
++; SDAG-NEXT:    v_bitop3_b32 v2, v1, v0, 9 bitop3:0xc6
++; SDAG-NEXT:    v_bitop3_b32 v0, v1, v0, 9 bitop3:4
++; SDAG-NEXT:    v_xor_b32_e32 v0, v0, v2
++; SDAG-NEXT:    ; return to shader part epilog
++;
++; GISEL-LABEL: bitop3_m023_and_xor_identity:
++; GISEL:       ; %bb.0:
++; GISEL-NEXT:    v_add_u32_e32 v1, 32, v0
++; GISEL-NEXT:    v_sub_u32_e32 v0, 32, v0
++; GISEL-NEXT:    v_or_b32_e32 v2, 9, v1
++; GISEL-NEXT:    v_xor_b32_e32 v0, v1, v0
++; GISEL-NEXT:    v_xor_b32_e32 v1, v2, v0
++; GISEL-NEXT:    v_bfi_b32 v0, v0, 0, v1
++; GISEL-NEXT:    ; return to shader part epilog
++;
++; O0-LABEL: bitop3_m023_and_xor_identity:
++; O0:       ; %bb.0:
++; O0-NEXT:    v_mov_b32_e32 v1, v0
++; O0-NEXT:    s_mov_b32 s0, 32
++; O0-NEXT:    v_add_u32_e64 v0, v1, s0
++; O0-NEXT:    v_sub_u32_e64 v2, s0, v1
++; O0-NEXT:    s_mov_b32 s0, 9
++; O0-NEXT:    v_bitop3_b32 v1, v0, v2, s0 bitop3:0xc6
++; O0-NEXT:    v_bitop3_b32 v0, v0, v2, s0 bitop3:4
++; O0-NEXT:    v_xor_b32_e64 v0, v0, v1
++; O0-NEXT:    ; return to shader part epilog
++  %same0 = add i32 %wi, 32
++  %a = or i32 %same0, 9
++  %same1 = sub i32 32, %wi
++  %b = xor i32 %same0, %same1
++  %x = xor i32 %a, %b
++  %and = and i32 %x, %b
++  %result = xor i32 %and, %x
++  %ret = bitcast i32 %result to float
++  ret float %ret
++}
++
++declare i32 @llvm.umax.i32(i32, i32)
++declare i32 @llvm.fshl.i32(i32, i32, i32)

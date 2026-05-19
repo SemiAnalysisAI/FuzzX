@@ -9,10 +9,13 @@
 #   LLVM_ENABLE_ASSERTIONS=OFF
 #   LLVM_USE_SANITIZER=OFF
 #   LLVM_USE_SANITIZE_COVERAGE=ON
-#   LLVM_APPLY_PR_198373=ON
+#   LLVM_APPLY_PR_198373=OFF  # superseded by 198556
 #   LLVM_APPLY_PR_196418=ON
 #   LLVM_APPLY_PR_198412=ON
-#   LLVM_APPLY_PR_198419=ON
+#   LLVM_APPLY_PR_198419=OFF  # superseded by 198556
+#   LLVM_APPLY_PR_198491=ON
+#   LLVM_APPLY_PR_198508=ON
+#   LLVM_APPLY_PR_198556=ON
 #   CMAKE_BUILD_TYPE=Release
 
 set -euo pipefail
@@ -29,10 +32,17 @@ if [[ ! -d "$LLVM_PROJECT_DIR/llvm" ]]; then
 fi
 
 LLVM_PROJECT_DIR="$(cd "$LLVM_PROJECT_DIR" && pwd)"
-LLVM_APPLY_PR_198373="${LLVM_APPLY_PR_198373:-ON}"
+# 198373 and 198419 are partial fixes for the bitop3 shared-source-aliasing
+# class; the AMD-provided 198556 supersedes them, so we default the older
+# patches off.  They remain available via LLVM_APPLY_PR_198373/198419=ON for
+# reproducing historical builds.
+LLVM_APPLY_PR_198373="${LLVM_APPLY_PR_198373:-OFF}"
 LLVM_APPLY_PR_196418="${LLVM_APPLY_PR_196418:-ON}"
 LLVM_APPLY_PR_198412="${LLVM_APPLY_PR_198412:-ON}"
-LLVM_APPLY_PR_198419="${LLVM_APPLY_PR_198419:-ON}"
+LLVM_APPLY_PR_198419="${LLVM_APPLY_PR_198419:-OFF}"
+LLVM_APPLY_PR_198491="${LLVM_APPLY_PR_198491:-ON}"
+LLVM_APPLY_PR_198508="${LLVM_APPLY_PR_198508:-ON}"
+LLVM_APPLY_PR_198556="${LLVM_APPLY_PR_198556:-ON}"
 LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$ROOT/build/llvm-fuzzer}"
 LLVM_INSTALL_DIR="${LLVM_INSTALL_DIR:-$ROOT/build/llvm-fuzzer-install}"
 LLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD:-AMDGPU;X86}"
@@ -76,6 +86,12 @@ apply_optional_patch "LLVM PR 198412" "$LLVM_APPLY_PR_198412" \
     "$ROOT/patches/llvm-pr-198412.diff"
 apply_optional_patch "LLVM PR 198419" "$LLVM_APPLY_PR_198419" \
     "$ROOT/patches/llvm-pr-198419.diff"
+apply_optional_patch "LLVM PR 198491" "$LLVM_APPLY_PR_198491" \
+    "$ROOT/patches/llvm-pr-198491.diff"
+apply_optional_patch "LLVM PR 198508" "$LLVM_APPLY_PR_198508" \
+    "$ROOT/patches/llvm-pr-198508.diff"
+apply_optional_patch "LLVM PR 198556" "$LLVM_APPLY_PR_198556" \
+    "$ROOT/patches/llvm-pr-198556.diff"
 
 cmake_args=(
     -S "$LLVM_PROJECT_DIR/llvm"

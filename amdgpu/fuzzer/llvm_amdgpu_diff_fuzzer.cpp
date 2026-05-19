@@ -911,7 +911,7 @@ void scrubPoisonAnnotations(Module &M) {
   }
 }
 
-bool triggersM001AShrI16ZExt(const Instruction &I) {
+[[maybe_unused]] bool triggersM001AShrI16ZExt(const Instruction &I) {
   const auto *ZExt = dyn_cast<ZExtInst>(&I);
   if (!ZExt || !ZExt->getType()->isIntegerTy(32) ||
       !ZExt->getOperand(0)->getType()->isIntegerTy(16))
@@ -988,7 +988,7 @@ bool isM027AndOfXorWithMaskedBase(const Value *MaybeAnd,
           isI32XorWithOperand(BO->getOperand(0), BO->getOperand(1)));
 }
 
-bool triggersM027XorAndOr(const Instruction &I) {
+[[maybe_unused]] bool triggersM027XorAndOr(const Instruction &I) {
   const auto *BO = dyn_cast<BinaryOperator>(&I);
   if (!BO || BO->getOpcode() != Instruction::Or ||
       !BO->getType()->isIntegerTy(32))
@@ -1324,7 +1324,7 @@ bool isM029Phi(const PHINode &Phi) {
   return false;
 }
 
-bool triggersM029FshlSelectPhi(const Instruction &I) {
+[[maybe_unused]] bool triggersM029FshlSelectPhi(const Instruction &I) {
   if (const auto *Sel = dyn_cast<SelectInst>(&I))
     return isM029Select(*Sel);
   if (const auto *Phi = dyn_cast<PHINode>(&I))
@@ -1934,14 +1934,20 @@ bool validateMemoryShape(Function &Kernel) {
 }
 
 bool validateIRCorpusModule(Module &M) {
-  bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
+  // m001, m027, and m029 were fixed upstream by llvm/llvm-project#198491 (SDWA
+  // ASHRREV_I16) and llvm/llvm-project#198556 (bitop3 shared-source
+  // contamination), so those patterns are unconditionally allowed now. Keep
+  // the legacy FUZZX_ALLOW_* names parsed for compatibility with old wrappers.
+  // m026 and m028 still reproduce against 198556 on gfx950, so we keep
+  // suppressing them by default.
+  (void)envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", true);
   bool AllowM015M016 =
       envFlag("FUZZX_ALLOW_M016_SCALAR_FSHL", false) ||
       envFlag("FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
-  bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
+  (void)envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", true);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
-  bool AllowM029 = envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", false);
+  (void)envFlag("FUZZX_ALLOW_M029_FSHL_SELECT_PHI", true);
   bool AllowM030 = envFlag("FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3", false);
   bool AllowM031 = envFlag("FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB", false);
   bool AllowM032 = envFlag("FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT", false);
@@ -1991,12 +1997,9 @@ bool validateIRCorpusModule(Module &M) {
               !isValidAggregateInstruction(I) ||
               !isValidFPConversionInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
-              (!AllowM001 && triggersM001AShrI16ZExt(I)) ||
               (!AllowM015M016 && triggersM015M016ScalarFshl(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
-              (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
-              (!AllowM029 && triggersM029FshlSelectPhi(I)) ||
               (!AllowM030 && triggersM030CtlzShlOrBitop3(I)) ||
               (!AllowM031 && triggersM031VectorOrExtractSub(I)) ||
               (!AllowM032 && triggersM032LoopVectorSelect(I)) ||

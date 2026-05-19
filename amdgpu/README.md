@@ -23,10 +23,14 @@ I initially used LLVM HEAD as the primary fuzzing target, but many of the bugs
 I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
 compared to the release.)  Seeing this, I figured I should be fuzzing the
 release instead.  After m038, AMD asked us to switch active fuzzing back to
-HEAD builds; the current upstream LLVM and ROCm HEAD columns both have
-llvm/llvm-project#198373, llvm/llvm-project#196418,
-llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally.  In
-any case, the table of results below shows which versions reproduce which bugs.
+HEAD builds; the current upstream LLVM HEAD column has
+llvm/llvm-project#196418, llvm/llvm-project#198412,
+llvm/llvm-project#198491, llvm/llvm-project#198508, and
+llvm/llvm-project#198556 applied locally (the last three are AMD-provided
+fixes for the m001, m003/m005/m012/m014, and m026-m029 bug classes; 198556
+supersedes the older 198373 and 198419 bitop3 fixes that previous builds
+carried).  In any case, the table of results below shows which versions
+reproduce which bugs.
 
 Everything below this line is AI-generated.  You probably only care about the
 "bugs generated" table.  Good luck.
@@ -223,12 +227,9 @@ rediscovering the same issue.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `FUZZX_ALLOW_M001_ASHR_I16_ZEXT=1` | unset | Re-enable `zext i16 (ashr i16 X, C)` shapes for [m001](known-miscompiles/m001-ashr-i16-zext/NOTES.md). |
 | `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable scalar `llvm.fshl.i32` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) and [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md); the legacy `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` flag is also accepted. |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
-| `FUZZX_ALLOW_M027_XOR_AND_OR=1` | unset | Re-enable `(((y ^ x) & x) \| base)` when `x` is `(base ^ z) & base` for [m027](known-miscompiles/m027-xor-and-or/NOTES.md). |
 | `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
-| `FUZZX_ALLOW_M029_FSHL_SELECT_PHI=1` | unset | Re-enable signed compare/select or compare/PHI shapes over `(y & x)` where `x` is a complemented masked `fshl` for [m029](known-miscompiles/m029-fshl-select-phi/NOTES.md). |
 | `FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3=1` | unset | Re-enable `or(add(shl(...), z), z)` and `or(smin(add(shl(...), z), z), z)` tails for [m030](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md). |
 | `FUZZX_ALLOW_M031_VECTOR_OR_EXTRACT_SUB=1` | unset | Re-enable subtracting two scalar extracts from the same vector `or` for [m031](known-miscompiles/m031-vector-or-extract-sub/NOTES.md). |
 | `FUZZX_ALLOW_M032_LOOP_VECTOR_SELECT=1` | unset | Re-enable loop-carried values whose backedge depends on a vector `select` for [m032](known-miscompiles/m032-loop-vector-select/NOTES.md). |
@@ -291,25 +292,25 @@ Tested toolchains as of 2026-05-19:
 | Column | Toolchain |
 | --- | --- |
 | ROCm release | [ROCm 7.2.3 source tag](https://github.com/ROCm/llvm-project/releases/tag/rocm-7.2.3), commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`; also checked against the matching [ROCm 7.2.3 `rocm-llvm` package](https://repo.radeon.com/rocm/apt/7.2.3/pool/main/r/rocm-llvm/rocm-llvm_22.0.0.26084.70203-90~22.04_amd64.deb), package SHA256 `4c406e184f88949cea60869949454e5392e1cbd9480c4c87274f7b59e9f810e5`. |
-| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), and [llvm/llvm-project#198419](https://github.com/llvm/llvm-project/pull/198419), built `Release` with sanitizer coverage, no ASan. |
-| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), and [llvm/llvm-project#198419](https://github.com/llvm/llvm-project/pull/198419), built with assertions, ASan, and sanitizer coverage. |
+| LLVM HEAD | https://github.com/llvm/llvm-project/commit/0dd29960cd6102b37651cc3f58f872652099b83b (2026-05-18) plus [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), [llvm/llvm-project#198491](https://github.com/llvm/llvm-project/pull/198491), [llvm/llvm-project#198508](https://github.com/llvm/llvm-project/pull/198508), and [llvm/llvm-project#198556](https://github.com/llvm/llvm-project/pull/198556), built `Release` with sanitizer coverage, no ASan. |
+| ROCm HEAD | https://github.com/ROCm/llvm-project/commit/a5de13684ba84db953b28e632ea304080a4318d0 (2026-05-18) plus [llvm/llvm-project#198373](https://github.com/llvm/llvm-project/pull/198373), [llvm/llvm-project#196418](https://github.com/llvm/llvm-project/pull/196418), [llvm/llvm-project#198412](https://github.com/llvm/llvm-project/pull/198412), and [llvm/llvm-project#198419](https://github.com/llvm/llvm-project/pull/198419), built with assertions, ASan, and sanitizer coverage. The ROCm HEAD column has not yet been rebuilt with the newer 198491/198508/198556 set; entries below show stale results for that column. |
 
 | Bug | ROCm 7.2.3 | LLVM HEAD | ROCm HEAD | Description |
 | --- | --- | --- | --- | --- |
-| [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md) | ❌ | ❌ | ❌ | `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select. |
+| [m001-ashr-i16-zext](known-miscompiles/m001-ashr-i16-zext/NOTES.md) | ❌ | ✅ | ❌ | `ashr i16` feeding `zext i16 to i32` is folded to a sign-extending SDWA byte select; LLVM HEAD passes after llvm/llvm-project#198491. |
 | [m002-i8-clear-xor](known-miscompiles/m002-i8-clear-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowers a byte-clear xor through `v_bitop3_b32` with the wrong result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
-| [m003-shl3-add-chain](known-miscompiles/m003-shl3-add-chain/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `shl3/add` chain through `v_readfirstlane_b32`. |
+| [m003-shl3-add-chain](known-miscompiles/m003-shl3-add-chain/NOTES.md) | ✅ | ✅ | ❌ | `-O0` scalarizes a divergent `shl3/add` chain through `v_readfirstlane_b32`; LLVM HEAD passes after llvm/llvm-project#198508. |
 | [m004-vector-identity-xor](known-miscompiles/m004-vector-identity-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` loses a lane-0 vector identity before `xor`; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
-| [m005-shl1-add-chain](known-miscompiles/m005-shl1-add-chain/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `shl1/add` chain through the same class of bug as m003. |
+| [m005-shl1-add-chain](known-miscompiles/m005-shl1-add-chain/NOTES.md) | ✅ | ✅ | ❌ | `-O0` scalarizes a divergent `shl1/add` chain through the same class of bug as m003; LLVM HEAD passes after llvm/llvm-project#198508. |
 | [m006-i8-xor-clear](known-miscompiles/m006-i8-xor-clear/NOTES.md) | ✅ | ✅ | ✅ | `-O0` lowers another adjacent `i8` narrow byte-clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
 | [m007-vector-shl-identity-xor](known-miscompiles/m007-vector-shl-identity-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` loses a vector shift-by-zero lane-0 identity before `xor`; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
 | [m008-i8-separated-clear](known-miscompiles/m008-i8-separated-clear/NOTES.md) | ✅ | ✅ | ✅ | `-O0` miscompiles an `i8` identity byte-clear xor when prior narrow ops are separated by no-op adds; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
 | [m009-i16-clear-xor](known-miscompiles/m009-i16-clear-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` miscompiles an `i16` identity low-16 clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
 | [m010-i16-sext-clear-xor](known-miscompiles/m010-i16-sext-clear-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` miscompiles an `i16` sign-extended identity clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
 | [m011-i8-sext-clear-xor](known-miscompiles/m011-i8-sext-clear-xor/NOTES.md) | ✅ | ✅ | ✅ | `-O0` miscompiles an `i8` sign-extended masked clear xor through the wrong `v_bitop3_b32` result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198373. |
-| [m012-add-shl-ladder](known-miscompiles/m012-add-shl-ladder/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a divergent `add/shl` ladder through `v_readfirstlane_b32`. |
+| [m012-add-shl-ladder](known-miscompiles/m012-add-shl-ladder/NOTES.md) | ✅ | ✅ | ❌ | `-O0` scalarizes a divergent `add/shl` ladder through `v_readfirstlane_b32`; LLVM HEAD passes after llvm/llvm-project#198508. |
 | [m013-private-memory-fshl](known-miscompiles/m013-private-memory-fshl/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers fixed private-memory allocas through a dynamic scratch stack sequence that can return intermittent wrong values. |
-| [m014-shl-add-ctpop](known-miscompiles/m014-shl-add-ctpop/NOTES.md) | ✅ | ❌ | ❌ | `-O0` scalarizes a four-step `shl/add` chain feeding `ctpop` through lane 0. |
+| [m014-shl-add-ctpop](known-miscompiles/m014-shl-add-ctpop/NOTES.md) | ✅ | ✅ | ❌ | `-O0` scalarizes a four-step `shl/add` chain feeding `ctpop` through lane 0; LLVM HEAD passes after llvm/llvm-project#198508. |
 | [m015-scalar-fshl-zero](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 0)` through a 64-bit shift-by-`-1` sequence that returns zero. |
 | [m016-scalar-fshl-one](known-miscompiles/m016-scalar-fshl-one/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, y, 1)` through a 64-bit shift-by-`-1` sequence that returns only bit 31. |
 | [m017-vector-and-lane0-clear-xor](known-miscompiles/m017-vector-and-lane0-clear-xor/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O0` drops a vector lane-0 `and`/`extractelement` clear before `xor`; LLVM HEAD and ROCm HEAD already pass. |
@@ -321,10 +322,10 @@ Tested toolchains as of 2026-05-19:
 | [m023-and-xor-identity](known-miscompiles/m023-and-xor-identity/NOTES.md) | ❌ | ✅ | ✅ | `-O0` combines `(x & y) ^ x` into `v_bitop3_b32` with the wrong identity result; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#198419. |
 | [m024-udiv-or-one](known-miscompiles/m024-udiv-or-one/NOTES.md) | ❌ | ✅ | ✅ | `-O0` lowers unsigned division of a sign-extended `i16` value by `x \| 1` through an imprecise float reciprocal path; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#196418. |
 | [m025-urem-or-one](known-miscompiles/m025-urem-or-one/NOTES.md) | ❌ | ✅ | ✅ | `-O0` lowers unsigned remainder of a sign-extended `i16` value by `x \| 1` through the same imprecise reciprocal path; LLVM HEAD and ROCm HEAD pass after llvm/llvm-project#196418. |
-| [m026-shl-umax-xor-and](known-miscompiles/m026-shl-umax-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O2` combines a shifted `umax` high-bit extraction into `v_bitop3_b32` using the input and salt instead of their xor. |
-| [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(((y ^ x) & x) \| base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`. |
-| [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately. |
-| [m029-fshl-select-phi](known-miscompiles/m029-fshl-select-phi/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a signed compare/select over `y & x`, where `x` is a complemented masked `fshl`, so the true zero arm is chosen when the signed compare is false. |
+| [m026-shl-umax-xor-and](known-miscompiles/m026-shl-umax-xor-and/NOTES.md) | ❌ | ❌ | ❌ | `-O2` combines a shifted `umax` high-bit extraction into `v_bitop3_b32` using the input and salt instead of their xor; llvm/llvm-project#198556 does not catch this shape. |
+| [m027-xor-and-or](known-miscompiles/m027-xor-and-or/NOTES.md) | ❌ | ✅ | ❌ | `-O0` combines `(((y ^ x) & x) \| base)` into `v_bitop3_b32` with the wrong bit when `x` is `(base ^ z) & base`; LLVM HEAD passes after llvm/llvm-project#198556. |
+| [m028-umax-and-not](known-miscompiles/m028-umax-and-not/NOTES.md) | ❌ | ❌ | ❌ | `-O0` combines `(umax((y & ~x), C) & x) & ~x` into `v_bitop3_b32` using the input and salt separately; llvm/llvm-project#198556 does not catch this shape. |
+| [m029-fshl-select-phi](known-miscompiles/m029-fshl-select-phi/NOTES.md) | ❌ | ✅ | ❌ | `-O2` lowers a signed compare/select over `y & x`, where `x` is a complemented masked `fshl`, so the true zero arm is chosen when the signed compare is false; LLVM HEAD passes after llvm/llvm-project#198556. |
 | [m030-ctlz-shl-or-bitop3](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md) | ❌ | ❌ | ❌ | `-O2` lowers a low-bit `or` through `v_bitop3_b32` using the unmasked `%n` value instead of `%n & 1`. |
 | [m031-vector-or-extract-sub](known-miscompiles/m031-vector-or-extract-sub/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` scalarizes a vector `or` extract/sub as `or(x, 255) - x` instead of `or(x, 255) - -1`. |
 | [m032-loop-vector-select](known-miscompiles/m032-loop-vector-select/NOTES.md) | ❌ | ✅ | ✅ | ROCm 7.2.3 `-O2` kills the loop EXEC mask before storing a loop-carried value derived from a vector `select`. |
