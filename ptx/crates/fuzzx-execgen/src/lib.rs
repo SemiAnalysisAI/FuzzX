@@ -12079,6 +12079,13 @@ impl<'a> Generator<'a> {
             writeln!(s, "    bar.sync        0, {N_THREADS};").unwrap();
             writeln!(s, "    barrier.sync    0;").unwrap();
             writeln!(s, "    barrier.sync    0, {N_THREADS};").unwrap();
+            // .aligned hint: all threads of the CTA execute the same barrier.
+            // The prologue runs uniformly before any divergent control flow,
+            // so this invariant always holds at this emission point. (The
+            // .aligned modifier is only valid on the new `barrier` spelling,
+            // not the legacy `bar` spelling, per the PTX ISA.)
+            writeln!(s, "    barrier.sync.aligned    0;").unwrap();
+            writeln!(s, "    barrier.sync.aligned    0, {N_THREADS};").unwrap();
         }
         if self.cfg.emit_cta_barrier_reductions {
             let scratch = self.wide_scratch_hi_reg();
@@ -18781,7 +18788,11 @@ mod tests {
         "redux.sync.or.b32",
         "redux.sync.xor.b32",
     ];
-    const CTA_BARRIER_MNEMONICS: &[&str] = &["bar.sync", "barrier.sync"];
+    const CTA_BARRIER_MNEMONICS: &[&str] = &[
+        "bar.sync",
+        "barrier.sync",
+        "barrier.sync.aligned",
+    ];
     const CTA_BARRIER_REDUCTION_MNEMONICS: &[&str] = &[
         "bar.red.popc.u32",
         "bar.red.and.pred",
