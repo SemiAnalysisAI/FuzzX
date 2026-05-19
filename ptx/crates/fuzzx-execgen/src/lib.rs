@@ -16481,7 +16481,6 @@ mod tests {
         let mut mnemonics = Vec::new();
         for group in [
             POST_KNOWN_BIN_MNEMONICS,
-            PACKED_MINMAX_MNEMONICS,
             SCALAR_16BIT_POST_KNOWN_MNEMONICS,
             GLOBAL_LOAD_MNEMONICS,
             UNIFORM_GLOBAL_LOAD_MNEMONICS,
@@ -17836,6 +17835,9 @@ mod tests {
             emit_sat_arith: false,
             emit_packed_add: false,
             emit_signed_packed_add: false,
+            emit_packed_minmax: false,
+            emit_signed_packed_minmax: false,
+            emit_predicated_packed_minmax: false,
             emit_mulhi: false,
             emit_or: false,
             emit_xor: false,

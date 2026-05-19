@@ -168,7 +168,7 @@ fn setp_output_pred(trimmed_line: &str) -> Option<String> {
 
 fn line_mentions_body_wide_scratch(line: &str) -> bool {
     line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
-        .any(|token| matches!(token, "%rd6" | "%rd7"))
+        .any(|token| matches!(token, "%rd6" | "%rd7" | "%rd8" | "%rd9"))
 }
 
 fn line_mentions_b16_scratch(line: &str) -> bool {
@@ -216,6 +216,10 @@ fn is_loop_counter_decrement(line: &str) -> bool {
     operands.len() == 3 && operands[0] == operands[1] && operands[2] == "1"
 }
 
+fn is_output_store(line: &str) -> bool {
+    line.starts_with("st.global.u32")
+}
+
 fn declared_b32_scratch_reg(lines: &[&str]) -> Option<String> {
     lines.iter().find_map(|line| {
         let trimmed = line.trim();
@@ -252,6 +256,16 @@ fn diverges_deterministically(
         return None;
     }
     Some((o0a, o3a))
+}
+
+fn candidate_diverges_on_gpu(gpu: i32, ptx: &str, input: &[u8]) -> Result<bool> {
+    let cuda = Cuda::init(gpu).with_context(|| format!("Cuda::init gpu={gpu}"))?;
+    let bufs = cuda.alloc_buffers(input.len(), output_len())?;
+    let ok = diverges_deterministically(&cuda, &bufs, ptx, input).is_some();
+    drop(bufs);
+    drop(cuda);
+    Cuda::init(gpu).with_context(|| format!("post-candidate Cuda::init gpu={gpu}"))?;
+    Ok(ok)
 }
 
 /// Find the first bottom-up chunk whose combined deletion preserves
@@ -297,34 +311,24 @@ fn find_chunk_removal(
             let next = Arc::clone(&next);
             let stop = Arc::clone(&stop);
             let tx = tx.clone();
-            handles.push(thread::spawn(move || {
-                let cuda = match Cuda::init(gpu) {
-                    Ok(c) => c,
+            handles.push(thread::spawn(move || loop {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let pos = next.fetch_add(1, Ordering::Relaxed);
+                if pos >= chunks.len() {
+                    return;
+                }
+                let candidate = candidate_without_lines(&lines, &chunks[pos]);
+                let ok = match candidate_diverges_on_gpu(gpu, &candidate, &input) {
+                    Ok(ok) => ok,
                     Err(e) => {
-                        eprintln!("reduce batch worker gpu {gpu} #{w}: Cuda::init: {e:#}");
-                        return;
+                        eprintln!("reduce batch worker gpu {gpu} #{w}: candidate {pos}: {e:#}");
+                        false
                     }
                 };
-                let bufs = match cuda.alloc_buffers(input.len(), output_len()) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("reduce batch worker gpu {gpu} #{w}: alloc_buffers: {e:#}");
-                        return;
-                    }
-                };
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let pos = next.fetch_add(1, Ordering::Relaxed);
-                    if pos >= chunks.len() {
-                        return;
-                    }
-                    let candidate = candidate_without_lines(&lines, &chunks[pos]);
-                    let ok = diverges_deterministically(&cuda, &bufs, &candidate, &input).is_some();
-                    if tx.send((pos, ok)).is_err() {
-                        return;
-                    }
+                if tx.send((pos, ok)).is_err() {
+                    return;
                 }
             }));
         }
@@ -400,35 +404,25 @@ fn find_greedy_removal(
             let next = Arc::clone(&next);
             let stop = Arc::clone(&stop);
             let tx = tx.clone();
-            handles.push(thread::spawn(move || {
-                let cuda = match Cuda::init(gpu) {
-                    Ok(c) => c,
+            handles.push(thread::spawn(move || loop {
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let pos = next.fetch_add(1, Ordering::Relaxed);
+                if pos >= ordered.len() {
+                    return;
+                }
+                let remove_idx = ordered[pos];
+                let candidate = candidate_without_line(&lines, remove_idx);
+                let ok = match candidate_diverges_on_gpu(gpu, &candidate, &input) {
+                    Ok(ok) => ok,
                     Err(e) => {
-                        eprintln!("reduce worker gpu {gpu} #{w}: Cuda::init: {e:#}");
-                        return;
+                        eprintln!("reduce worker gpu {gpu} #{w}: candidate {pos}: {e:#}");
+                        false
                     }
                 };
-                let bufs = match cuda.alloc_buffers(input.len(), output_len()) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("reduce worker gpu {gpu} #{w}: alloc_buffers: {e:#}");
-                        return;
-                    }
-                };
-                loop {
-                    if stop.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    let pos = next.fetch_add(1, Ordering::Relaxed);
-                    if pos >= ordered.len() {
-                        return;
-                    }
-                    let remove_idx = ordered[pos];
-                    let candidate = candidate_without_line(&lines, remove_idx);
-                    let ok = diverges_deterministically(&cuda, &bufs, &candidate, &input).is_some();
-                    if tx.send((pos, ok)).is_err() {
-                        return;
-                    }
+                if tx.send((pos, ok)).is_err() {
+                    return;
                 }
             }));
         }
@@ -495,19 +489,23 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
                 )
             })?
     };
-    let first_store = lines
-        .iter()
-        .position(|l| l.trim().starts_with("st.global.u32"))
-        .ok_or_else(|| anyhow!("could not locate output store"))?;
     let exit_start = lines
         .iter()
         .position(|l| l.trim() == "exit:")
         .or_else(|| {
+            let first_store = lines.iter().position(|l| is_output_store(l.trim()))?;
             lines[..first_store]
                 .iter()
                 .rposition(|l| l.trim().starts_with("cvta.to.global.u64"))
         })
         .ok_or_else(|| anyhow!("could not locate `exit:` label or epilogue start"))?;
+    let output_stores: Vec<usize> = (exit_start..lines.len())
+        .filter(|&i| is_output_store(lines[i].trim()))
+        .collect();
+    if output_stores.is_empty() {
+        bail!("could not locate output store");
+    }
+    let keep_output_store = output_stores[0];
 
     let mut out = Vec::new();
     // Body: between prologue_end (exclusive) and exit_start (exclusive).
@@ -565,8 +563,10 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         out.push(i);
     }
     // Epilogue: store lines only; address arithmetic and `ret;` stay put.
-    for i in exit_start..lines.len() {
-        if lines[i].trim().starts_with("st.global.u32") {
+    // Keep one output store so later reducer scans still have an observation
+    // point and do not accept "divergences" caused only by scratch memory.
+    for i in output_stores {
+        if i != keep_output_store {
             out.push(i);
         }
     }
@@ -576,7 +576,7 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        declared_b32_scratch_reg, is_branch_line, is_loop_counter_decrement,
+        declared_b32_scratch_reg, is_branch_line, is_loop_counter_decrement, is_output_store,
         line_mentions_b16_scratch, line_mentions_body_wide_scratch, line_mentions_float_scratch,
         line_mentions_pred, removable_indices,
     };
@@ -594,6 +594,9 @@ mod tests {
         ));
         assert!(line_mentions_body_wide_scratch(
             "    xor.b64       %rd6, %rd6, %rd7;"
+        ));
+        assert!(line_mentions_body_wide_scratch(
+            "    add.s64       %rd8, %rd8, %rd9;"
         ));
         assert!(!line_mentions_body_wide_scratch(
             "    mov.b64       {%r16, %r33}, %rd60;"
@@ -646,6 +649,8 @@ mod tests {
         assert!(is_loop_counter_decrement("sub.u32         %r9, %r9, 1;"));
         assert!(!is_loop_counter_decrement("sub.u32         %r9, %r8, 1;"));
         assert!(!is_loop_counter_decrement("sub.s32         %r9, %r9, 1;"));
+        assert!(is_output_store("st.global.u32   [%rd4 + 0], %r5;"));
+        assert!(!is_output_store("st.global.wt.u32 [%rd8 + 0], %r5;"));
     }
 
     #[test]
@@ -702,6 +707,43 @@ keep:
             .iter()
             .any(|&i| lines[i].trim().starts_with("cvta.to.global.u64")));
     }
+
+    #[test]
+    fn keeps_one_epilogue_output_store() {
+        let ptx = r#".version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry fuzz_kernel()
+{
+    .reg .b32   %r<8>;
+    .reg .b64   %rd<6>;
+
+    ld.global.u32   %r1, [%rd0];
+    add.u32       %r5, %r5, %r6;
+    bra             exit;
+
+exit:
+    cvta.to.global.u64 %rd4, %rd1;
+    mul.wide.u32    %rd5, %r7, 16;
+    add.s64         %rd4, %rd4, %rd5;
+    st.global.u32   [%rd4 + 0], %r5;
+    st.global.u32   [%rd4 + 4], %r6;
+    st.global.u32   [%rd4 + 8], %r7;
+    ret;
+}"#;
+        let lines: Vec<_> = ptx.lines().collect();
+        let removable = removable_indices(ptx).unwrap();
+        let removable_output_stores = removable
+            .iter()
+            .filter(|&&i| lines[i].trim().starts_with("st.global.u32"))
+            .count();
+
+        assert_eq!(removable_output_stores, 2);
+        assert!(!removable
+            .iter()
+            .any(|&i| lines[i].trim() == "st.global.u32   [%rd4 + 0], %r5;"));
+    }
 }
 
 fn main() -> Result<()> {
@@ -718,12 +760,17 @@ fn main() -> Result<()> {
     let workers_per_gpu = workers_per_gpu(gpus.len())?;
     let no_progress_timeout = no_progress_timeout()?;
     let max_batch_size = max_batch_size()?;
-    let cuda = Cuda::init(gpus[0]).with_context(|| format!("Cuda::init gpu={}", gpus[0]))?;
-    let bufs = cuda.alloc_buffers(input.len(), output_len())?;
     let start_lines = ptx.lines().count();
     let start_body = removable_indices(&ptx)?.len();
 
-    if diverges_deterministically(&cuda, &bufs, &ptx, &input).is_none() {
+    let starting_diverges = {
+        let cuda = Cuda::init(gpus[0]).with_context(|| format!("Cuda::init gpu={}", gpus[0]))?;
+        let bufs = cuda.alloc_buffers(input.len(), output_len())?;
+        diverges_deterministically(&cuda, &bufs, &ptx, &input).is_some()
+    };
+    Cuda::init(gpus[0])
+        .with_context(|| format!("post-starting-candidate Cuda::init gpu={}", gpus[0]))?;
+    if !starting_diverges {
         bail!("starting PTX does not deterministically diverge — nothing to reduce");
     }
     eprintln!(
@@ -811,7 +858,14 @@ fn main() -> Result<()> {
     );
 
     std::fs::write(dir.join("reduced.ptx"), &ptx)?;
-    if let Some((o0, o3)) = diverges_deterministically(&cuda, &bufs, &ptx, &input) {
+    let cuda = Cuda::init(gpus[0]).with_context(|| format!("Cuda::init gpu={}", gpus[0]))?;
+    let bufs = cuda.alloc_buffers(input.len(), output_len())?;
+    let final_result = diverges_deterministically(&cuda, &bufs, &ptx, &input);
+    drop(bufs);
+    drop(cuda);
+    Cuda::init(gpus[0])
+        .with_context(|| format!("post-final-candidate Cuda::init gpu={}", gpus[0]))?;
+    if let Some((o0, o3)) = final_result {
         std::fs::write(dir.join("reduced_o0.bin"), &o0)?;
         std::fs::write(dir.join("reduced_o3.bin"), &o3)?;
         eprintln!(
