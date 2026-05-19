@@ -24,7 +24,7 @@ I found didn't reproduce in the latest ROCm release.  (IOW HEAD has regressions
 compared to the release.)  Seeing this, I figured I should be fuzzing the
 release instead.  After m038, AMD asked us to switch active fuzzing back to
 HEAD builds; the current upstream LLVM and ROCm HEAD columns both have
-llvm/llvm-project#198373, llvm/llvm-project#196418, and
+llvm/llvm-project#198373, llvm/llvm-project#196418,
 llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally.  In
 any case, the table of results below shows which versions reproduce which bugs.
 
@@ -79,7 +79,9 @@ pure-IR compare-rank/mask idioms, pure-IR ternary bit-logic idioms, pure-IR
 64-bit pair arithmetic idioms, and pure-IR byte-prefix/permutation idioms,
 pure-IR overflow-chain idioms, pure-IR select lookup-table idioms, and pure-IR
 nibble reduction idioms, pure-IR SWAR bit tricks, pure-IR byte compare/mask
-idioms, pure-IR limb multiply/add idioms, and pure-IR select-network idioms,
+idioms, pure-IR limb multiply/add idioms, pure-IR select-network idioms,
+pure-IR vector compare/mask pack idioms, pure-IR byte Horner-mix idioms,
+pure-IR bit ballot/matrix-pack idioms, and pure-IR halfword compare/pack idioms,
 alongside LLVM
 bit, min/max, saturation, absolute-value, funnel-shift, and integer
 overflow intrinsics. It also emits a small AMDGPU-specific pure
@@ -228,6 +230,8 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M050_AND_SUB_ZERO=1` | unset | Re-enable `and X, (sub X, 0)` shapes for [m050](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md). |
 | `FUZZX_ALLOW_M051_VECTOR_FSHR_LOOP=1` | unset | Re-enable vector `llvm.fshr` calls for [m051](known-miscompiles/m051-vector-fshr-divergent-loop/NOTES.md). |
 | `FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT=1` | unset | Re-enable `((a ^ b) \| (b & ~(a ^ b))) & 31` shift masks for [m052](known-miscompiles/m052-ternary-blend-shift/NOTES.md). |
+| `FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT=1` | unset | Re-enable byte-dot result values feeding a high-bit mask for [m053](known-miscompiles/m053-bytedot-highbit/NOTES.md). |
+| `FUZZX_ALLOW_M054_I64_PAIR_LOW_ADD=1` | unset | Re-enable `((zext x << 32) \| 0xffff) + zext x` pair-add shapes for [m054](known-miscompiles/m054-i64-pair-low-add/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -321,6 +325,8 @@ Tested toolchains as of 2026-05-19:
 | [m050-bitcount-and-sub-zero](known-miscompiles/m050-bitcount-and-sub-zero/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` lowers `and X, (X - 0)` feeding `ctpop` through `v_bitop3_b32` and computes `ctpop(X) - 0` instead of `ctpop(X) - ctpop(X)`. |
 | [m051-vector-fshr-divergent-loop](known-miscompiles/m051-vector-fshr-divergent-loop/NOTES.md) | ✅ | ❌ | ❌ | `-O2` scalarizes a vector `llvm.fshr.v2i32` loop tail and carries one scalar inner-loop result into divergent lanes that exited earlier. |
 | [m052-ternary-blend-shift](known-miscompiles/m052-ternary-blend-shift/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers `((a ^ b) \| (b & ~(a ^ b))) & 31` as `a & 31`, dropping `b` before a funnel-shift-like expression. |
+| [m053-bytedot-highbit](known-miscompiles/m053-bytedot-highbit/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` lower a byte-dot/high-bit expression through a changed `v_bitop3_b32` / `v_bfi_b32` sequence that clears a high bit before a final xor. |
+| [m054-i64-pair-low-add](known-miscompiles/m054-i64-pair-low-add/NOTES.md) | ❌ | ❌ | ❌ | `-O2` folds `((zext x << 32) \| 0xffff) + zext x` into a u24 multiply-add-like sequence that drops the high-half copy of `x`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
