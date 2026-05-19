@@ -110,6 +110,7 @@ Version | Description |
 | 13.2.78 | [m023-mul-wide-hi-ice](known-miscompiles/m023-mul-wide-hi-ice/NOTES.md): Optimized compile crashes on a `mul.wide` low-half feeding signed high multiply. |
 | 13.2.78 | [m024-prmt-cvt-u16-fold](known-miscompiles/m024-prmt-cvt-u16-fold/NOTES.md): `prmt.b32` plus `cvt.u16` fold drops the permuted source contribution. |
 | 13.2.78 | [m055-prmt-reg-control-eq-fold](known-miscompiles/m055-prmt-reg-control-eq-fold/NOTES.md): Register-control `prmt.b32` feeding an equality fold selects the wrong arm. |
+| 13.2.78 | [m066-prmt-sign-byte-and-fold](known-miscompiles/m066-prmt-sign-byte-and-fold/NOTES.md): Sign-control `prmt.b32` feeding a low-byte `and.b32` fold drops the sign-filled byte. |
 | 13.2.78 | [m057-s16-unary-intmin-fold](known-miscompiles/m057-s16-unary-intmin-fold/NOTES.md): `abs.s16` / `neg.s16` of `INT16_MIN` feeding `cvt.s32.s16` is treated as a positive value. |
 | 13.2.78 | [m058-scalar16-min-cvt-fold](known-miscompiles/m058-scalar16-min-cvt-fold/NOTES.md): Scalar `min.{u16,s16}` through `.b16` scratch registers folds a following equality predicate incorrectly. |
 | 13.2.78 | [m060-scalar16-sub-intmin-fold](known-miscompiles/m060-scalar16-sub-intmin-fold/NOTES.md): Scalar `sub.s16 0, INT16_MIN` feeding `cvt.s32.s16` is zero-extended by optimized ptxas. |

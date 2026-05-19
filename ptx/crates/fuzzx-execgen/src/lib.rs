@@ -5667,6 +5667,18 @@ impl<'a> Generator<'a> {
         u.int_in_range(0..=self.n_working - 1)
     }
 
+    fn suppresses_value_flow_reg(&self, reg: u32) -> bool {
+        self.set_result_regs.contains(&reg)
+            || self.prmt_result_regs.contains(&reg)
+            || self.lop3_result_regs.contains(&reg)
+    }
+
+    fn replacement_value_reg(&self, fallback: u32) -> u32 {
+        (0..self.n_working)
+            .find(|reg| !self.suppresses_value_flow_reg(*reg))
+            .unwrap_or(fallback)
+    }
+
     fn pick_non_output_dst(&mut self, u: &mut Unstructured) -> Result<u32> {
         u.int_in_range(N_OUTPUTS..=self.n_working - 1)
     }
@@ -5690,15 +5702,20 @@ impl<'a> Generator<'a> {
             // m013 is a materialized-boolean fold where ptxas treats a true
             // set.{cmp} result as 1 instead of 0xffffffff. Avoid feeding live
             // set result registers into later value flow.
-            Operand::Reg(reg) if self.set_result_regs.contains(&reg) => Operand::Imm(0),
+            //
+            // m002-style `lop3` consumer folds and m024/m055/m066 `prmt.b32`
+            // consumer folds remain live in current ptxas. Avoid feeding
+            // those live result registers into later value flow while still
+            // allowing the instructions themselves and their direct live-outs.
+            Operand::Reg(reg) if self.suppresses_value_flow_reg(reg) => Operand::Imm(0),
             operand => operand,
         })
     }
 
     fn pick_reg_operand(&mut self, u: &mut Unstructured) -> Result<Operand> {
         let reg = self.pick_dst(u)?;
-        Ok(if self.set_result_regs.contains(&reg) {
-            Operand::Reg(0)
+        Ok(if self.suppresses_value_flow_reg(reg) {
+            Operand::Reg(self.replacement_value_reg(reg))
         } else {
             Operand::Reg(reg)
         })
@@ -5706,8 +5723,8 @@ impl<'a> Generator<'a> {
 
     fn pick_safe_reg(&mut self, u: &mut Unstructured) -> Result<u32> {
         let reg = self.pick_dst(u)?;
-        Ok(if self.set_result_regs.contains(&reg) {
-            0
+        Ok(if self.suppresses_value_flow_reg(reg) {
+            self.replacement_value_reg(reg)
         } else {
             reg
         })
@@ -5727,13 +5744,6 @@ impl<'a> Generator<'a> {
         let operand = self.pick_operand(u)?;
         Ok(if op == BinOp::Xor && !self.cfg.emit_not {
             sanitize_xor_not_operand(operand)
-        } else if op == BinOp::Xor
-            && matches!(operand, Operand::Reg(reg) if self.lop3_result_regs.contains(&reg))
-        {
-            // m002-style `lop3`/`xor` truth-table folds remain live in current
-            // ptxas. Keep lop3 coverage, but avoid immediately consuming those
-            // results with xor and rediscovering the same family.
-            Operand::Imm(0)
         } else {
             operand
         })
@@ -18477,6 +18487,102 @@ mod tests {
         })
     }
 
+    fn inst_op_and_args(line: &str) -> Option<(&str, Vec<&str>)> {
+        let line = line.trim_start();
+        if line.is_empty() || line.ends_with(':') || line.starts_with('.') {
+            return None;
+        }
+        let mut split = line.split_whitespace();
+        let first = split.next()?;
+        let op = if first.starts_with('@') {
+            split.next()?
+        } else {
+            first
+        };
+        let args = line
+            .split_once(op)?
+            .1
+            .trim()
+            .trim_end_matches(';')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        Some((op, args))
+    }
+
+    fn dst_regs(line: &str) -> Vec<&str> {
+        let Some((op, args)) = inst_op_and_args(line) else {
+            return Vec::new();
+        };
+        if op.starts_with("st.") || op.starts_with("bra") || args.is_empty() {
+            return Vec::new();
+        }
+        if args[0].starts_with('{') {
+            return args
+                .iter()
+                .take_while(|arg| {
+                    let keep = !arg.contains('}');
+                    keep
+                })
+                .chain(args.iter().find(|arg| arg.contains('}')))
+                .filter_map(|arg| {
+                    let reg = arg.trim_start_matches('{').trim_end_matches('}');
+                    reg.starts_with("%r").then_some(reg)
+                })
+                .collect();
+        }
+        args[0]
+            .starts_with("%r")
+            .then_some(args[0])
+            .into_iter()
+            .collect()
+    }
+
+    fn narrow_store_src(line: &str) -> Option<&str> {
+        let (op, args) = inst_op_and_args(line)?;
+        let is_narrow_store = matches!(
+            op,
+            "st.u8"
+                | "st.s8"
+                | "st.b8"
+                | "st.u16"
+                | "st.s16"
+                | "st.b16"
+                | "st.global.u8"
+                | "st.global.s8"
+                | "st.global.b8"
+                | "st.global.u16"
+                | "st.global.s16"
+                | "st.global.b16"
+        );
+        (is_narrow_store && args.len() >= 2)
+            .then(|| args[1])
+            .filter(|arg| arg.starts_with("%r"))
+    }
+
+    fn has_prmt_low_byte_consumer(ptx: &str) -> bool {
+        let mut prmt_regs = HashSet::new();
+        for line in ptx.lines() {
+            if let Some(src) = narrow_store_src(line) {
+                if prmt_regs.contains(src) {
+                    return true;
+                }
+            }
+            if let Some((op, args)) = inst_op_and_args(line) {
+                if op == "and.b32" && args.iter().skip(1).any(|arg| prmt_regs.contains(arg)) {
+                    return true;
+                }
+            }
+            for dst in dst_regs(line) {
+                prmt_regs.remove(dst);
+            }
+            if let Some(dst) = prmt_dst(line) {
+                prmt_regs.insert(dst);
+            }
+        }
+        false
+    }
+
     fn assert_mnemonic_coverage(
         cfg: &GenConfig,
         program_bytes: usize,
@@ -19989,6 +20095,20 @@ mod tests {
             assert!(
                 !has_direct_prmt_cvt_dependency(&ptx),
                 "seed {seed:x} emitted direct prmt-to-cvt dependency"
+            );
+        }
+    }
+
+    #[test]
+    fn direct_prmt_low_byte_consumers_are_suppressed() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 32768);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_prmt_low_byte_consumer(&ptx),
+                "seed {seed:x} emitted direct prmt low-byte consumer"
             );
         }
     }
