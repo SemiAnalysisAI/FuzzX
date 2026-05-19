@@ -111,7 +111,7 @@
 //!   DIV_DISABLE_GLOBAL_LOADS default: false; set 1/true/yes/on to suppress
 //!                         bounded read-only global loads from the input buffer
 //!   DIV_DISABLE_UNIFORM_GLOBAL_LOADS default: false; set 1/true/yes/on to suppress
-//!                         ldu.global read-only loads from uniform input addresses
+//!                         scalar/vector ldu.global read-only loads from uniform input addresses
 //!   DIV_DISABLE_GLOBAL_STORE_ROUNDTRIPS default: false; set 1/true/yes/on to suppress
 //!                         per-thread global-memory store/load roundtrips
 //!   DIV_DISABLE_CONST_MEMORY default: false; set 1/true/yes/on to suppress

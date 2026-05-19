@@ -839,16 +839,7 @@ impl GlobalLoadOp {
     }
 
     fn supports_uniform(self) -> bool {
-        matches!(
-            self,
-            GlobalLoadOp::U8
-                | GlobalLoadOp::S8
-                | GlobalLoadOp::U16
-                | GlobalLoadOp::S16
-                | GlobalLoadOp::U32
-                | GlobalLoadOp::U64
-                | GlobalLoadOp::S64
-        )
+        true
     }
 }
 
@@ -1241,6 +1232,14 @@ impl VectorMemOp {
         } else {
             format!("{}.{}", cache.prefix(), self.type_suffix())
         }
+    }
+
+    fn uniform_global_load_mnemonic(self) -> String {
+        format!("ldu.global.{}", self.type_suffix())
+    }
+
+    fn supports_uniform_global_load(self) -> bool {
+        true
     }
 
     fn volatile_global_load_mnemonic(self) -> String {
@@ -3773,6 +3772,7 @@ enum Inst {
         op: VectorMemOp,
         cache: GlobalLoadCacheOp,
         volatile: bool,
+        uniform: bool,
         dsts: [u32; 4],
         offset: u32,
     },
@@ -3781,6 +3781,7 @@ enum Inst {
         op: VectorMemOp,
         cache: GlobalLoadCacheOp,
         volatile: bool,
+        uniform: bool,
         dsts: [u32; 4],
         offset: u32,
         cmp: CmpOp,
@@ -6915,24 +6916,43 @@ impl<'a> Generator<'a> {
             None
         };
         match (space, guard) {
-            (0, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorLoad {
-                op,
-                volatile: self.pick_volatile_memory(u)?,
-                cache: self.pick_global_load_cache(u)?,
-                dsts: self.pick_vector_dsts(u, lanes)?,
-                offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
-                cmp,
-                ca,
-                cb,
-                pred,
-            }),
-            (0, None) => Ok(Inst::GlobalVectorLoad {
-                op,
-                volatile: self.pick_volatile_memory(u)?,
-                cache: self.pick_global_load_cache(u)?,
-                dsts: self.pick_vector_dsts(u, lanes)?,
-                offset: self.pick_vector_offset(u, bytes, input_len() as u32)?,
-            }),
+            (0, guard) => {
+                let volatile = self.pick_volatile_memory(u)?;
+                let uniform = !volatile
+                    && op.supports_uniform_global_load()
+                    && self.cfg.emit_uniform_global_loads
+                    && u.int_in_range(0..=3)? == 0;
+                let cache = if volatile || uniform {
+                    GlobalLoadCacheOp::Default
+                } else {
+                    self.pick_global_load_cache(u)?
+                };
+                let dsts = self.pick_vector_dsts(u, lanes)?;
+                let offset = self.pick_vector_offset(u, bytes, input_len() as u32)?;
+                if let Some((cmp, ca, cb, pred)) = guard {
+                    Ok(Inst::PredicatedGlobalVectorLoad {
+                        op,
+                        volatile,
+                        uniform,
+                        cache,
+                        dsts,
+                        offset,
+                        cmp,
+                        ca,
+                        cb,
+                        pred,
+                    })
+                } else {
+                    Ok(Inst::GlobalVectorLoad {
+                        op,
+                        volatile,
+                        uniform,
+                        cache,
+                        dsts,
+                        offset,
+                    })
+                }
+            }
             (1, Some((cmp, ca, cb, pred))) => Ok(Inst::PredicatedGlobalVectorStoreRoundtrip {
                 op,
                 volatile: self.pick_volatile_memory(u)?,
@@ -10283,12 +10303,15 @@ impl<'a> Generator<'a> {
                 op,
                 cache,
                 volatile,
+                uniform,
                 dsts,
                 offset,
             } => {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 let mnemonic = if volatile {
                     op.volatile_global_load_mnemonic()
+                } else if uniform {
+                    op.uniform_global_load_mnemonic()
                 } else {
                     op.global_load_mnemonic_with_cache(cache)
                 };
@@ -10298,6 +10321,7 @@ impl<'a> Generator<'a> {
                 op,
                 cache,
                 volatile,
+                uniform,
                 dsts,
                 offset,
                 cmp,
@@ -10309,6 +10333,8 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    cvta.to.global.u64 %rd6, %rd0;").unwrap();
                 let mnemonic = if volatile {
                     op.volatile_global_load_mnemonic()
+                } else if uniform {
+                    op.uniform_global_load_mnemonic()
                 } else {
                     op.global_load_mnemonic_with_cache(cache)
                 };
@@ -15138,6 +15164,18 @@ mod tests {
         "ldu.global.u32",
         "ldu.global.u64",
         "ldu.global.s64",
+        "ldu.global.b8",
+        "ldu.global.b16",
+        "ldu.global.b32",
+        "ldu.global.b64",
+    ];
+    const UNIFORM_GLOBAL_VECTOR_LOAD_MNEMONICS: &[&str] = &[
+        "ldu.global.v2.u32",
+        "ldu.global.v4.u32",
+        "ldu.global.v2.u64",
+        "ldu.global.v2.b32",
+        "ldu.global.v4.b32",
+        "ldu.global.v2.b64",
     ];
     const GLOBAL_LOAD_CACHE_PREFIXES: &[&str] = &[
         "ld.global.ca.",
@@ -15267,11 +15305,17 @@ mod tests {
         "ld.shared.v2.b64",
         "st.shared.v2.u64",
         "st.shared.v2.b64",
+        "ldu.global.b64",
+        "ldu.global.v2.u64",
+        "ldu.global.v2.b64",
     ];
     const VECTOR_MEMORY_MNEMONICS: &[&str] = &[
         "ld.global.v2.u32",
         "ld.global.v4.u32",
         "ld.global.v2.u64",
+        "ldu.global.v2.u32",
+        "ldu.global.v4.u32",
+        "ldu.global.v2.u64",
         "st.global.v2.u32",
         "st.global.v4.u32",
         "st.global.v2.u64",
@@ -15323,6 +15367,13 @@ mod tests {
         "ld.global.v2.b32",
         "ld.global.v4.b32",
         "ld.global.v2.b64",
+        "ldu.global.b8",
+        "ldu.global.b16",
+        "ldu.global.b32",
+        "ldu.global.b64",
+        "ldu.global.v2.b32",
+        "ldu.global.v4.b32",
+        "ldu.global.v2.b64",
         "st.global.v2.b32",
         "st.global.v4.b32",
         "st.global.v2.b64",
@@ -16666,6 +16717,7 @@ mod tests {
     fn global_vector_width(mnemonic: &str) -> Option<u32> {
         if let Some(type_suffix) = mnemonic
             .strip_prefix("ld.global.")
+            .or_else(|| mnemonic.strip_prefix("ldu.global."))
             .or_else(|| mnemonic.strip_prefix("st.global."))
             .or_else(|| mnemonic.strip_prefix("ld.volatile.global."))
             .or_else(|| mnemonic.strip_prefix("st.volatile.global."))
@@ -17792,6 +17844,7 @@ mod tests {
             emit_brev: false,
             emit_cnot: false,
             emit_abs: false,
+            emit_predicated_unary: false,
             emit_signed_cmp: false,
             emit_funnel: false,
             emit_neg: false,
@@ -19401,6 +19454,12 @@ mod tests {
                     "seed {seed:x} emitted body {mnemonic}"
                 );
             }
+            for mnemonic in UNIFORM_GLOBAL_VECTOR_LOAD_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
         }
     }
 
@@ -19417,6 +19476,12 @@ mod tests {
             for mnemonic in UNIFORM_GLOBAL_LOAD_MNEMONICS {
                 assert!(
                     !has_body_global_load(&ptx, mnemonic),
+                    "seed {seed:x} emitted body {mnemonic}"
+                );
+            }
+            for mnemonic in UNIFORM_GLOBAL_VECTOR_LOAD_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted body {mnemonic}"
                 );
             }
@@ -20051,6 +20116,7 @@ mod tests {
                     });
                 let limit = if global_vector_width(mnemonic).is_some()
                     && (mnemonic.starts_with("ld.global")
+                        || mnemonic.starts_with("ldu.global")
                         || mnemonic.starts_with("ld.volatile.global"))
                     && address == "%rd6"
                 {

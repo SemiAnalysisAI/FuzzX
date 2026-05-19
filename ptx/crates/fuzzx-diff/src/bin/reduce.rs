@@ -180,6 +180,17 @@ fn line_mentions_b16_scratch(line: &str) -> bool {
         })
 }
 
+fn line_mentions_float_scratch(line: &str) -> bool {
+    line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
+        .any(|token| {
+            token.strip_prefix("%f").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            }) || token.strip_prefix("%fd").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+            })
+        })
+}
+
 fn line_mentions_token(line: &str, needle: &str) -> bool {
     line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '%'))
         .any(|token| token == needle)
@@ -535,6 +546,12 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
         if line_mentions_b16_scratch(t) {
             continue;
         }
+        // Floating-point operations also use scratch registers heavily.
+        // Removing only a producer or consumer can leave undefined `%f*` or
+        // `%fd*` reads that still pass deterministic validation.
+        if line_mentions_float_scratch(t) {
+            continue;
+        }
         // The highest declared `%r` is the generator's scratch register for
         // register-count shifts and the high half of `mov.b64` extraction.
         // Removing either its defining mask or its use independently can leave
@@ -560,8 +577,8 @@ fn removable_indices(ptx: &str) -> Result<Vec<usize>> {
 mod tests {
     use super::{
         declared_b32_scratch_reg, is_branch_line, is_loop_counter_decrement,
-        line_mentions_b16_scratch, line_mentions_body_wide_scratch, line_mentions_pred,
-        removable_indices,
+        line_mentions_b16_scratch, line_mentions_body_wide_scratch, line_mentions_float_scratch,
+        line_mentions_pred, removable_indices,
     };
 
     #[test]
@@ -594,6 +611,20 @@ mod tests {
         ));
         assert!(!line_mentions_b16_scratch(
             "    add.u32       %r0, %hfoo, 16;"
+        ));
+    }
+
+    #[test]
+    fn float_scratch_matching_does_not_confuse_prefixes() {
+        assert!(line_mentions_float_scratch("    cvt.rn.f32.u32 %f0, %r17;"));
+        assert!(line_mentions_float_scratch(
+            "    setp.lt.and.f64 %p0, %fd0, %fd1, %p1;"
+        ));
+        assert!(!line_mentions_float_scratch(
+            "    add.u32       %r0, %foo, 16;"
+        ));
+        assert!(!line_mentions_float_scratch(
+            "    add.u32       %r0, %fbar, 16;"
         ));
     }
 
