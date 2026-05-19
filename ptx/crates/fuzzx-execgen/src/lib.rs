@@ -10423,6 +10423,16 @@ impl<'a> Generator<'a> {
             writeln!(s).unwrap();
             writeln!(
                 s,
+                ".func (.reg .f64 ret0) fuzzx_f64_bit_helper(.reg .f64 a, .reg .f64 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    mov.b64         ret0, a;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
                 ".func (.reg .b32 ret0) fuzzx_predicated_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c)"
             )
             .unwrap();
@@ -10613,6 +10623,19 @@ impl<'a> Generator<'a> {
             )
             .unwrap();
             writeln!(s, "    mov.b32         %r{scratch}, %f2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.b64         %fd0, 0d3ff0000000000000;").unwrap();
+            writeln!(s, "    mov.b64         %fd1, 0d4000000000000000;").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (%fd2), fuzzx_f64_bit_helper, (%fd0, %fd1, %r0);"
+            )
+            .unwrap();
+            writeln!(s, "    mov.b64         %rd8, %fd2;").unwrap();
+            writeln!(s, "    cvt.u32.u64     %r{scratch}, %rd8;").unwrap();
+            writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
+            writeln!(s, "    cvt.u32.u64     %r1, %rd9;").unwrap();
+            writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_special_regs {
@@ -22647,6 +22670,14 @@ mod tests {
             "missing f32 bit-preserving helper call"
         );
         assert!(
+            ptx.contains("fuzzx_f64_bit_helper"),
+            "missing f64 bit-preserving helper function"
+        );
+        assert!(
+            ptx.contains("call.uni        (%fd2), fuzzx_f64_bit_helper"),
+            "missing f64 bit-preserving helper call"
+        );
+        assert!(
             ptx.contains("fuzzx_param_helper"),
             "missing param ABI helper function"
         );
@@ -22719,6 +22750,10 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_f32_bit_helper"),
                 "seed {seed:x} emitted f32 bit-preserving helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_f64_bit_helper"),
+                "seed {seed:x} emitted f64 bit-preserving helper function"
             );
             assert!(
                 !ptx.contains("fuzzx_param_helper"),
