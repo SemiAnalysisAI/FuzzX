@@ -2470,17 +2470,29 @@ impl SpecialRegOp {
 
 #[derive(Clone, Copy)]
 enum MemoryFenceOp {
-    Cta,
-    Global,
-    System,
+    MembarCta,
+    MembarGlobal,
+    MembarSystem,
+    FenceAcqRelCta,
+    FenceAcqRelGpu,
+    FenceAcqRelSys,
+    FenceScCta,
+    FenceScGpu,
+    FenceScSys,
 }
 
 impl MemoryFenceOp {
     fn mnemonic(self) -> &'static str {
         match self {
-            MemoryFenceOp::Cta => "membar.cta",
-            MemoryFenceOp::Global => "membar.gl",
-            MemoryFenceOp::System => "membar.sys",
+            MemoryFenceOp::MembarCta => "membar.cta",
+            MemoryFenceOp::MembarGlobal => "membar.gl",
+            MemoryFenceOp::MembarSystem => "membar.sys",
+            MemoryFenceOp::FenceAcqRelCta => "fence.acq_rel.cta",
+            MemoryFenceOp::FenceAcqRelGpu => "fence.acq_rel.gpu",
+            MemoryFenceOp::FenceAcqRelSys => "fence.acq_rel.sys",
+            MemoryFenceOp::FenceScCta => "fence.sc.cta",
+            MemoryFenceOp::FenceScGpu => "fence.sc.gpu",
+            MemoryFenceOp::FenceScSys => "fence.sc.sys",
         }
     }
 }
@@ -15068,9 +15080,15 @@ fn pick_selp64(u: &mut Unstructured) -> Result<Selp64Op> {
 
 fn pick_memory_fence(u: &mut Unstructured) -> Result<MemoryFenceOp> {
     let ops = [
-        MemoryFenceOp::Cta,
-        MemoryFenceOp::Global,
-        MemoryFenceOp::System,
+        MemoryFenceOp::MembarCta,
+        MemoryFenceOp::MembarGlobal,
+        MemoryFenceOp::MembarSystem,
+        MemoryFenceOp::FenceAcqRelCta,
+        MemoryFenceOp::FenceAcqRelGpu,
+        MemoryFenceOp::FenceAcqRelSys,
+        MemoryFenceOp::FenceScCta,
+        MemoryFenceOp::FenceScGpu,
+        MemoryFenceOp::FenceScSys,
     ];
     Ok(*u.choose(&ops)?)
 }
@@ -15885,7 +15903,17 @@ mod tests {
         "st.b64",
         "isspacep.global",
     ];
-    const MEMORY_FENCE_MNEMONICS: &[&str] = &["membar.cta", "membar.gl", "membar.sys"];
+    const MEMORY_FENCE_MNEMONICS: &[&str] = &[
+        "membar.cta",
+        "membar.gl",
+        "membar.sys",
+        "fence.acq_rel.cta",
+        "fence.acq_rel.gpu",
+        "fence.acq_rel.sys",
+        "fence.sc.cta",
+        "fence.sc.gpu",
+        "fence.sc.sys",
+    ];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.global.add.u32",
         "atom.global.exch.b32",

@@ -55,6 +55,12 @@ fn ptxas_accepts_membar_at_both_opt_levels() {
     membar.cta ;
     membar.gl  ;
     membar.sys ;
+    fence.acq_rel.cta ;
+    fence.acq_rel.gpu ;
+    fence.acq_rel.sys ;
+    fence.sc.cta ;
+    fence.sc.gpu ;
+    fence.sc.sys ;
     mov.u32 %r0, 1;
     st.global.u32 [%rd0], %r0;
     ret;
