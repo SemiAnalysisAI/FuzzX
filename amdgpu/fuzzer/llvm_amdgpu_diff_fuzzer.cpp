@@ -19128,6 +19128,242 @@ Value *emitRandomVectorI16ClpeakImadIdiom(IRBuilder<NoFolder> &B, Value *A,
   }
 }
 
+Value *emitRandomCondNegateAbsChainIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  FunctionCallee AbsF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::abs, {I32});
+  // Chain of `(cond ? x : -x)` and `abs(x)` patterns.  Targets v_cndmask
+  // + v_subbrev/v_sub fusion and the abs/neg select lowering paths.
+  Value *Acc = A;
+  Value *Salt = Bv;
+  for (unsigned I = 0; I != 5; ++I) {
+    Value *X = nullptr;
+    switch ((Gen() + I) % 3) {
+    case 0:
+      X = B.CreateAdd(Acc, ci32(Ctx, (I * 0x37u) + 1u),
+                      Twine(NamePrefix) + ".x.add");
+      break;
+    case 1:
+      X = B.CreateXor(Acc, B.CreateLShr(Salt, ci32(Ctx, (I + 3u) & 31u),
+                                        Twine(NamePrefix) + ".salt.shr"),
+                      Twine(NamePrefix) + ".x.xor");
+      break;
+    default:
+      X = B.CreateSub(Acc, Salt, Twine(NamePrefix) + ".x.sub");
+      break;
+    }
+    Value *NegX = B.CreateSub(ci32(Ctx, 0), X,
+                              Twine(NamePrefix) + ".neg.x");
+    Value *Cond = nullptr;
+    switch ((Gen() + I * 5u) % 4) {
+    case 0:
+      Cond = B.CreateICmpSLT(X, ci32(Ctx, 0),
+                             Twine(NamePrefix) + ".cond.slt0");
+      break;
+    case 1:
+      Cond = B.CreateICmpUGT(Salt, ci32(Ctx, 0x80000000u),
+                             Twine(NamePrefix) + ".cond.ugt");
+      break;
+    case 2:
+      Cond = B.CreateICmpEQ(B.CreateAnd(Acc, ci32(Ctx, 1u),
+                                        Twine(NamePrefix) + ".cond.bit"),
+                            ci32(Ctx, 0),
+                            Twine(NamePrefix) + ".cond.even");
+      break;
+    default:
+      Cond = B.CreateICmpNE(B.CreateAnd(Salt, ci32(Ctx, 0x80u),
+                                        Twine(NamePrefix) + ".cond.bit7"),
+                            ci32(Ctx, 0),
+                            Twine(NamePrefix) + ".cond.set7");
+      break;
+    }
+    Value *Sel = B.CreateSelect(Cond, NegX, X,
+                                Twine(NamePrefix) + ".sel.negx");
+    Value *Abs = B.CreateCall(AbsF, {Sel, ConstantInt::getFalse(Ctx)},
+                              Twine(NamePrefix) + ".abs");
+    Acc = B.CreateAdd(B.CreateXor(Acc, Sel,
+                                  Twine(NamePrefix) + ".acc.sel.xor"),
+                      Abs, Twine(NamePrefix) + ".acc.abs.add");
+    Salt = B.CreateXor(Salt, Acc,
+                       Twine(NamePrefix) + ".salt.next");
+  }
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateXor(Acc, Salt, Twine(NamePrefix) + ".final.xor");
+  case 2:
+    return B.CreateAdd(Acc, A, Twine(NamePrefix) + ".a.add");
+  default:
+    return B.CreateSub(Bv, Acc, Twine(NamePrefix) + ".b.sub");
+  }
+}
+
+Value *emitRandomVectorI8DirectArithIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                          Value *Bv,
+                                          std::minstd_rand &Gen,
+                                          StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I8 = Type::getInt8Ty(Ctx);
+  Type *I32 = Type::getInt32Ty(Ctx);
+  constexpr unsigned Lanes = 8;
+  auto *VecTy = FixedVectorType::get(I8, Lanes);
+  // Direct <8 x i8> arithmetic — different from byte-pack idioms because the
+  // vector ops stay in vector form for longer before being collapsed back
+  // to i32.  Targets packed byte arithmetic lowering (V_PERM_B32, packed
+  // add/sub/mul lowering).
+  SmallVector<Value *, Lanes> AElts;
+  SmallVector<Value *, Lanes> BElts;
+  for (unsigned I = 0; I != Lanes; ++I) {
+    Value *AB = extractByteAsI32(B, A, I & 3u,
+                                 Twine(NamePrefix) + ".a.byte");
+    Value *BB = extractByteAsI32(B, Bv, (I + 1u) & 3u,
+                                 Twine(NamePrefix) + ".b.byte");
+    AElts.push_back(B.CreateTrunc(AB, I8,
+                                  Twine(NamePrefix) + ".a.trunc"));
+    BElts.push_back(B.CreateTrunc(BB, I8,
+                                  Twine(NamePrefix) + ".b.trunc"));
+  }
+  Value *AVec = emitVectorBuild(B, VecTy, AElts);
+  Value *BVec = emitVectorBuild(B, VecTy, BElts);
+
+  Value *Add = B.CreateAdd(AVec, BVec, Twine(NamePrefix) + ".add");
+  Value *Sub = B.CreateSub(AVec, BVec, Twine(NamePrefix) + ".sub");
+  Value *Mul = B.CreateMul(AVec, BVec, Twine(NamePrefix) + ".mul");
+  Value *And = B.CreateAnd(Add, Mul, Twine(NamePrefix) + ".and");
+  Value *Or = B.CreateOr(Sub, Mul, Twine(NamePrefix) + ".or");
+
+  Value *Mixed = nullptr;
+  switch (Gen() % 4) {
+  case 0:
+    Mixed = B.CreateXor(And, Or, Twine(NamePrefix) + ".and.or.xor");
+    break;
+  case 1:
+    Mixed = B.CreateAdd(And,
+                        B.CreateShuffleVector(Or, Or,
+                                              rotateShuffleMask(Lanes, 1),
+                                              Twine(NamePrefix) + ".or.rot"),
+                        Twine(NamePrefix) + ".and.or.add");
+    break;
+  case 2:
+    Mixed = B.CreateSub(Or,
+                        B.CreateShuffleVector(And, And,
+                                              reverseShuffleMask(Lanes),
+                                              Twine(NamePrefix) + ".and.rev"),
+                        Twine(NamePrefix) + ".or.and.sub");
+    break;
+  default:
+    Mixed = B.CreateMul(And, B.CreateOr(Mul, BVec,
+                                        Twine(NamePrefix) + ".mul.bv.or"),
+                        Twine(NamePrefix) + ".final.mul");
+    break;
+  }
+
+  // Reduce to i32 via bitcast.
+  auto *PairTy = FixedVectorType::get(I32, Lanes / 4);
+  Value *Bitcast = B.CreateBitCast(Mixed, PairTy,
+                                   Twine(NamePrefix) + ".bitcast");
+  Value *Lo = B.CreateExtractElement(Bitcast, ci32(Ctx, 0),
+                                     Twine(NamePrefix) + ".lo");
+  Value *Hi = B.CreateExtractElement(Bitcast, ci32(Ctx, 1),
+                                     Twine(NamePrefix) + ".hi");
+  switch (Gen() % 4) {
+  case 0:
+    return B.CreateXor(Lo, Hi, Twine(NamePrefix) + ".lohi.xor");
+  case 1:
+    return B.CreateAdd(Lo, Hi, Twine(NamePrefix) + ".lohi.add");
+  case 2:
+    return B.CreateSub(Lo, Hi, Twine(NamePrefix) + ".lohi.sub");
+  default:
+    return unsignedMinMaxSelect(B, Lo, Hi, (Gen() & 1u) != 0,
+                                Twine(NamePrefix) + ".lohi.mm");
+  }
+}
+
+Value *emitRandomConditionalShiftPatternIdiom(IRBuilder<NoFolder> &B,
+                                              Value *A, Value *Bv,
+                                              std::minstd_rand &Gen,
+                                              StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // `(cond ? a << k : a >> k)` and similar conditional shift patterns.
+  // Targets v_cndmask + shift fusion paths.
+  Value *Acc = A;
+  Value *Salt = Bv;
+  for (unsigned I = 0; I != 4; ++I) {
+    Value *Cond = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      Cond = B.CreateICmpSLT(Acc, ci32(Ctx, 0),
+                             Twine(NamePrefix) + ".cond.slt0");
+      break;
+    case 1:
+      Cond = B.CreateICmpULT(Salt, Acc,
+                             Twine(NamePrefix) + ".cond.ult");
+      break;
+    case 2:
+      Cond = B.CreateICmpEQ(B.CreateAnd(Acc, ci32(Ctx, 0xffu),
+                                        Twine(NamePrefix) + ".cond.lowbyte"),
+                            ci32(Ctx, 0),
+                            Twine(NamePrefix) + ".cond.lowbyte.zero");
+      break;
+    default:
+      Cond = B.CreateICmpNE(B.CreateAnd(Salt, ci32(Ctx, 1u << ((I + 7u) & 31u)),
+                                        Twine(NamePrefix) + ".cond.bit"),
+                            ci32(Ctx, 0),
+                            Twine(NamePrefix) + ".cond.bit.set");
+      break;
+    }
+    unsigned Shift = (Gen() + I * 5u) & 31u;
+    Value *Shl = B.CreateShl(Acc, ci32(Ctx, Shift),
+                             Twine(NamePrefix) + ".shl");
+    Value *Lshr = B.CreateLShr(Acc, ci32(Ctx, Shift),
+                               Twine(NamePrefix) + ".lshr");
+    Value *Ashr = B.CreateAShr(Acc, ci32(Ctx, Shift),
+                               Twine(NamePrefix) + ".ashr");
+    Value *Sel = nullptr;
+    switch ((Gen() + I * 3u) % 4) {
+    case 0:
+      Sel = B.CreateSelect(Cond, Shl, Lshr,
+                           Twine(NamePrefix) + ".sel.shl.lshr");
+      break;
+    case 1:
+      Sel = B.CreateSelect(Cond, Shl, Ashr,
+                           Twine(NamePrefix) + ".sel.shl.ashr");
+      break;
+    case 2:
+      Sel = B.CreateSelect(Cond, Lshr, Ashr,
+                           Twine(NamePrefix) + ".sel.lshr.ashr");
+      break;
+    default:
+      // Conditional rotate: shift left + shift right combined.
+      Sel = B.CreateSelect(Cond,
+                           B.CreateOr(Shl, B.CreateLShr(Acc,
+                                                        ci32(Ctx, (32u - Shift) & 31u),
+                                                        Twine(NamePrefix) + ".rot.shr"),
+                                       Twine(NamePrefix) + ".rot"),
+                           Ashr,
+                           Twine(NamePrefix) + ".sel.rot.ashr");
+      break;
+    }
+    Acc = B.CreateAdd(Sel, Salt, Twine(NamePrefix) + ".acc.next");
+    Salt = B.CreateXor(Salt, Acc, Twine(NamePrefix) + ".salt.next");
+  }
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateXor(Acc, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Acc, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Salt, Acc, Twine(NamePrefix) + ".salt.sub");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -19137,7 +19373,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1602) {
+  switch (Gen() % 1626) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -21204,6 +21440,36 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1601:
     return emitRandomVectorI16ClpeakImadIdiom(
         B, A, Bv, Gen, "fuzz.veci16clpeakimad.idiom");
+  case 1602:
+  case 1603:
+  case 1604:
+  case 1605:
+  case 1606:
+  case 1607:
+  case 1608:
+  case 1609:
+    return emitRandomCondNegateAbsChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.condnegateabs.idiom");
+  case 1610:
+  case 1611:
+  case 1612:
+  case 1613:
+  case 1614:
+  case 1615:
+  case 1616:
+  case 1617:
+    return emitRandomVectorI8DirectArithIdiom(
+        B, A, Bv, Gen, "fuzz.veci8direct.idiom");
+  case 1618:
+  case 1619:
+  case 1620:
+  case 1621:
+  case 1622:
+  case 1623:
+  case 1624:
+  case 1625:
+    return emitRandomConditionalShiftPatternIdiom(
+        B, A, Bv, Gen, "fuzz.condshift.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -21238,7 +21504,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1594) {
+  switch (Gen() % 1618) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -23302,6 +23568,36 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1593:
     return emitRandomVectorI16ClpeakImadIdiom(
         B, A, Bv, Gen, "fuzz.cfg.veci16clpeakimad.idiom");
+  case 1594:
+  case 1595:
+  case 1596:
+  case 1597:
+  case 1598:
+  case 1599:
+  case 1600:
+  case 1601:
+    return emitRandomCondNegateAbsChainIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.condnegateabs.idiom");
+  case 1602:
+  case 1603:
+  case 1604:
+  case 1605:
+  case 1606:
+  case 1607:
+  case 1608:
+  case 1609:
+    return emitRandomVectorI8DirectArithIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.veci8direct.idiom");
+  case 1610:
+  case 1611:
+  case 1612:
+  case 1613:
+  case 1614:
+  case 1615:
+  case 1616:
+  case 1617:
+    return emitRandomConditionalShiftPatternIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.condshift.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
