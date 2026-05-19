@@ -162,6 +162,7 @@ Version | Description |
 | 13.2.78 | [m045-brev-branch-fold](known-miscompiles/m045-brev-branch-fold/NOTES.md): Branch-join fold around `brev.b32` computes `0x8000001d` instead of `0x8000001f`. |
 | 13.2.78 | [m083-orphan-param-ld](known-miscompiles/m083-orphan-param-ld/NOTES.md): ptxas segfaults at every optimization level on an 11-line kernel that declares a local `.param` and reads it with `ld.param` without ever using the `.param` as a `call` argument or return value. Also reproduces on 13.0.88. |
 | 13.2.78 | [m084-multi-island-o-opt-crash](known-miscompiles/m084-multi-island-o-opt-crash/NOTES.md): ptxas optimizer segfaults at `-O1` and above (clean at `-O0`) on a 66-line kernel whose body simultaneously contains `cvt.pack.sat.u8`, `bar.red.popc.u32`, `shfl.sync.up.b32`, `elect.sync`, `redux.sync.max.u32`, `createpolicy.fractional.L2` + cache-hint loads, bf16/tf32 conversions, and `sub.rn.f16x2`; removing any single category makes the crash disappear. Also reproduces on 13.0.88. |
+| 13.2.78 | [m085-cond-skip-or-imm-neg1](known-miscompiles/m085-cond-skip-or-imm-neg1/NOTES.md): `setp.eq.u32 imm, reg` guarding a single-arm bra over `or.b32 %r, 0xffffffff, %r` causes `-O3` to skip the OR and keep the prior `%r1` value, even though the predicate is runtime-data-dependent and the join block actually reads the result. |
 
 ### Bugs Found in 13.0.88 and Fixed in 13.2.78
 
