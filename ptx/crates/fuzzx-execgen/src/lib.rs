@@ -110,6 +110,7 @@ pub struct GenConfig {
     pub emit_global_store_roundtrips: bool,
     pub emit_global_atomics: bool,
     pub emit_global_atomic_dec: bool,
+    pub emit_global_atomic_xor: bool,
     pub emit_predicated_global_atomics: bool,
     pub emit_global_reductions: bool,
     pub emit_predicated_global_reductions: bool,
@@ -339,6 +340,7 @@ impl Default for GenConfig {
             emit_global_store_roundtrips: true,
             emit_global_atomics: true,
             emit_global_atomic_dec: true,
+            emit_global_atomic_xor: true,
             emit_predicated_global_atomics: true,
             emit_global_reductions: true,
             emit_predicated_global_reductions: true,
@@ -6842,7 +6844,7 @@ impl<'a> Generator<'a> {
                 ops[n_ops] = GlobalAtomicOp::OrB32;
                 n_ops += 1;
             }
-            if self.cfg.emit_xor {
+            if self.cfg.emit_xor && self.cfg.emit_global_atomic_xor {
                 ops[n_ops] = GlobalAtomicOp::XorB32;
                 n_ops += 1;
             }
@@ -18704,6 +18706,7 @@ mod tests {
             emit_bfi: false,
             emit_reg_bitfield: false,
             emit_global_atomic_dec: false,
+            emit_global_atomic_xor: false,
             emit_scalar_16bit_min: false,
             emit_scalar_16bit_signed_unary: false,
             emit_addc: false,
@@ -20609,6 +20612,23 @@ mod tests {
             assert!(
                 !has_mnemonic(&ptx, "atom.global.dec.u32"),
                 "seed {seed:x} emitted atom.global.dec.u32"
+            );
+        }
+    }
+
+    #[test]
+    fn global_atomic_xor_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_global_atomic_xor: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..2048 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                !has_mnemonic(&ptx, "atom.global.xor.b32"),
+                "seed {seed:x} emitted atom.global.xor.b32"
             );
         }
     }
