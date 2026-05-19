@@ -375,6 +375,16 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     ret;
 }}
 
+.func (.reg .b32 ret0) fuzzx_nested_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c, .reg .b32 d)
+{{
+    .reg .b32 %nhr<4>;
+    call.uni (%nhr0, %nhr1), fuzzx_helper_pair, (a, b, c);
+    call (%nhr2), fuzzx_helper_chain, (%nhr0, %nhr1, c, d);
+    xor.b32 %nhr3, %nhr2, a;
+    add.u32 ret0, %nhr3, b;
+    ret;
+}}
+
 .func (.param .b32 ret0) fuzzx_param_helper(.param .b32 a, .param .b32 b)
 {{
     .reg .b32 %phr<3>;
@@ -407,6 +417,8 @@ fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
     ld.param.u32 %r7, [fuzzx_param_ret];
     add.u32 %r6, %r3, %r4;
     add.u32 %r6, %r6, %r5;
+    add.u32 %r6, %r6, %r7;
+    call (%r7), fuzzx_nested_helper, (%r3, %r4, %r5, %r2);
     add.u32 %r6, %r6, %r7;
     st.global.u32 [%rd0], %r6;
     ret;
