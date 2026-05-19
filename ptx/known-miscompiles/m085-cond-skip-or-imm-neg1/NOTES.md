@@ -75,11 +75,37 @@ Confirmed deterministic across 5 recompile-and-run cycles per opt level.
 Found on 2026-05-19 with `release 13.2, V13.2.78`,
 build `cuda_13.2.r13.2/compiler.37668154_0`.
 
+## Broader family
+
+The first reproducer used `or.b32 %r1, 0xffffffff, %r0` as the
+0xffffffff-producing instruction. After `DIV_DISABLE_I32_BOUNDARY_IMMS=1`
+was added (no more immediate `-1`), the fuzzer immediately found two more
+divergences with the same output-slot symptom — `O0: 0xffffffff` vs
+`O3: 0x3f800000` in slot 1 of every thread — but with different
+0xffffffff-producing instructions in the body, including `not.b32 %r, 0`.
+
+So the trigger is not specifically `or.b32 imm,-1`; the common pattern is:
+
+1. The deterministic bf16/tf32 prologue at `lib.rs:11949` seeds
+   `mov.b32 %r1, 0x3f800000;` to prepare the `cvt.rn.bf16.f32` chain —
+   leaving `0x3f800000` in `%r1`.
+2. Random body instructions later overwrite `%r1` with `0xffffffff` (via
+   any single-result instruction that lands on the all-ones bit pattern:
+   `or.b32 %r, -1, _`, `not.b32 %r, 0`, etc.) inside a small
+   uniform-prefix-guarded arm.
+3. `-O3` incorrectly dead-store-eliminates the body write, so `%r1` keeps
+   the prologue's `0x3f800000` value at the final `st.global.u32 [%rd4+4]`.
+
+The fundamental problem is the bf16/tf32 prologue using output registers
+(`%r1`, `%r2`, `%r3`) as bf16 scratch rather than dedicated scratch slots,
+which makes the output value depend on whether the body's writes survive
+optimization. A long-term fix is to move the prologue's bf16 scratch into
+the existing `wide_scratch_hi_reg()` pool; that has not been done in this
+commit.
+
 ## Suppressor
 
-No targeted suppressor flag was added. The bug requires a fairly specific
-shape — a `setp.eq.u32 imm, reg` guarding a single-arm `bra` that joins
-back to a block reading the same destination — so it does not dominate the
-divergence inbox in the way m083 or m084 did. The line-by-line reducer
-arrived at 345 lines and stalled; isolating a sub-100-line repro would
-require a manual control-flow rewrite.
+`DIV_DISABLE_BF16_TF32_CVT=1` removes the prologue line that seeds
+`%r1 = 0x3f800000`, which removes the family's wrong-value source. That is
+heavier than ideal — it loses all bf16/tf32 conversion coverage from
+`3483c72` — but it is the single env flag that gates the family.

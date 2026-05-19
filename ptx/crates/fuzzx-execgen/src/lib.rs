@@ -11948,10 +11948,16 @@ impl<'a> Generator<'a> {
         }
         if self.cfg.emit_bf16_tf32_cvt {
             let scratch = self.wide_scratch_hi_reg();
-            writeln!(s, "    mov.b32         %r1, 0x3f800000;").unwrap();
-            writeln!(s, "    mov.b32         %r2, 0x40000000;").unwrap();
-            writeln!(s, "    mov.b32         %f0, %r1;").unwrap();
-            writeln!(s, "    mov.b32         %f1, %r2;").unwrap();
+            let scratch1 = self.scratch_reg(1);
+            let scratch2 = self.scratch_reg(2);
+            // Use scratch regs (not %r1/%r2/%r3 output pool) for the bf16/tf32
+            // setup so the prologue cannot leak a "looks like the right
+            // output" constant into a later epilogue store when an
+            // optimizer pass eliminates a body write to %r1/%r2/%r3.
+            writeln!(s, "    mov.b32         %r{scratch1}, 0x3f800000;").unwrap();
+            writeln!(s, "    mov.b32         %r{scratch2}, 0x40000000;").unwrap();
+            writeln!(s, "    mov.b32         %f0, %r{scratch1};").unwrap();
+            writeln!(s, "    mov.b32         %f1, %r{scratch2};").unwrap();
             writeln!(s, "    cvt.rn.bf16.f32 %h0, %f0;").unwrap();
             writeln!(s, "    cvt.rz.bf16.f32 %h1, %f1;").unwrap();
             writeln!(s, "    cvt.rn.relu.bf16.f32 %h2, %f0;").unwrap();
@@ -11961,12 +11967,12 @@ impl<'a> Generator<'a> {
             writeln!(s, "    cvt.f32.bf16    %f3, %h1;").unwrap();
             writeln!(s, "    mov.b32         %r{scratch}, %f3;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.rn.bf16x2.f32 %r3, %f0, %f1;").unwrap();
-            writeln!(s, "    add.u32         %r0, %r0, %r3;").unwrap();
-            writeln!(s, "    cvt.rz.bf16x2.f32 %r3, %f0, %f1;").unwrap();
-            writeln!(s, "    add.u32         %r0, %r0, %r3;").unwrap();
-            writeln!(s, "    cvt.rn.relu.bf16x2.f32 %r3, %f0, %f1;").unwrap();
-            writeln!(s, "    add.u32         %r0, %r0, %r3;").unwrap();
+            writeln!(s, "    cvt.rn.bf16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.rz.bf16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvt.rn.relu.bf16x2.f32 %r{scratch}, %f0, %f1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    cvt.rna.tf32.f32 %r{scratch}, %f0;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    cvt.rn.tf32.f32 %r{scratch}, %f1;").unwrap();
