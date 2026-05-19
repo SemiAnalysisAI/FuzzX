@@ -110,6 +110,42 @@ fn ptxas_accepts_prefetch_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_shared_atomic_reduction_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry shared_atomic_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<6>;
+    .reg .b64 %rd<2>;
+    .shared .align 4 .b8 scratch[128];
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u64 %rd1, scratch;
+    mov.u32 %r0, 1;
+    mov.u32 %r1, 2;
+    st.shared.u32 [%rd1], %r0;
+    atom.shared.add.u32 %r2, [%rd1], %r1;
+    red.shared.xor.b32 [%rd1], %r1;
+    ld.shared.u32 %r3, [%rd1];
+    add.u32 %r4, %r2, %r3;
+    st.global.u32 [%rd0], %r4;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_random_programs_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let mut failures: Vec<(u64, String, String)> = Vec::new();

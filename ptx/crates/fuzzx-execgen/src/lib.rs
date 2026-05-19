@@ -119,6 +119,10 @@ pub struct GenConfig {
     pub emit_const_memory: bool,
     pub emit_local_memory: bool,
     pub emit_shared_memory: bool,
+    pub emit_shared_atomics: bool,
+    pub emit_predicated_shared_atomics: bool,
+    pub emit_shared_reductions: bool,
+    pub emit_predicated_shared_reductions: bool,
     pub emit_predicated_memory: bool,
     pub emit_vector_memory: bool,
     pub emit_wide_memory: bool,
@@ -351,6 +355,10 @@ impl Default for GenConfig {
             emit_const_memory: true,
             emit_local_memory: true,
             emit_shared_memory: true,
+            emit_shared_atomics: true,
+            emit_predicated_shared_atomics: true,
+            emit_shared_reductions: true,
+            emit_predicated_shared_reductions: true,
             emit_predicated_memory: true,
             emit_vector_memory: true,
             emit_wide_memory: true,
@@ -1040,6 +1048,23 @@ impl GlobalAtomicOp {
         }
     }
 
+    fn shared_mnemonic(self) -> &'static str {
+        match self {
+            GlobalAtomicOp::AddU32 => "atom.shared.add.u32",
+            GlobalAtomicOp::ExchB32 => "atom.shared.exch.b32",
+            GlobalAtomicOp::CasB32 => "atom.shared.cas.b32",
+            GlobalAtomicOp::IncU32 => "atom.shared.inc.u32",
+            GlobalAtomicOp::DecU32 => "atom.shared.dec.u32",
+            GlobalAtomicOp::MinU32 => "atom.shared.min.u32",
+            GlobalAtomicOp::MaxU32 => "atom.shared.max.u32",
+            GlobalAtomicOp::MinS32 => "atom.shared.min.s32",
+            GlobalAtomicOp::MaxS32 => "atom.shared.max.s32",
+            GlobalAtomicOp::AndB32 => "atom.shared.and.b32",
+            GlobalAtomicOp::OrB32 => "atom.shared.or.b32",
+            GlobalAtomicOp::XorB32 => "atom.shared.xor.b32",
+        }
+    }
+
     fn uses_compare(self) -> bool {
         matches!(self, GlobalAtomicOp::CasB32)
     }
@@ -1072,6 +1097,21 @@ impl GlobalReductionOp {
             GlobalReductionOp::AndB32 => "red.global.and.b32",
             GlobalReductionOp::OrB32 => "red.global.or.b32",
             GlobalReductionOp::XorB32 => "red.global.xor.b32",
+        }
+    }
+
+    fn shared_mnemonic(self) -> &'static str {
+        match self {
+            GlobalReductionOp::AddU32 => "red.shared.add.u32",
+            GlobalReductionOp::IncU32 => "red.shared.inc.u32",
+            GlobalReductionOp::DecU32 => "red.shared.dec.u32",
+            GlobalReductionOp::MinU32 => "red.shared.min.u32",
+            GlobalReductionOp::MaxU32 => "red.shared.max.u32",
+            GlobalReductionOp::MinS32 => "red.shared.min.s32",
+            GlobalReductionOp::MaxS32 => "red.shared.max.s32",
+            GlobalReductionOp::AndB32 => "red.shared.and.b32",
+            GlobalReductionOp::OrB32 => "red.shared.or.b32",
+            GlobalReductionOp::XorB32 => "red.shared.xor.b32",
         }
     }
 }
@@ -3924,6 +3964,48 @@ enum Inst {
     },
     /// Predicated per-thread global reduction roundtrip.
     PredicatedGlobalReduction {
+        op: GlobalReductionOp,
+        dst: u32,
+        init: u32,
+        value: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Store to this thread's private shared slot, perform an atomic op, reload it.
+    SharedAtomic {
+        op: GlobalAtomicOp,
+        dst: u32,
+        init: u32,
+        compare: u32,
+        value: u32,
+        offset: u32,
+    },
+    /// Predicated per-thread shared atomic roundtrip.
+    PredicatedSharedAtomic {
+        op: GlobalAtomicOp,
+        dst: u32,
+        init: u32,
+        compare: u32,
+        value: u32,
+        offset: u32,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Store to this thread's private shared slot, perform a reduction, reload it.
+    SharedReduction {
+        op: GlobalReductionOp,
+        dst: u32,
+        init: u32,
+        value: u32,
+        offset: u32,
+    },
+    /// Predicated per-thread shared reduction roundtrip.
+    PredicatedSharedReduction {
         op: GlobalReductionOp,
         dst: u32,
         init: u32,
@@ -7007,6 +7089,139 @@ impl<'a> Generator<'a> {
         })
     }
 
+    fn pick_shared_atomic(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory
+            && self.cfg.emit_predicated_shared_atomics
+            && u.arbitrary::<bool>()?;
+        let mut ops = [GlobalAtomicOp::AddU32; 12];
+        let mut n_ops = 0;
+        for op in [
+            GlobalAtomicOp::AddU32,
+            GlobalAtomicOp::ExchB32,
+            GlobalAtomicOp::CasB32,
+            GlobalAtomicOp::IncU32,
+            GlobalAtomicOp::DecU32,
+        ] {
+            ops[n_ops] = op;
+            n_ops += 1;
+        }
+        if self.cfg.emit_minmax {
+            for op in [
+                GlobalAtomicOp::MinU32,
+                GlobalAtomicOp::MaxU32,
+                GlobalAtomicOp::MinS32,
+                GlobalAtomicOp::MaxS32,
+            ] {
+                ops[n_ops] = op;
+                n_ops += 1;
+            }
+        }
+        if self.cfg.emit_bitwise_binops {
+            ops[n_ops] = GlobalAtomicOp::AndB32;
+            n_ops += 1;
+            if self.cfg.emit_or {
+                ops[n_ops] = GlobalAtomicOp::OrB32;
+                n_ops += 1;
+            }
+            if self.cfg.emit_xor {
+                ops[n_ops] = GlobalAtomicOp::XorB32;
+                n_ops += 1;
+            }
+        }
+        let op = *u.choose(&ops[..n_ops])?;
+        let offset = u.int_in_range(0..=(SHARED_SLOT_BYTES / 4 - 1))? * 4;
+        let dst = self.pick_dst(u)?;
+        let init = self.pick_safe_reg(u)?;
+        let compare = self.pick_safe_reg(u)?;
+        let value = self.pick_safe_reg(u)?;
+        if predicated {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedSharedAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::SharedAtomic {
+            op,
+            dst,
+            init,
+            compare,
+            value,
+            offset,
+        })
+    }
+
+    fn pick_shared_reduction(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let predicated = self.cfg.emit_predicated_memory
+            && self.cfg.emit_predicated_shared_reductions
+            && u.arbitrary::<bool>()?;
+        let mut ops = [GlobalReductionOp::AddU32; 10];
+        let mut n_ops = 0;
+        ops[n_ops] = GlobalReductionOp::AddU32;
+        n_ops += 1;
+        ops[n_ops] = GlobalReductionOp::IncU32;
+        n_ops += 1;
+        ops[n_ops] = GlobalReductionOp::DecU32;
+        n_ops += 1;
+        if self.cfg.emit_minmax {
+            for op in [
+                GlobalReductionOp::MinU32,
+                GlobalReductionOp::MaxU32,
+                GlobalReductionOp::MinS32,
+                GlobalReductionOp::MaxS32,
+            ] {
+                ops[n_ops] = op;
+                n_ops += 1;
+            }
+        }
+        if self.cfg.emit_bitwise_binops {
+            ops[n_ops] = GlobalReductionOp::AndB32;
+            n_ops += 1;
+            if self.cfg.emit_or {
+                ops[n_ops] = GlobalReductionOp::OrB32;
+                n_ops += 1;
+            }
+            if self.cfg.emit_xor {
+                ops[n_ops] = GlobalReductionOp::XorB32;
+                n_ops += 1;
+            }
+        }
+        let op = *u.choose(&ops[..n_ops])?;
+        let offset = u.int_in_range(0..=(SHARED_SLOT_BYTES / 4 - 1))? * 4;
+        let dst = self.pick_dst(u)?;
+        let init = self.pick_safe_reg(u)?;
+        let value = self.pick_safe_reg(u)?;
+        if predicated {
+            let (cmp, ca, cb, pred) = self.pick_predicate_guard(u)?;
+            return Ok(Inst::PredicatedSharedReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            });
+        }
+        Ok(Inst::SharedReduction {
+            op,
+            dst,
+            init,
+            value,
+            offset,
+        })
+    }
+
     fn pick_const_load(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let predicated = self.cfg.emit_predicated_memory && u.arbitrary::<bool>()?;
         let allow_narrow_bit =
@@ -8353,6 +8568,22 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_shared_mem(u);
+            }
+            if self.cfg.emit_shared_atomics
+                && self.cfg.emit_shared_memory
+                && self.cfg.emit_mul_wide
+                && self.cfg.emit_wide_int
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_shared_atomic(u);
+            }
+            if self.cfg.emit_shared_reductions
+                && self.cfg.emit_shared_memory
+                && self.cfg.emit_mul_wide
+                && self.cfg.emit_wide_int
+                && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_shared_reduction(u);
             }
             if self.can_emit_vector_memory() && u.int_in_range(0..=7)? == 0 {
                 return self.pick_vector_memory(u);
@@ -9758,6 +9989,10 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedGlobalAtomic { dst, .. }
             | Inst::GlobalReduction { dst, .. }
             | Inst::PredicatedGlobalReduction { dst, .. }
+            | Inst::SharedAtomic { dst, .. }
+            | Inst::PredicatedSharedAtomic { dst, .. }
+            | Inst::SharedReduction { dst, .. }
+            | Inst::PredicatedSharedReduction { dst, .. }
             | Inst::ConstLoad { dst, .. }
             | Inst::PredicatedConstLoad { dst, .. }
             | Inst::LocalMem { dst, .. }
@@ -10849,6 +11084,146 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    ld.global.u32 %r{scratch}, [%rd8 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::SharedAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    st.shared.u32 [%rd6 + {offset}], %r{init};").unwrap();
+                writeln!(s, "    mov.u32       %r{scratch}, %r{value};").unwrap();
+                if op.uses_compare() {
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, [%rd6 + {offset}], %r{compare}, %r{scratch};",
+                        op.shared_mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, [%rd6 + {offset}], %r{scratch};",
+                        op.shared_mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    ld.shared.u32 %r{scratch}, [%rd6 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::PredicatedSharedAtomic {
+                op,
+                dst,
+                init,
+                compare,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    st.shared.u32 [%rd6 + {offset}], %r{init};").unwrap();
+                writeln!(s, "    mov.u32       %r{scratch}, %r{value};").unwrap();
+                writeln!(s, "    mov.u32       %r{dst}, %r{init};").unwrap();
+                if op.uses_compare() {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, [%rd6 + {offset}], %r{compare}, %r{scratch};",
+                        pred_guard(pred),
+                        op.shared_mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, [%rd6 + {offset}], %r{scratch};",
+                        pred_guard(pred),
+                        op.shared_mnemonic()
+                    )
+                    .unwrap();
+                }
+                writeln!(s, "    ld.shared.u32 %r{scratch}, [%rd6 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::SharedReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    st.shared.u32 [%rd6 + {offset}], %r{init};").unwrap();
+                writeln!(
+                    s,
+                    "    {:<13} [%rd6 + {offset}], %r{value};",
+                    op.shared_mnemonic()
+                )
+                .unwrap();
+                writeln!(s, "    ld.shared.u32 %r{scratch}, [%rd6 + {offset}];").unwrap();
+                writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
+            }
+            Inst::PredicatedSharedReduction {
+                op,
+                dst,
+                init,
+                value,
+                offset,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let tid_reg = self.tid_reg();
+                let scratch = self.wide_scratch_hi_reg();
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+                writeln!(
+                    s,
+                    "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+                )
+                .unwrap();
+                writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+                writeln!(s, "    st.shared.u32 [%rd6 + {offset}], %r{init};").unwrap();
+                writeln!(
+                    s,
+                    "    {} {:<8} [%rd6 + {offset}], %r{value};",
+                    pred_guard(pred),
+                    op.shared_mnemonic()
+                )
+                .unwrap();
+                writeln!(s, "    ld.shared.u32 %r{scratch}, [%rd6 + {offset}];").unwrap();
                 writeln!(s, "    add.u32       %r{dst}, %r{dst}, %r{scratch};").unwrap();
             }
             Inst::ConstLoad { op, dst, offset } => {
@@ -16010,6 +16385,46 @@ mod tests {
         "red.global.or.b32",
         "red.global.xor.b32",
     ];
+    const SHARED_ATOMIC_MNEMONICS: &[&str] = &[
+        "atom.shared.add.u32",
+        "atom.shared.exch.b32",
+        "atom.shared.cas.b32",
+        "atom.shared.inc.u32",
+        "atom.shared.dec.u32",
+        "atom.shared.min.u32",
+        "atom.shared.max.u32",
+        "atom.shared.min.s32",
+        "atom.shared.max.s32",
+        "atom.shared.and.b32",
+        "atom.shared.or.b32",
+        "atom.shared.xor.b32",
+    ];
+    const POST_KNOWN_SHARED_ATOMIC_MNEMONICS: &[&str] = &[
+        "atom.shared.add.u32",
+        "atom.shared.exch.b32",
+        "atom.shared.cas.b32",
+        "atom.shared.inc.u32",
+        "atom.shared.dec.u32",
+        "atom.shared.and.b32",
+    ];
+    const SHARED_REDUCTION_MNEMONICS: &[&str] = &[
+        "red.shared.add.u32",
+        "red.shared.inc.u32",
+        "red.shared.dec.u32",
+        "red.shared.min.u32",
+        "red.shared.max.u32",
+        "red.shared.min.s32",
+        "red.shared.max.s32",
+        "red.shared.and.b32",
+        "red.shared.or.b32",
+        "red.shared.xor.b32",
+    ];
+    const POST_KNOWN_SHARED_REDUCTION_MNEMONICS: &[&str] = &[
+        "red.shared.add.u32",
+        "red.shared.inc.u32",
+        "red.shared.dec.u32",
+        "red.shared.and.b32",
+    ];
     const POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS: &[&str] = &[
         "red.global.add.u32",
         "red.global.inc.u32",
@@ -17245,6 +17660,8 @@ mod tests {
             GENERIC_MEMORY_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
+            SHARED_ATOMIC_MNEMONICS,
+            SHARED_REDUCTION_MNEMONICS,
             CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
@@ -17327,6 +17744,8 @@ mod tests {
             PREFETCH_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
+            POST_KNOWN_SHARED_ATOMIC_MNEMONICS,
+            POST_KNOWN_SHARED_REDUCTION_MNEMONICS,
             CONST_LOAD_MNEMONICS,
             LOCAL_MEM_LOAD_MNEMONICS,
             LOCAL_MEM_STORE_MNEMONICS,
@@ -20875,6 +21294,188 @@ mod tests {
             for op in ptx.lines().filter_map(predicated_mnemonic) {
                 assert!(
                     !GLOBAL_REDUCTION_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_atomic_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SHARED_ATOMIC_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in SHARED_ATOMIC_MNEMONICS.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SHARED_ATOMIC_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn predicated_shared_atomic_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SHARED_ATOMIC_MNEMONICS.len()];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SHARED_ATOMIC_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SHARED_ATOMIC_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn shared_atomic_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shared_atomics: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SHARED_ATOMIC_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_shared_atomic_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_shared_atomics: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !SHARED_ATOMIC_MNEMONICS.contains(&op),
+                    "seed {seed:x} emitted predicated {op}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shared_reduction_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SHARED_REDUCTION_MNEMONICS.len()];
+
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in SHARED_REDUCTION_MNEMONICS.iter().enumerate() {
+                found[i] |= has_mnemonic(&ptx, mnemonic);
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SHARED_REDUCTION_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn predicated_shared_reduction_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; SHARED_REDUCTION_MNEMONICS.len()];
+
+        for seed in 0..16384 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                for (i, mnemonic) in SHARED_REDUCTION_MNEMONICS.iter().enumerate() {
+                    found[i] |= op == *mnemonic;
+                }
+            }
+            if found.iter().all(|seen| *seen) {
+                break;
+            }
+        }
+
+        let missing: Vec<_> = SHARED_REDUCTION_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit predicated {missing:?}"
+        );
+    }
+
+    #[test]
+    fn shared_reduction_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shared_reductions: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SHARED_REDUCTION_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn predicated_shared_reduction_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_predicated_shared_reductions: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..1024 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for op in ptx.lines().filter_map(predicated_mnemonic) {
+                assert!(
+                    !SHARED_REDUCTION_MNEMONICS.contains(&op),
                     "seed {seed:x} emitted predicated {op}"
                 );
             }

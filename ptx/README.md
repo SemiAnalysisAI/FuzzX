@@ -308,6 +308,10 @@ that feature.
 | `DIV_DISABLE_CONST_MEMORY` | Bounded read-only `ld.const.{u8,s8,u16,s16,u32,u64,s64}` loads from a module-scope constant buffer. |
 | `DIV_DISABLE_LOCAL_MEMORY` | Bounded private local-memory store/load roundtrips, including 64-bit forms. |
 | `DIV_DISABLE_SHARED_MEMORY` | Race-free per-thread shared-memory store/load roundtrips, including 64-bit forms. |
+| `DIV_DISABLE_SHARED_ATOMICS` | Per-thread `atom.shared.{add,exch,cas,inc,dec,min,max,and,or,xor}` roundtrips through a private shared-memory slot. |
+| `DIV_DISABLE_PREDICATED_SHARED_ATOMICS` | Predicated per-thread shared atomic roundtrips. |
+| `DIV_DISABLE_SHARED_REDUCTIONS` | Per-thread `red.shared.{add,inc,dec,min,max,and,or,xor}` roundtrips through a private shared-memory slot. |
+| `DIV_DISABLE_PREDICATED_SHARED_REDUCTIONS` | Predicated per-thread shared reduction roundtrips. |
 | `DIV_DISABLE_PREDICATED_MEMORY` | Predicated forms of bounded scalar/vector memory loads and store/load roundtrips. |
 | `DIV_DISABLE_VECTOR_MEMORY` | Aligned `v2`/`v4` u32 and `v2.u64` memory loads and store/load roundtrips. |
 | `DIV_DISABLE_WIDE_MEMORY` | Scalar 64-bit and `v2.u64` memory loads and store/load roundtrips. |

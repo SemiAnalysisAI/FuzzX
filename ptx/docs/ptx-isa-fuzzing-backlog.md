@@ -25,7 +25,7 @@ made deterministic and race-free in the current differential oracle".
 | Floating point f32/f64 | `testp`, `copysign`, `add`, `sub`, `mul`, `fma`, `div`, `abs`, `neg`, `min`, `max`, `rcp`, `sqrt`, `rsqrt`, `sin`, `cos`, `lg2`, `ex2` | Inputs are sanitized to finite domains; approximate operations are used carefully because approximate results can invalidate an exact-output oracle. |
 | Packed/subword integer | `add.u16x2`, `add.s16x2`, `min.u16x2`, `max.u16x2`, scalar `.u16`/`.s16`, `mul.wide.u16`, `mad.wide.u16` | Includes `.b16` scratch-register generation and suppressors for known scalar16 families. |
 | Memory roundtrips | `ld/st.global`, generic `ld/st`, `ld/st.local`, `ld/st.shared`, `ld.const`, vector loads/stores, cache hints, volatile forms | Memory addresses are bounded to per-thread slices or private local/shared storage. Generic pointers are derived from the existing bounded global output region. |
-| Atomics and reductions | `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}`, `red.global.{add,inc,dec,min,max,and,or,xor}` | Current work adds per-thread global output-slice roundtrips. Post-known profile keeps min/max suppressed but can exercise add/inc/dec/and. |
+| Atomics and reductions | `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}`, `red.global.{add,inc,dec,min,max,and,or,xor}`, `atom.shared.{add,exch,cas,inc,dec,min,max,and,or,xor}`, `red.shared.{add,inc,dec,min,max,and,or,xor}` | Global forms use per-thread output-slice roundtrips; shared forms use per-thread private shared slots. Post-known profile keeps global min/max suppressed but can exercise add/inc/dec/and and the new shared forms. |
 | Uniform memory ordering | `membar.cta`, `membar.gl`, `membar.sys`, `fence.acq_rel.{cta,gpu,sys}`, `fence.sc.{cta,gpu,sys}` | No value result; emitted in uniform instruction stream only, so it cannot deadlock and only constrains memory ordering. |
 | Control flow | `bra`, predicated instructions, structured braces, `ret` | Generator emits arbitrary CFG or structured if/loop shapes with bounded loop counters. |
 | Special registers and predefined constants | `%tid`, `%ntid`, `%ctaid`, `%nctaid`, `%laneid`, `%nwarpid`, `WARP_SZ`, `%lanemask_*` | Read as deterministic scalar inputs; predicated forms exist for some paths. |
@@ -37,7 +37,7 @@ made deterministic and race-free in the current differential oracle".
 | High | Half precision arithmetic | `add/sub/mul/fma/neg/abs/min/max` on `.f16` and `.f16x2`; maybe `tanh`/`ex2` approximations later | Deterministic if inputs are sanitized and outputs are converted or reinterpreted into existing u32 outputs. | Add `.b16`/half scratch handling, pack/unpack helpers, and exact-or-approx oracle policy. |
 | High | Half precision comparison | `set`, `setp` for half precision | Similar to existing f32/f64 predicate materialization, with smaller state. | Add half value synthesis and predicate result tracking. |
 | High | `cvt.pack` and more packed conversions | `cvt.pack`, f16/bf16/tf32 conversions, narrower integer pack/unpack forms | Mostly pure dataflow; good optimizer surface around rounding, saturation, and bit packing. | Add typed scratch registers and avoid approximate/boundary cases unless marked intentionally inexact. |
-| High | More atomics/reductions | Shared-memory atomics/reductions, 64-bit integer atomics, floating add/exch/CAS where supported | Private shared slot and per-thread global slice preserve determinism; old/new values can be folded into outputs. | Extend atomic op/type matrix and add shared-memory address setup. |
+| High | More atomics/reductions | 64-bit integer atomics, floating add/exch/CAS where supported, and shared-memory variants beyond the current 32-bit integer set | Private shared slots and per-thread global slices preserve determinism; old/new values can be folded into outputs. | Extend atomic op/type matrix and add type-specific reload/folding logic. |
 | High | Warp vote/shuffle dataflow | `shfl.sync`, `vote.sync`, `match.sync`, `activemask`, `redux.sync`, `elect.sync` | With a full 32-lane mask and no divergent control around the instruction, these are deterministic across the single CTA. | Add a "warp-uniform island" emitter that guarantees all named lanes execute the instruction. |
 | Medium | Branch table control flow | `brx.idx` | Safe if index is masked to an in-range table and every target rejoins normally. | Generate dense local label tables and bounded index computations. |
 | Medium | Device helper calls | `call`, explicit function ABI patterns | Deterministic helper functions can stress inliner, ABI lowering, and register passing. | Add a small generated `.func` library and marshal params/returns without recursion. |
@@ -68,10 +68,8 @@ made deterministic and race-free in the current differential oracle".
 
 ## Suggested next slices
 
-1. Add shared-memory atomics/reductions because the new global atomic framework
-   can be reused with the existing per-thread shared slot.
-2. Add half-precision scalar arithmetic and conversion, starting with exact-ish
+1. Add half-precision scalar arithmetic and conversion, starting with exact-ish
    forms and excluding approximations until the oracle is defined.
-3. Add a warp-uniform island emitter, then implement `shfl.sync`, `vote.sync`,
+2. Add a warp-uniform island emitter, then implement `shfl.sync`, `vote.sync`,
    `match.sync`, `activemask`, and `redux.sync`.
-4. Add `brx.idx` branch tables after the next long clean fuzz interval.
+3. Add `brx.idx` branch tables after the next long clean fuzz interval.
