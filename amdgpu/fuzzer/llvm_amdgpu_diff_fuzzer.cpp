@@ -5278,6 +5278,230 @@ Value *emitRandomBytePrefixIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
   }
 }
 
+Value *emitRandomOverflowChainIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                    Value *A, Value *Bv,
+                                    std::minstd_rand &Gen,
+                                    StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Value *C = interestingI32(Ctx, Gen);
+
+  auto CallOverflow = [&](Intrinsic::ID ID, Value *X, Value *Y,
+                          const Twine &Name) {
+    FunctionCallee Fn = Intrinsic::getOrInsertDeclaration(&M, ID, {I32});
+    Value *Pair = B.CreateCall(Fn, {X, Y}, Name + ".call");
+    Value *ResultValue = B.CreateExtractValue(Pair, {0}, Name + ".value");
+    Value *OverflowBit = B.CreateExtractValue(Pair, {1}, Name + ".overflow");
+    return std::pair<Value *, Value *>(ResultValue, OverflowBit);
+  };
+
+  auto AddPair = CallOverflow(Intrinsic::uadd_with_overflow, A, Bv,
+                              Twine(NamePrefix) + ".uadd0");
+  Value *Add0 = AddPair.first;
+  Value *AddOv0 = AddPair.second;
+  Value *Carry0 = B.CreateZExt(AddOv0, I32, Twine(NamePrefix) + ".carry0");
+  auto SubPair =
+      CallOverflow(Intrinsic::usub_with_overflow, Add0,
+                   B.CreateAdd(C, Carry0, Twine(NamePrefix) + ".sub.rhs"),
+                   Twine(NamePrefix) + ".usub0");
+  Value *Sub0 = SubPair.first;
+  Value *SubOv0 = SubPair.second;
+  Value *Borrow0 = B.CreateZExt(SubOv0, I32, Twine(NamePrefix) + ".borrow0");
+
+  switch (Gen() % 6) {
+  case 0:
+    return B.CreateAdd(Sub0, Borrow0, Twine(NamePrefix) + ".sub.borrow.add");
+  case 1: {
+    auto MulPair =
+        CallOverflow(Intrinsic::umul_with_overflow, Sub0,
+                     B.CreateOr(Bv, ci32(Ctx, 1), Twine(NamePrefix) + ".mul.nz"),
+                     Twine(NamePrefix) + ".umul0");
+    Value *Mul0 = MulPair.first;
+    Value *MulOv0 = MulPair.second;
+    Value *MulOvI32 = B.CreateZExt(MulOv0, I32, Twine(NamePrefix) + ".mul.ov");
+    return B.CreateXor(Mul0, MulOvI32, Twine(NamePrefix) + ".mul.mix");
+  }
+  case 2: {
+    auto SAddPair =
+        CallOverflow(Intrinsic::sadd_with_overflow, Sub0, C,
+                     Twine(NamePrefix) + ".sadd0");
+    Value *SAdd = SAddPair.first;
+    Value *SAddOv = SAddPair.second;
+    Value *Mask = buildPredicateMask(B, SAddOv, Gen,
+                                     Twine(NamePrefix) + ".sadd.mask");
+    return B.CreateOr(B.CreateAnd(SAdd, Mask, Twine(NamePrefix) + ".sadd.keep"),
+                      B.CreateAnd(A,
+                                  B.CreateXor(Mask, ci32(Ctx, 0xffffffffu),
+                                              Twine(NamePrefix) + ".sadd.not"),
+                                  Twine(NamePrefix) + ".sadd.fallback"),
+                      Twine(NamePrefix) + ".sadd.select");
+  }
+  case 3: {
+    auto SSubPair =
+        CallOverflow(Intrinsic::ssub_with_overflow, A, Sub0,
+                     Twine(NamePrefix) + ".ssub0");
+    Value *SSub = SSubPair.first;
+    Value *SSubOv = SSubPair.second;
+    Value *SSubOvI32 = B.CreateZExt(SSubOv, I32, Twine(NamePrefix) + ".ssub.ov");
+    return B.CreateSub(SSub, SSubOvI32, Twine(NamePrefix) + ".ssub.mix");
+  }
+  case 4: {
+    Value *Both = B.CreateAnd(AddOv0, SubOv0, Twine(NamePrefix) + ".both.ov");
+    return B.CreateSelect(Both, B.CreateXor(Sub0, C,
+                                            Twine(NamePrefix) + ".both.xor"),
+                          B.CreateAdd(Sub0, Carry0,
+                                      Twine(NamePrefix) + ".both.add"),
+                          Twine(NamePrefix) + ".both.select");
+  }
+  default: {
+    Value *Any = B.CreateOr(AddOv0, SubOv0, Twine(NamePrefix) + ".any.ov");
+    Value *AnyI32 = B.CreateZExt(Any, I32, Twine(NamePrefix) + ".any.i32");
+    return B.CreateXor(B.CreateAdd(Add0, Sub0, Twine(NamePrefix) + ".sum"),
+                       AnyI32, Twine(NamePrefix) + ".any.mix");
+  }
+  }
+}
+
+Value *emitRandomSelectLookupIdiom(IRBuilder<NoFolder> &B, Value *A, Value *Bv,
+                                   std::minstd_rand &Gen,
+                                   StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Value *IndexSeed = (Gen() & 1u) ? A : Bv;
+  Value *Index = B.CreateAnd(IndexSeed, ci32(Ctx, 7),
+                             Twine(NamePrefix) + ".index");
+  Value *Result = interestingI32(Ctx, Gen);
+  for (unsigned I = 0; I != 8; ++I) {
+    Value *Base = (I & 1u) ? A : Bv;
+    Value *Other = (I & 1u) ? Bv : A;
+    Value *Entry = nullptr;
+    switch ((Gen() + I) % 5) {
+    case 0:
+      Entry = B.CreateAdd(Base, ci32(Ctx, I * 17 + 1),
+                          Twine(NamePrefix) + ".entry.add");
+      break;
+    case 1:
+      Entry = B.CreateXor(Base, B.CreateShl(Other, ci32(Ctx, I & 7u),
+                                            Twine(NamePrefix) + ".entry.shl"),
+                          Twine(NamePrefix) + ".entry.xor");
+      break;
+    case 2:
+      Entry = B.CreateOr(B.CreateAnd(Base, ci32(Ctx, 0xffu << ((I & 3u) * 8)),
+                                     Twine(NamePrefix) + ".entry.mask"),
+                         Other, Twine(NamePrefix) + ".entry.or");
+      break;
+    case 3:
+      Entry = B.CreateSub(B.CreateLShr(Base, ci32(Ctx, I & 15u),
+                                       Twine(NamePrefix) + ".entry.shr"),
+                          Other, Twine(NamePrefix) + ".entry.sub");
+      break;
+    default: {
+      Value *Cmp = B.CreateICmpULT(Base, Other, Twine(NamePrefix) + ".entry.cmp");
+      Entry = B.CreateSelect(Cmp, Base, Other, Twine(NamePrefix) + ".entry.sel");
+      break;
+    }
+    }
+    Value *IsEntry = B.CreateICmpEQ(Index, ci32(Ctx, I),
+                                    Twine(NamePrefix) + ".entry.is");
+    Result = B.CreateSelect(IsEntry, Entry, Result,
+                            Twine(NamePrefix) + ".entry.pick");
+  }
+  return Result;
+}
+
+Value *emitRandomNibbleReduceIdiom(IRBuilder<NoFolder> &B, Module &M, Value *A,
+                                   Value *Bv, std::minstd_rand &Gen,
+                                   StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  FunctionCallee Ctpop =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ctpop, {I32});
+  FunctionCallee Cttz =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::cttz, {I32});
+  SmallVector<Value *, 8> Nibbles;
+  for (unsigned I = 0; I != 8; ++I) {
+    Value *Src = (I & 1u) ? A : Bv;
+    Value *Shifted = B.CreateLShr(Src, ci32(Ctx, I * 4),
+                                  Twine(NamePrefix) + ".nib.shr");
+    Nibbles.push_back(B.CreateAnd(Shifted, ci32(Ctx, 0xf),
+                                  Twine(NamePrefix) + ".nib"));
+  }
+
+  switch (Gen() % 6) {
+  case 0: {
+    Value *Packed = ci32(Ctx, 0);
+    for (unsigned I = 0; I != 8; ++I) {
+      Value *Pop = B.CreateCall(Ctpop, {Nibbles[I]},
+                                Twine(NamePrefix) + ".pop");
+      Value *Nib = B.CreateAnd(Pop, ci32(Ctx, 0xf),
+                               Twine(NamePrefix) + ".pop.nib");
+      Packed = B.CreateOr(Packed, B.CreateShl(Nib, ci32(Ctx, I * 4),
+                                              Twine(NamePrefix) + ".pop.shl"),
+                          Twine(NamePrefix) + ".pop.pack");
+    }
+    return Packed;
+  }
+  case 1: {
+    Value *Count = ci32(Ctx, 0);
+    for (Value *Nib : Nibbles) {
+      Value *NonZero =
+          B.CreateZExt(B.CreateICmpNE(Nib, ci32(Ctx, 0),
+                                      Twine(NamePrefix) + ".nz"),
+                       I32, Twine(NamePrefix) + ".nz.i32");
+      Count = B.CreateAdd(Count, NonZero, Twine(NamePrefix) + ".nz.count");
+    }
+    return B.CreateXor(Count, A, Twine(NamePrefix) + ".nz.mix");
+  }
+  case 2: {
+    Value *First = ci32(Ctx, 8);
+    for (int I = 7; I >= 0; --I) {
+      Value *NonZero = B.CreateICmpNE(Nibbles[I], ci32(Ctx, 0),
+                                      Twine(NamePrefix) + ".first.nz");
+      First = B.CreateSelect(NonZero, ci32(Ctx, I), First,
+                             Twine(NamePrefix) + ".first.select");
+    }
+    return B.CreateAdd(First, Bv, Twine(NamePrefix) + ".first.add");
+  }
+  case 3: {
+    Value *Parity = ci32(Ctx, 0);
+    for (unsigned I = 0; I != 8; ++I) {
+      Value *Pop = B.CreateCall(Ctpop, {Nibbles[I]},
+                                Twine(NamePrefix) + ".parity.pop");
+      Value *Bit = B.CreateAnd(Pop, ci32(Ctx, 1),
+                               Twine(NamePrefix) + ".parity.bit");
+      Parity = B.CreateOr(Parity, B.CreateShl(Bit, ci32(Ctx, I),
+                                              Twine(NamePrefix) + ".parity.shl"),
+                          Twine(NamePrefix) + ".parity.pack");
+    }
+    return B.CreateXor(Parity, Bv, Twine(NamePrefix) + ".parity.mix");
+  }
+  case 4: {
+    Value *Packed = ci32(Ctx, 0);
+    for (unsigned I = 0; I != 8; ++I) {
+      Value *Tz = B.CreateCall(Cttz, {Nibbles[I], ConstantInt::getFalse(Ctx)},
+                               Twine(NamePrefix) + ".cttz");
+      Value *Nib = B.CreateAnd(Tz, ci32(Ctx, 0xf),
+                               Twine(NamePrefix) + ".cttz.nib");
+      Packed = B.CreateOr(Packed, B.CreateShl(Nib, ci32(Ctx, I * 4),
+                                              Twine(NamePrefix) + ".cttz.shl"),
+                          Twine(NamePrefix) + ".cttz.pack");
+    }
+    return Packed;
+  }
+  default: {
+    Value *Accum = ci32(Ctx, Gen() & 0xffu);
+    for (unsigned I = 0; I != 8; ++I) {
+      Value *Scaled = B.CreateMul(Nibbles[I], ci32(Ctx, I + 1),
+                                  Twine(NamePrefix) + ".scaled");
+      Accum = (I & 1u) ? B.CreateXor(Accum, Scaled,
+                                     Twine(NamePrefix) + ".acc.xor")
+                       : B.CreateAdd(Accum, Scaled,
+                                     Twine(NamePrefix) + ".acc.add");
+    }
+    return Accum;
+  }
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -5287,7 +5511,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 242) {
+  switch (Gen() % 266) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -5635,6 +5859,36 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 224:
   case 225:
     return emitRandomBytePrefixIdiom(B, A, Bv, Gen, "fuzz.byteprefix.idiom");
+  case 226:
+  case 227:
+  case 228:
+  case 229:
+  case 230:
+  case 231:
+  case 232:
+  case 233:
+    return emitRandomOverflowChainIdiom(B, M, A, Bv, Gen,
+                                        "fuzz.ovchain.idiom");
+  case 234:
+  case 235:
+  case 236:
+  case 237:
+  case 238:
+  case 239:
+  case 240:
+  case 241:
+    return emitRandomSelectLookupIdiom(B, A, Bv, Gen,
+                                       "fuzz.lookup.idiom");
+  case 242:
+  case 243:
+  case 244:
+  case 245:
+  case 246:
+  case 247:
+  case 248:
+  case 249:
+    return emitRandomNibbleReduceIdiom(B, M, A, Bv, Gen,
+                                       "fuzz.nibble.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -5669,7 +5923,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 226) {
+  switch (Gen() % 250) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -6013,6 +6267,36 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 217:
     return emitRandomBytePrefixIdiom(B, A, Bv, Gen,
                                      "fuzz.cfg.byteprefix.idiom");
+  case 218:
+  case 219:
+  case 220:
+  case 221:
+  case 222:
+  case 223:
+  case 224:
+  case 225:
+    return emitRandomOverflowChainIdiom(B, M, A, Bv, Gen,
+                                        "fuzz.cfg.ovchain.idiom");
+  case 226:
+  case 227:
+  case 228:
+  case 229:
+  case 230:
+  case 231:
+  case 232:
+  case 233:
+    return emitRandomSelectLookupIdiom(B, A, Bv, Gen,
+                                       "fuzz.cfg.lookup.idiom");
+  case 234:
+  case 235:
+  case 236:
+  case 237:
+  case 238:
+  case 239:
+  case 240:
+  case 241:
+    return emitRandomNibbleReduceIdiom(B, M, A, Bv, Gen,
+                                       "fuzz.cfg.nibble.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
