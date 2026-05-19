@@ -956,6 +956,9 @@ enum WarpCollectiveOp {
     ReduxAdd,
     ReduxMin,
     ReduxMax,
+    ReduxAddS,
+    ReduxMinS,
+    ReduxMaxS,
     ReduxAnd,
     ReduxOr,
     ReduxXor,
@@ -979,6 +982,9 @@ impl WarpCollectiveOp {
             WarpCollectiveOp::ReduxAdd => "redux.sync.add.u32",
             WarpCollectiveOp::ReduxMin => "redux.sync.min.u32",
             WarpCollectiveOp::ReduxMax => "redux.sync.max.u32",
+            WarpCollectiveOp::ReduxAddS => "redux.sync.add.s32",
+            WarpCollectiveOp::ReduxMinS => "redux.sync.min.s32",
+            WarpCollectiveOp::ReduxMaxS => "redux.sync.max.s32",
             WarpCollectiveOp::ReduxAnd => "redux.sync.and.b32",
             WarpCollectiveOp::ReduxOr => "redux.sync.or.b32",
             WarpCollectiveOp::ReduxXor => "redux.sync.xor.b32",
@@ -8463,6 +8469,9 @@ impl<'a> Generator<'a> {
             WarpCollectiveOp::ReduxAdd,
             WarpCollectiveOp::ReduxMin,
             WarpCollectiveOp::ReduxMax,
+            WarpCollectiveOp::ReduxAddS,
+            WarpCollectiveOp::ReduxMinS,
+            WarpCollectiveOp::ReduxMaxS,
             WarpCollectiveOp::ReduxAnd,
             WarpCollectiveOp::ReduxOr,
             WarpCollectiveOp::ReduxXor,
@@ -11413,6 +11422,9 @@ impl<'a> Generator<'a> {
                 WarpCollectiveOp::ReduxAdd
                 | WarpCollectiveOp::ReduxMin
                 | WarpCollectiveOp::ReduxMax
+                | WarpCollectiveOp::ReduxAddS
+                | WarpCollectiveOp::ReduxMinS
+                | WarpCollectiveOp::ReduxMaxS
                 | WarpCollectiveOp::ReduxAnd
                 | WarpCollectiveOp::ReduxOr
                 | WarpCollectiveOp::ReduxXor => {
@@ -12050,7 +12062,8 @@ impl<'a> Generator<'a> {
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             for op in [
-                "add.u32", "min.u32", "max.u32", "and.b32", "or.b32", "xor.b32",
+                "add.u32", "min.u32", "max.u32", "add.s32", "min.s32", "max.s32",
+                "and.b32", "or.b32", "xor.b32",
             ] {
                 writeln!(
                     s,
@@ -18761,6 +18774,9 @@ mod tests {
         "redux.sync.add.u32",
         "redux.sync.min.u32",
         "redux.sync.max.u32",
+        "redux.sync.add.s32",
+        "redux.sync.min.s32",
+        "redux.sync.max.s32",
         "redux.sync.and.b32",
         "redux.sync.or.b32",
         "redux.sync.xor.b32",
