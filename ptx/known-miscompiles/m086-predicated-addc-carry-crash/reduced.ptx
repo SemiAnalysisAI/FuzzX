@@ -1,0 +1,16 @@
+.version 8.8
+.target sm_103
+.address_size 64
+
+.visible .entry k()
+{
+    .reg .pred  %p<1>;
+    .reg .b32   %r<8>;
+    .reg .b64   %rd<5>;
+    shl.b32       %r2, %r5, 24;
+    and.b32       %r1, 19, %r6;
+    setp.ne.u32   %p0, 26, %r1;
+    @!%p0 add.cc.u32 %r7, 16, %r1;
+    @!%p0 addc.u32 %r1, %r1, %r2;
+    st.global.u32   [%rd4 + 4], %r1;
+}
