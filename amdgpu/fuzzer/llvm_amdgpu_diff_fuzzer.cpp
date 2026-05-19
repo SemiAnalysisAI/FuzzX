@@ -19556,6 +19556,191 @@ Value *emitRandomFPMinMaxChainIdiom(IRBuilder<NoFolder> &B, Module &M,
   }
 }
 
+Value *emitRandomBitfieldExtractInsertChainIdiom(IRBuilder<NoFolder> &B,
+                                                 Value *A, Value *Bv,
+                                                 std::minstd_rand &Gen,
+                                                 StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  // Explicit V_BFE_U32 / V_BFI_B32 / V_BFE_I32 shapes.
+  //   BFE_U32: (a >> offset) & ((1 << width) - 1)
+  //   BFE_I32: ((a << (32 - offset - width)) >> (32 - width))  (sign-ext)
+  //   BFI:     (cond ? a : b) where cond = bit-pack mask
+  Value *Acc = A;
+  Value *Salt = Bv;
+  for (unsigned I = 0; I != 4; ++I) {
+    unsigned Off = (Gen() + I * 3u) & 0x1fu;
+    unsigned Width = 1u + ((Gen() + I * 5u) % 24u);
+    if (Off + Width > 31)
+      Width = 31 - Off;
+    if (Width == 0)
+      Width = 1;
+    unsigned Mask = (1u << Width) - 1u;
+    Value *BfeU = B.CreateAnd(B.CreateLShr(Acc, ci32(Ctx, Off),
+                                           Twine(NamePrefix) + ".bfe.u.shr"),
+                              ci32(Ctx, Mask),
+                              Twine(NamePrefix) + ".bfe.u.mask");
+    Value *BfeS = B.CreateAShr(B.CreateShl(Acc,
+                                           ci32(Ctx, 32u - Off - Width),
+                                           Twine(NamePrefix) + ".bfe.s.shl"),
+                                ci32(Ctx, 32u - Width),
+                                Twine(NamePrefix) + ".bfe.s.ashr");
+    Value *MaskVal = ci32(Ctx, Mask << Off);
+    Value *Inserted = B.CreateShl(BfeU, ci32(Ctx, Off),
+                                  Twine(NamePrefix) + ".bfe.shl.back");
+    // BFI: (Acc & ~MaskVal) | (Inserted & MaskVal)
+    Value *Bfi = B.CreateOr(B.CreateAnd(Salt,
+                                        B.CreateXor(MaskVal, ci32(Ctx, -1),
+                                                    Twine(NamePrefix) + ".not.mask"),
+                                        Twine(NamePrefix) + ".bfi.keep"),
+                             B.CreateAnd(Inserted, MaskVal,
+                                         Twine(NamePrefix) + ".bfi.insert"),
+                             Twine(NamePrefix) + ".bfi");
+    Acc = B.CreateAdd(Bfi, BfeS,
+                      Twine(NamePrefix) + ".acc.next");
+    Salt = B.CreateXor(Salt, Acc,
+                       Twine(NamePrefix) + ".salt.next");
+  }
+  switch (Gen() % 4) {
+  case 0:
+    return Acc;
+  case 1:
+    return B.CreateXor(Acc, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Acc, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(Salt, Acc, Twine(NamePrefix) + ".salt.sub");
+  }
+}
+
+Value *emitRandomI64LargeShiftCornerIdiom(IRBuilder<NoFolder> &B, Value *A,
+                                          Value *Bv,
+                                          std::minstd_rand &Gen,
+                                          StringRef NamePrefix) {
+  LLVMContext &Ctx = A->getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *I64 = Type::getInt64Ty(Ctx);
+  // i64 shifts with amounts spanning the 32-bit boundary (32-63 / 0-31).
+  // Targets the i64 shift lowering split-into-i32 path.  All shift
+  // amounts are masked to [0, 63] so behavior is defined.
+  Value *Acc = packI32PairToI64(B, A, Bv,
+                                Twine(NamePrefix) + ".pair");
+  Value *Salt = Acc;
+  static constexpr unsigned Corners[6] = {1, 15, 31, 32, 33, 47};
+  for (unsigned I = 0; I != 6; ++I) {
+    unsigned Sh = Corners[(Gen() + I) % 6];
+    Value *ShlV = B.CreateShl(Acc, ConstantInt::get(I64, Sh),
+                              Twine(NamePrefix) + ".shl");
+    Value *LshrV = B.CreateLShr(Acc, ConstantInt::get(I64, Sh),
+                                Twine(NamePrefix) + ".lshr");
+    Value *AshrV = B.CreateAShr(Acc, ConstantInt::get(I64, Sh),
+                                Twine(NamePrefix) + ".ashr");
+    Value *Mixed = nullptr;
+    switch ((Gen() + I) % 4) {
+    case 0:
+      Mixed = B.CreateXor(ShlV, LshrV,
+                          Twine(NamePrefix) + ".shl.lshr.xor");
+      break;
+    case 1:
+      Mixed = B.CreateAdd(ShlV, AshrV,
+                          Twine(NamePrefix) + ".shl.ashr.add");
+      break;
+    case 2:
+      Mixed = B.CreateOr(LshrV, AshrV,
+                          Twine(NamePrefix) + ".lshr.ashr.or");
+      break;
+    default:
+      Mixed = B.CreateSub(LshrV, B.CreateAnd(ShlV, Salt,
+                                             Twine(NamePrefix) + ".shl.and.salt"),
+                          Twine(NamePrefix) + ".lshr.shl.sub");
+      break;
+    }
+    Acc = Mixed;
+    Salt = B.CreateXor(Salt, Acc,
+                       Twine(NamePrefix) + ".salt.next");
+  }
+  Value *Folded = foldI64ToI32(B, Acc,
+                                Twine(NamePrefix) + ".fold");
+  switch (Gen() % 4) {
+  case 0:
+    return Folded;
+  case 1:
+    return B.CreateXor(Folded, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Folded, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateSub(A, Folded, Twine(NamePrefix) + ".a.sub");
+  }
+}
+
+Value *emitRandomLongIntFPRoundTripIdiom(IRBuilder<NoFolder> &B, Module &M,
+                                         Value *A, Value *Bv,
+                                         std::minstd_rand &Gen,
+                                         StringRef NamePrefix) {
+  LLVMContext &Ctx = M.getContext();
+  Type *I32 = Type::getInt32Ty(Ctx);
+  Type *FloatTy = Type::getFloatTy(Ctx);
+  FunctionCallee MinF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::minnum, {FloatTy});
+  FunctionCallee MaxF = Intrinsic::getOrInsertDeclaration(
+      &M, Intrinsic::maxnum, {FloatTy});
+  // Longer int -> FP -> int round trip with multiple FP ops in between,
+  // similar to fpintroundtrip but with more operations and conversion
+  // sites.  Each ops carefully constrains range so fptoui is always safe.
+  Value *AMasked = B.CreateAnd(A, ci32(Ctx, 0xffu),
+                               Twine(NamePrefix) + ".a.mask");
+  Value *BMasked = B.CreateAnd(Bv, ci32(Ctx, 0xffu),
+                               Twine(NamePrefix) + ".b.mask");
+  Value *AF = B.CreateUIToFP(AMasked, FloatTy,
+                             Twine(NamePrefix) + ".a.uitofp");
+  Value *BF = B.CreateUIToFP(BMasked, FloatTy,
+                             Twine(NamePrefix) + ".b.uitofp");
+  Value *One = ConstantFP::get(FloatTy, 1.0);
+  Value *Zero = ConstantFP::get(FloatTy, 0.0);
+  Value *Hundred = ConstantFP::get(FloatTy, 100.0);
+
+  Value *F1 = B.CreateFAdd(AF, BF, Twine(NamePrefix) + ".f1");
+  Value *F2 = B.CreateFMul(F1, B.CreateFAdd(BF, One,
+                                            Twine(NamePrefix) + ".bf.nz"),
+                            Twine(NamePrefix) + ".f2");
+  Value *F3 = B.CreateFDiv(F2, B.CreateFAdd(AF, One,
+                                            Twine(NamePrefix) + ".af.nz"),
+                            Twine(NamePrefix) + ".f3");
+  Value *F4 = B.CreateFSub(F3, B.CreateFMul(BF, AF,
+                                            Twine(NamePrefix) + ".ba.mul"),
+                            Twine(NamePrefix) + ".f4");
+  Value *F5 = B.CreateCall(MinF, {F4, Hundred},
+                            Twine(NamePrefix) + ".f5.min");
+  Value *F6 = B.CreateCall(MaxF, {F5, Zero},
+                            Twine(NamePrefix) + ".f6.max");
+  Value *I1 = B.CreateFPToUI(F6, I32,
+                             Twine(NamePrefix) + ".i1.fptoui");
+  // Round-trip again to ensure stability.
+  Value *F7 = B.CreateUIToFP(I1, FloatTy,
+                             Twine(NamePrefix) + ".f7.uitofp");
+  Value *F8 = B.CreateFMul(F7, B.CreateFAdd(AF, BF,
+                                            Twine(NamePrefix) + ".ab.add.f8"),
+                            Twine(NamePrefix) + ".f8.mul");
+  Value *F9 = B.CreateCall(MinF, {F8, ConstantFP::get(FloatTy,
+                                                      1024.0 * 1024.0)},
+                            Twine(NamePrefix) + ".f9.clamp");
+  Value *F10 = B.CreateCall(MaxF, {F9, Zero},
+                             Twine(NamePrefix) + ".f10.clamp");
+  Value *Result = B.CreateFPToUI(F10, I32,
+                                 Twine(NamePrefix) + ".result.fptoui");
+
+  switch (Gen() % 4) {
+  case 0:
+    return Result;
+  case 1:
+    return B.CreateXor(Result, A, Twine(NamePrefix) + ".a.xor");
+  case 2:
+    return B.CreateAdd(Result, Bv, Twine(NamePrefix) + ".b.add");
+  default:
+    return B.CreateOr(Result, ci32(Ctx, 1u),
+                      Twine(NamePrefix) + ".result.nz");
+  }
+}
+
 Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                Instruction *InsertPt, Value *Current,
                                std::minstd_rand &Gen) {
@@ -19565,7 +19750,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1650) {
+  switch (Gen() % 1674) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -21692,6 +21877,36 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1649:
     return emitRandomFPMinMaxChainIdiom(
         B, M, A, Bv, Gen, "fuzz.fpminmaxchain.idiom");
+  case 1650:
+  case 1651:
+  case 1652:
+  case 1653:
+  case 1654:
+  case 1655:
+  case 1656:
+  case 1657:
+    return emitRandomBitfieldExtractInsertChainIdiom(
+        B, A, Bv, Gen, "fuzz.bfeibfichain.idiom");
+  case 1658:
+  case 1659:
+  case 1660:
+  case 1661:
+  case 1662:
+  case 1663:
+  case 1664:
+  case 1665:
+    return emitRandomI64LargeShiftCornerIdiom(
+        B, A, Bv, Gen, "fuzz.i64largeshift.idiom");
+  case 1666:
+  case 1667:
+  case 1668:
+  case 1669:
+  case 1670:
+  case 1671:
+  case 1672:
+  case 1673:
+    return emitRandomLongIntFPRoundTripIdiom(
+        B, M, A, Bv, Gen, "fuzz.longfpinttrip.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
@@ -21726,7 +21941,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1642) {
+  switch (Gen() % 1666) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -23850,6 +24065,36 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1641:
     return emitRandomFPMinMaxChainIdiom(
         B, M, A, Bv, Gen, "fuzz.cfg.fpminmaxchain.idiom");
+  case 1642:
+  case 1643:
+  case 1644:
+  case 1645:
+  case 1646:
+  case 1647:
+  case 1648:
+  case 1649:
+    return emitRandomBitfieldExtractInsertChainIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.bfeibfichain.idiom");
+  case 1650:
+  case 1651:
+  case 1652:
+  case 1653:
+  case 1654:
+  case 1655:
+  case 1656:
+  case 1657:
+    return emitRandomI64LargeShiftCornerIdiom(
+        B, A, Bv, Gen, "fuzz.cfg.i64largeshift.idiom");
+  case 1658:
+  case 1659:
+  case 1660:
+  case 1661:
+  case 1662:
+  case 1663:
+  case 1664:
+  case 1665:
+    return emitRandomLongIntFPRoundTripIdiom(
+        B, M, A, Bv, Gen, "fuzz.cfg.longfpinttrip.idiom");
   default:
     switch (Gen() % 5) {
     case 0:
