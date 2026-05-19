@@ -3615,6 +3615,18 @@ impl FloatCmpOp {
     fn f16_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
         format!("setp.{}.{}.f16", self.suffix(), op.suffix())
     }
+
+    fn f16x2_set_mnemonic(self) -> String {
+        format!("set.{}.u32.f16x2", self.suffix())
+    }
+
+    fn f16x2_setp_mnemonic(self) -> String {
+        format!("setp.{}.f16x2", self.suffix())
+    }
+
+    fn f16x2_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
+        format!("setp.{}.{}.f16x2", self.suffix(), op.suffix())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -4034,6 +4046,34 @@ enum Inst {
     },
     /// Scalar half-precision `setp` feeding `selp.b16`.
     F16Selp {
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+    },
+    /// Packed half-precision compare materialized as packed u32 true bits.
+    F16x2Set {
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Packed half-precision `setp.<cmp>.<and|or|xor>` materialized as u32.
+    F16x2SetpBool {
+        bool_op: PredicateBoolOp,
+        base_cmp: CmpOp,
+        base_a: Operand,
+        base_b: Operand,
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        base_pred: u32,
+        pred: u32,
+    },
+    /// Packed half-precision `setp` feeding `selp.b32`.
+    F16x2Selp {
         cmp: FloatCmpOp,
         dst: u32,
         a: Operand,
@@ -4836,6 +4876,18 @@ enum Inst {
     },
     /// Instruction-predicated scalar half-precision select.
     PredicatedF16Selp {
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
+    },
+    /// Instruction-predicated packed half-precision select.
+    PredicatedF16x2Selp {
         cmp: FloatCmpOp,
         dst: u32,
         a: Operand,
@@ -8097,7 +8149,58 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_f16x2_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let pick = u.int_in_range(0..=2)?;
+        if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
+            Ok(Inst::F16x2SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+            })
+        } else if pick <= 1 {
+            if self.cfg.emit_predicated_selp && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedF16x2Selp {
+                    cmp: pick_float_cmp(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_cvt_operand(u)?,
+                    b: self.pick_cvt_operand(u)?,
+                    pred: self.alloc_pred(),
+                    guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    guard_ca: self.pick_guard_operand(u)?,
+                    guard_cb: self.pick_guard_operand(u)?,
+                    guard_pred: self.alloc_inst_pred(u)?,
+                })
+            } else {
+                Ok(Inst::F16x2Selp {
+                    cmp: pick_float_cmp(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_cvt_operand(u)?,
+                    b: self.pick_cvt_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            }
+        } else {
+            Ok(Inst::F16x2Set {
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_f16_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        if u.arbitrary::<bool>()? {
+            return self.pick_f16x2_compare(u);
+        }
+
         let pick = u.int_in_range(0..=2)?;
         if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
             Ok(Inst::F16SetpBool {
@@ -10306,6 +10409,8 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Set { dst, .. }
             | Inst::F16Set { dst, .. }
             | Inst::F16SetpBool { dst, .. }
+            | Inst::F16x2Set { dst, .. }
+            | Inst::F16x2SetpBool { dst, .. }
             | Inst::F32Set { dst, .. }
             | Inst::PredicatedF32Set { dst, .. }
             | Inst::F32SetpBool { dst, .. }
@@ -10384,6 +10489,7 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::F16Selp { dst, .. }
+            | Inst::F16x2Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
             | Inst::PredicatedGlobalLoad { dst, .. }
             | Inst::GlobalStoreRoundtrip { dst, .. }
@@ -10442,6 +10548,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedF16x2Arith { dst, .. }
             | Inst::PredicatedF16Cvt { dst, .. }
             | Inst::PredicatedF16Selp { dst, .. }
+            | Inst::PredicatedF16x2Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
             | Inst::PredLogicBin { dst, .. }
@@ -12004,6 +12111,70 @@ impl<'a> Generator<'a> {
                 writeln!(s, "    {:<13} %p{pred}, %h0, %h1;", cmp.f16_setp_mnemonic()).unwrap();
                 writeln!(s, "    selp.b16      %h2, %h0, %h1, %p{pred};").unwrap();
                 writeln!(s, "    cvt.u32.u16   %r{dst}, %h2;").unwrap();
+            }
+            Inst::F16x2Set { cmp, dst, a, b } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                writeln!(
+                    s,
+                    "    {:<13} %r{dst}, %r{a_reg}, %r{b_reg};",
+                    cmp.f16x2_set_mnemonic()
+                )
+                .unwrap();
+            }
+            Inst::F16x2SetpBool {
+                bool_op,
+                base_cmp,
+                base_a,
+                base_b,
+                cmp,
+                dst,
+                a,
+                b,
+                base_pred,
+                pred,
+            } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                write!(s, "    {:<13} %p{base_pred}, ", base_cmp.mnemonic()).unwrap();
+                base_a.emit(s);
+                write!(s, ", ").unwrap();
+                base_b.emit(s);
+                writeln!(s, ";").unwrap();
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                let mnemonic = cmp.f16x2_setp_bool_mnemonic(bool_op);
+                writeln!(
+                    s,
+                    "    {mnemonic:<13} %p{pred}, %r{a_reg}, %r{b_reg}, %p{base_pred};"
+                )
+                .unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
+            Inst::F16x2Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %r{a_reg}, %r{b_reg};",
+                    cmp.f16x2_setp_mnemonic()
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    selp.b32      %r{dst}, %r{a_reg}, %r{b_reg}, %p{pred};"
+                )
+                .unwrap();
             }
             Inst::GlobalLoad {
                 op,
@@ -14040,6 +14211,36 @@ impl<'a> Generator<'a> {
                 )
                 .unwrap();
                 writeln!(s, "    cvt.u32.u16   %r{dst}, %h2;").unwrap();
+            }
+            Inst::PredicatedF16x2Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                writeln!(
+                    s,
+                    "    {:<13} %p{pred}, %r{a_reg}, %r{b_reg};",
+                    cmp.f16x2_setp_mnemonic()
+                )
+                .unwrap();
+                writeln!(s, "    mov.b32       %r{dst}, %r{a_reg};").unwrap();
+                writeln!(
+                    s,
+                    "    {} selp.b32 %r{dst}, %r{a_reg}, %r{b_reg}, %p{pred};",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
             }
             Inst::SetpBoolBin {
                 bool_op,
@@ -18588,6 +18789,82 @@ mod tests {
         "setp.nan.xor.f16",
     ];
     const F16_SELP_MNEMONICS: &[&str] = &["selp.b16"];
+    const F16X2_SET_MNEMONICS: &[&str] = &[
+        "set.eq.u32.f16x2",
+        "set.ne.u32.f16x2",
+        "set.lt.u32.f16x2",
+        "set.le.u32.f16x2",
+        "set.gt.u32.f16x2",
+        "set.ge.u32.f16x2",
+        "set.equ.u32.f16x2",
+        "set.neu.u32.f16x2",
+        "set.ltu.u32.f16x2",
+        "set.leu.u32.f16x2",
+        "set.gtu.u32.f16x2",
+        "set.geu.u32.f16x2",
+        "set.num.u32.f16x2",
+        "set.nan.u32.f16x2",
+    ];
+    const F16X2_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.f16x2",
+        "setp.ne.f16x2",
+        "setp.lt.f16x2",
+        "setp.le.f16x2",
+        "setp.gt.f16x2",
+        "setp.ge.f16x2",
+        "setp.equ.f16x2",
+        "setp.neu.f16x2",
+        "setp.ltu.f16x2",
+        "setp.leu.f16x2",
+        "setp.gtu.f16x2",
+        "setp.geu.f16x2",
+        "setp.num.f16x2",
+        "setp.nan.f16x2",
+    ];
+    const F16X2_SETP_BOOL_MNEMONICS: &[&str] = &[
+        "setp.eq.and.f16x2",
+        "setp.eq.or.f16x2",
+        "setp.eq.xor.f16x2",
+        "setp.ne.and.f16x2",
+        "setp.ne.or.f16x2",
+        "setp.ne.xor.f16x2",
+        "setp.lt.and.f16x2",
+        "setp.lt.or.f16x2",
+        "setp.lt.xor.f16x2",
+        "setp.le.and.f16x2",
+        "setp.le.or.f16x2",
+        "setp.le.xor.f16x2",
+        "setp.gt.and.f16x2",
+        "setp.gt.or.f16x2",
+        "setp.gt.xor.f16x2",
+        "setp.ge.and.f16x2",
+        "setp.ge.or.f16x2",
+        "setp.ge.xor.f16x2",
+        "setp.equ.and.f16x2",
+        "setp.equ.or.f16x2",
+        "setp.equ.xor.f16x2",
+        "setp.neu.and.f16x2",
+        "setp.neu.or.f16x2",
+        "setp.neu.xor.f16x2",
+        "setp.ltu.and.f16x2",
+        "setp.ltu.or.f16x2",
+        "setp.ltu.xor.f16x2",
+        "setp.leu.and.f16x2",
+        "setp.leu.or.f16x2",
+        "setp.leu.xor.f16x2",
+        "setp.gtu.and.f16x2",
+        "setp.gtu.or.f16x2",
+        "setp.gtu.xor.f16x2",
+        "setp.geu.and.f16x2",
+        "setp.geu.or.f16x2",
+        "setp.geu.xor.f16x2",
+        "setp.num.and.f16x2",
+        "setp.num.or.f16x2",
+        "setp.num.xor.f16x2",
+        "setp.nan.and.f16x2",
+        "setp.nan.or.f16x2",
+        "setp.nan.xor.f16x2",
+    ];
     const F16_COMPARE_MNEMONICS: &[&str] = &[
         "set.eq.u32.f16",
         "set.ne.u32.f16",
@@ -19273,6 +19550,9 @@ mod tests {
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
             F16_SETP_BOOL_MNEMONICS,
+            F16X2_SET_MNEMONICS,
+            F16X2_SETP_MNEMONICS,
+            F16X2_SETP_BOOL_MNEMONICS,
             F16_CVT_MNEMONICS,
             BF16_TF32_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
@@ -19368,6 +19648,9 @@ mod tests {
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
             F16_SETP_BOOL_MNEMONICS,
+            F16X2_SET_MNEMONICS,
+            F16X2_SETP_MNEMONICS,
+            F16X2_SETP_BOOL_MNEMONICS,
             F16_CVT_MNEMONICS,
             BF16_TF32_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
@@ -19416,6 +19699,23 @@ mod tests {
         ptx.lines()
             .filter_map(|line| line.trim_start().split_whitespace().next())
             .any(|token| token == mnemonic)
+    }
+
+    fn has_f16x2_selp(ptx: &str) -> bool {
+        let lines: Vec<_> = ptx.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if body_mnemonic(line).is_some_and(|mnemonic| F16X2_SETP_MNEMONICS.contains(&mnemonic))
+            {
+                let end = (i + 3).min(lines.len());
+                if lines[i + 1..end]
+                    .iter()
+                    .any(|line| body_mnemonic(line) == Some("selp.b32"))
+                {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn mnemonic_occurrences(ptx: &str, mnemonic: &str) -> usize {
@@ -24644,6 +24944,41 @@ mod tests {
     }
 
     #[test]
+    fn randomized_f16x2_compare_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            emit_f32_compare: false,
+            emit_f64_compare: false,
+            emit_selp: false,
+            emit_typed_selp: false,
+            emit_set: false,
+            emit_wide_selp: false,
+            ..coverage_heavy_config()
+        };
+
+        assert_body_mnemonic_coverage(&cfg, 8192, 32768, F16X2_SET_MNEMONICS);
+        assert_body_mnemonic_coverage(&cfg, 8192, 32768, F16X2_SETP_MNEMONICS);
+        assert_body_mnemonic_coverage(&cfg, 8192, 65536, F16X2_SETP_BOOL_MNEMONICS);
+
+        let mut found_selp = false;
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            found_selp |= has_f16x2_selp(&ptx);
+            if found_selp {
+                break;
+            }
+        }
+        assert!(
+            found_selp,
+            "sample did not emit randomized f16x2 setp feeding selp.b32"
+        );
+    }
+
+    #[test]
     fn predicated_randomized_f16_selp_generation_is_reachable() {
         let cfg = GenConfig {
             emit_f16_arith: false,
@@ -24653,6 +24988,24 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, F16_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_randomized_f16x2_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            emit_f32_compare: false,
+            emit_f64_compare: false,
+            emit_selp: false,
+            emit_typed_selp: false,
+            emit_set: false,
+            emit_wide_selp: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, &["selp.b32"]);
     }
 
     #[test]
@@ -24667,6 +25020,9 @@ mod tests {
         for mnemonic in F16_COMPARE_MNEMONICS
             .iter()
             .chain(F16_SETP_BOOL_MNEMONICS.iter())
+            .chain(F16X2_SET_MNEMONICS.iter())
+            .chain(F16X2_SETP_MNEMONICS.iter())
+            .chain(F16X2_SETP_BOOL_MNEMONICS.iter())
         {
             assert!(
                 !seen.contains(mnemonic),
