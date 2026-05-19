@@ -671,6 +671,8 @@ struct Args {
     #[arg(long)]
     disable_predicated_shared_atomics: bool,
     #[arg(long)]
+    disable_shared_atomics_u64: bool,
+    #[arg(long)]
     disable_shared_reductions: bool,
     #[arg(long)]
     disable_predicated_shared_reductions: bool,
@@ -1167,6 +1169,10 @@ impl Args {
         set_bool!(self.disable_shared_memory, "DIV_DISABLE_SHARED_MEMORY");
         set_bool!(self.disable_shared_atomics, "DIV_DISABLE_SHARED_ATOMICS");
         set_bool!(
+            self.disable_shared_atomics_u64,
+            "DIV_DISABLE_SHARED_ATOMICS_U64"
+        );
+        set_bool!(
             self.disable_predicated_shared_atomics,
             "DIV_DISABLE_PREDICATED_SHARED_ATOMICS"
         );
@@ -1645,6 +1651,8 @@ impl Config {
         let disable_local_memory = env_bool("DIV_DISABLE_LOCAL_MEMORY")?.unwrap_or(false);
         let disable_shared_memory = env_bool("DIV_DISABLE_SHARED_MEMORY")?.unwrap_or(false);
         let disable_shared_atomics = env_bool("DIV_DISABLE_SHARED_ATOMICS")?.unwrap_or(false);
+        let disable_shared_atomics_u64 =
+            env_bool("DIV_DISABLE_SHARED_ATOMICS_U64")?.unwrap_or(false);
         let disable_predicated_shared_atomics =
             env_bool("DIV_DISABLE_PREDICATED_SHARED_ATOMICS")?.unwrap_or(false);
         let disable_shared_reductions = env_bool("DIV_DISABLE_SHARED_REDUCTIONS")?.unwrap_or(false);
@@ -1950,6 +1958,9 @@ impl Config {
             emit_const_memory: !disable_const_memory,
             emit_local_memory: !disable_local_memory,
             emit_shared_memory: !disable_shared_memory && !disable_mul_wide && !disable_wide_int,
+            emit_shared_atomics_u64: !disable_shared_atomics_u64
+                && !disable_shared_atomics
+                && !disable_shared_memory,
             emit_shared_atomics: !disable_shared_atomics
                 && !disable_shared_memory
                 && !disable_mul_wide

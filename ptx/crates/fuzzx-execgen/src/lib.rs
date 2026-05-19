@@ -122,6 +122,7 @@ pub struct GenConfig {
     pub emit_shared_memory: bool,
     pub emit_shared_atomics: bool,
     pub emit_predicated_shared_atomics: bool,
+    pub emit_shared_atomics_u64: bool,
     pub emit_shared_reductions: bool,
     pub emit_predicated_shared_reductions: bool,
     pub emit_predicated_memory: bool,
@@ -371,6 +372,7 @@ impl Default for GenConfig {
             emit_shared_memory: true,
             emit_shared_atomics: true,
             emit_predicated_shared_atomics: true,
+            emit_shared_atomics_u64: true,
             emit_shared_reductions: true,
             emit_predicated_shared_reductions: true,
             emit_predicated_memory: true,
@@ -12099,6 +12101,94 @@ impl<'a> Generator<'a> {
             writeln!(s, "    barrier.sync.aligned    0;").unwrap();
             writeln!(s, "    barrier.sync.aligned    0, {N_THREADS};").unwrap();
         }
+        if self.cfg.emit_shared_atomics_u64 {
+            // 64-bit shared atomics on a per-thread private slot, with the
+            // old-value return folded into the running u32 output via the
+            // low half. Each variant initialises its slot before the op so
+            // the result is deterministic.
+            let scratch = self.wide_scratch_hi_reg();
+            let s_lo = self.scratch_reg(1);
+            writeln!(s, "    mov.u64       %rd6, fuzzx_shared;").unwrap();
+            writeln!(
+                s,
+                "    mul.wide.u32  %rd7, %r{tid_reg}, {SHARED_SLOT_BYTES};"
+            )
+            .unwrap();
+            writeln!(s, "    add.s64       %rd6, %rd6, %rd7;").unwrap();
+            // atom.shared.add.u64
+            writeln!(s, "    mov.b64       %rd8, 0x100000001;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    atom.shared.add.u64 %rd9, [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.min.u64
+            writeln!(s, "    mov.b64       %rd8, 0x7;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x3;").unwrap();
+            writeln!(s, "    atom.shared.min.u64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.max.u64
+            writeln!(s, "    mov.b64       %rd8, 0x3;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x7;").unwrap();
+            writeln!(s, "    atom.shared.max.u64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.and.b64
+            writeln!(s, "    mov.b64       %rd8, 0xf0f0f0f0f0f0f0f0;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x0f0f0f0f0f0f0f0f;").unwrap();
+            writeln!(s, "    atom.shared.and.b64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.or.b64
+            writeln!(s, "    mov.b64       %rd8, 0xf0f0f0f0f0f0f0f0;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x0f0f0f0f0f0f0f0f;").unwrap();
+            writeln!(s, "    atom.shared.or.b64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.xor.b64
+            writeln!(s, "    mov.b64       %rd8, 0xa5a5a5a5a5a5a5a5;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x5a5a5a5a5a5a5a5a;").unwrap();
+            writeln!(s, "    atom.shared.xor.b64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.exch.b64
+            writeln!(s, "    mov.b64       %rd8, 0x1122334455667788;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0xaabbccddeeff0011;").unwrap();
+            writeln!(s, "    atom.shared.exch.b64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.cas.b64 (matching compare)
+            writeln!(s, "    mov.b64       %rd8, 0x1122334455667788;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0xdeadbeefcafef00d;").unwrap();
+            writeln!(
+                s,
+                "    atom.shared.cas.b64 %rd9, [%rd6 + 0], %rd8, %rd9;"
+            )
+            .unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // atom.shared.inc.u32 / dec.u32 / min.s64 / max.s64 signed
+            writeln!(s, "    mov.b64       %rd8, 0xfffffffffffffff0;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0x10;").unwrap();
+            writeln!(s, "    atom.shared.min.s64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.b64       %rd8, 0x10;").unwrap();
+            writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+            writeln!(s, "    mov.b64       %rd9, 0xfffffffffffffff0;").unwrap();
+            writeln!(s, "    atom.shared.max.s64 %rd9, [%rd6 + 0], %rd9;").unwrap();
+            writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+            writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            let _ = s_lo; // silence unused
+        }
         if self.cfg.emit_cta_barrier_reductions {
             let scratch = self.wide_scratch_hi_reg();
             writeln!(s, "    setp.lt.u32     %p0, %r{tid_reg}, 16;").unwrap();
@@ -18882,6 +18972,18 @@ mod tests {
         "atom.shared.or.b32",
         "atom.shared.xor.b32",
     ];
+    const SHARED_ATOMIC_U64_MNEMONICS: &[&str] = &[
+        "atom.shared.add.u64",
+        "atom.shared.min.u64",
+        "atom.shared.max.u64",
+        "atom.shared.min.s64",
+        "atom.shared.max.s64",
+        "atom.shared.and.b64",
+        "atom.shared.or.b64",
+        "atom.shared.xor.b64",
+        "atom.shared.exch.b64",
+        "atom.shared.cas.b64",
+    ];
     const POST_KNOWN_SHARED_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.shared.add.u32",
         "atom.shared.exch.b32",
@@ -24145,6 +24247,36 @@ mod tests {
             .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
             .collect();
         assert!(missing.is_empty(), "sample did not emit {missing:?}");
+    }
+
+    #[test]
+    fn shared_atomic_u64_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in SHARED_ATOMIC_U64_MNEMONICS {
+            assert!(
+                has_mnemonic(&ptx, mnemonic),
+                "missing {mnemonic} in deterministic prologue"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_atomic_u64_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_shared_atomics_u64: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..64 {
+            let bytes = bytes_from_seed(seed, 4096);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in SHARED_ATOMIC_U64_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
     }
 
     #[test]
