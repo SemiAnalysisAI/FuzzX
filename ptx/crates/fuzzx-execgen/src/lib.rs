@@ -814,6 +814,19 @@ impl F16ArithOp {
         }
     }
 
+    fn f16x2_mnemonic(self) -> &'static str {
+        match self {
+            F16ArithOp::Add => "add.rn.f16x2",
+            F16ArithOp::Sub => "sub.rn.f16x2",
+            F16ArithOp::Mul => "mul.rn.f16x2",
+            F16ArithOp::Fma => "fma.rn.f16x2",
+            F16ArithOp::Min => "min.f16x2",
+            F16ArithOp::Max => "max.f16x2",
+            F16ArithOp::Abs => "abs.f16x2",
+            F16ArithOp::Neg => "neg.f16x2",
+        }
+    }
+
     fn is_unary(self) -> bool {
         matches!(self, F16ArithOp::Abs | F16ArithOp::Neg)
     }
@@ -3950,6 +3963,14 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// Randomized packed half-precision arithmetic through finite `.f16x2` lanes.
+    F16x2Arith {
+        op: F16ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+    },
     /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
     Scalar16Setp {
         cmp: CmpOp,
@@ -4762,6 +4783,18 @@ enum Inst {
     },
     /// Predicated randomized scalar half-precision arithmetic.
     PredicatedF16Arith {
+        op: F16ArithOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated randomized packed half-precision arithmetic.
+    PredicatedF16x2Arith {
         op: F16ArithOp,
         dst: u32,
         a: Operand,
@@ -5934,6 +5967,14 @@ impl<'a> Generator<'a> {
 
     fn wide_scratch_hi_reg(&self) -> u32 {
         self.n_working + 1 + self.counters.len() as u32
+    }
+
+    fn scratch_reg(&self, offset: u32) -> u32 {
+        self.wide_scratch_hi_reg() + offset
+    }
+
+    fn highest_scratch_reg(&self) -> u32 {
+        self.scratch_reg(3)
     }
 
     fn build(mut self, u: &mut Unstructured) -> Result<String> {
@@ -7960,6 +8001,41 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_f16x2_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F16ArithOp::Add,
+            F16ArithOp::Sub,
+            F16ArithOp::Mul,
+            F16ArithOp::Fma,
+            F16ArithOp::Min,
+            F16ArithOp::Max,
+            F16ArithOp::Abs,
+            F16ArithOp::Neg,
+        ];
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_alu && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF16x2Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F16x2Arith {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                c: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_f16_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let pick = u.int_in_range(0..=2)?;
         if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
@@ -8893,7 +8969,11 @@ impl<'a> Generator<'a> {
                 && self.cfg.emit_bitwise_binops
                 && u.int_in_range(0..=7)? == 0
             {
-                return self.pick_f16_arith(u);
+                return if u.arbitrary::<bool>()? {
+                    self.pick_f16x2_arith(u)
+                } else {
+                    self.pick_f16_arith(u)
+                };
             }
             if (self.cfg.emit_packed_add || self.cfg.emit_packed_minmax)
                 && u.int_in_range(0..=7)? == 0
@@ -10234,6 +10314,7 @@ impl<'a> Generator<'a> {
             | Inst::PackedMinMax { dst, .. }
             | Inst::Scalar16 { dst, .. }
             | Inst::F16Arith { dst, .. }
+            | Inst::F16x2Arith { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::F16Selp { dst, .. }
@@ -10292,6 +10373,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedPackedMinMax { dst, .. }
             | Inst::PredicatedScalar16 { dst, .. }
             | Inst::PredicatedF16Arith { dst, .. }
+            | Inst::PredicatedF16x2Arith { dst, .. }
             | Inst::PredicatedF16Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
@@ -10497,7 +10579,7 @@ impl<'a> Generator<'a> {
 
     fn emit_prologue(&self, s: &mut String) {
         let tid_reg = self.tid_reg();
-        let total_regs = (self.wide_scratch_hi_reg() + 1).max(1);
+        let total_regs = (self.highest_scratch_reg() + 1).max(1);
         let mut total_pred = self.n_pred;
         if self.cfg.emit_cta_barrier_reductions {
             total_pred = total_pred.max(3);
@@ -11467,6 +11549,21 @@ impl<'a> Generator<'a> {
         writeln!(s, "    cvt.u16.u32   %h{hreg}, %r{scratch};").unwrap();
     }
 
+    fn emit_sanitized_f16x2_operand(&self, s: &mut String, dst: u32, operand: Operand) {
+        let scratch = self.wide_scratch_hi_reg();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ", 1023;").unwrap();
+        writeln!(s, "    add.u32       %r{scratch}, %r{scratch}, 0x3c00;").unwrap();
+        writeln!(s, "    cvt.u16.u32   %h0, %r{scratch};").unwrap();
+        write!(s, "    and.b32       %r{scratch}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ", 511;").unwrap();
+        writeln!(s, "    add.u32       %r{scratch}, %r{scratch}, 0x4000;").unwrap();
+        writeln!(s, "    cvt.u16.u32   %h1, %r{scratch};").unwrap();
+        writeln!(s, "    mov.b32       %r{dst}, {{%h0, %h1}};").unwrap();
+    }
+
     fn emit_raw_f32_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
         let cvt = if signed {
             "cvt.rn.f32.s32"
@@ -11603,6 +11700,33 @@ impl<'a> Generator<'a> {
                     writeln!(s, "    {:<13} %h3, %h0, %h1;", op.mnemonic()).unwrap();
                 }
                 writeln!(s, "    cvt.u32.u16   %r{dst}, %h3;").unwrap();
+            }
+            Inst::F16x2Arith { op, dst, a, b, c } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                let c_reg = self.scratch_reg(3);
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                if !op.is_unary() {
+                    self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                }
+                if op.uses_c() {
+                    self.emit_sanitized_f16x2_operand(s, c_reg, c);
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, %r{a_reg}, %r{b_reg}, %r{c_reg};",
+                        op.f16x2_mnemonic()
+                    )
+                    .unwrap();
+                } else if op.is_unary() {
+                    writeln!(s, "    {:<13} %r{dst}, %r{a_reg};", op.f16x2_mnemonic()).unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {:<13} %r{dst}, %r{a_reg}, %r{b_reg};",
+                        op.f16x2_mnemonic()
+                    )
+                    .unwrap();
+                }
             }
             Inst::Scalar16Setp {
                 cmp,
@@ -13667,6 +13791,53 @@ impl<'a> Generator<'a> {
                     .unwrap();
                 }
                 writeln!(s, "    cvt.u32.u16   %r{dst}, %h3;").unwrap();
+            }
+            Inst::PredicatedF16x2Arith {
+                op,
+                dst,
+                a,
+                b,
+                c,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                let a_reg = self.scratch_reg(1);
+                let b_reg = self.scratch_reg(2);
+                let c_reg = self.scratch_reg(3);
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_sanitized_f16x2_operand(s, a_reg, a);
+                if !op.is_unary() {
+                    self.emit_sanitized_f16x2_operand(s, b_reg, b);
+                }
+                writeln!(s, "    mov.b32       %r{dst}, %r{a_reg};").unwrap();
+                if op.uses_c() {
+                    self.emit_sanitized_f16x2_operand(s, c_reg, c);
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %r{a_reg}, %r{b_reg}, %r{c_reg};",
+                        pred_guard(pred),
+                        op.f16x2_mnemonic()
+                    )
+                    .unwrap();
+                } else if op.is_unary() {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %r{a_reg};",
+                        pred_guard(pred),
+                        op.f16x2_mnemonic()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        s,
+                        "    {} {:<8} %r{dst}, %r{a_reg}, %r{b_reg};",
+                        pred_guard(pred),
+                        op.f16x2_mnemonic()
+                    )
+                    .unwrap();
+                }
             }
             Inst::PredicatedF16Selp {
                 cmp,
@@ -18151,6 +18322,16 @@ mod tests {
         "max.f16",
         "abs.f16",
         "neg.f16",
+    ];
+    const F16X2_ARITH_MNEMONICS: &[&str] = &[
+        "add.rn.f16x2",
+        "sub.rn.f16x2",
+        "mul.rn.f16x2",
+        "fma.rn.f16x2",
+        "min.f16x2",
+        "max.f16x2",
+        "abs.f16x2",
+        "neg.f16x2",
     ];
     const F16_SET_MNEMONICS: &[&str] = &[
         "set.eq.u32.f16",
@@ -24206,6 +24387,44 @@ mod tests {
             ..coverage_heavy_config()
         };
         assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, F16_SCALAR_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn randomized_f16x2_arith_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_compare: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            emit_arbitrary_loops: false,
+            ..coverage_heavy_config()
+        };
+
+        let mut found_packed_input_synthesis = false;
+        for seed in 0..8192 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if ptx.contains("mov.b32       %r") && ptx.contains("{%h0, %h1}") {
+                found_packed_input_synthesis = true;
+                break;
+            }
+        }
+        assert!(
+            found_packed_input_synthesis,
+            "sample did not emit randomized f16x2 input synthesis"
+        );
+    }
+
+    #[test]
+    fn predicated_randomized_f16x2_arith_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_compare: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, F16X2_ARITH_MNEMONICS);
     }
 
     #[test]

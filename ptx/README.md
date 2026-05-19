@@ -336,7 +336,7 @@ that feature.
 | `DIV_DISABLE_F32_SPECIAL_MATH` | Sanitized rounded and `.ftz` f32 `sqrt`/`rcp` plus approx `rcp`, `rsqrt`, `ex2`, `lg2`, `sin`, and `cos`. |
 | `DIV_DISABLE_F32_COMPARE` | Sanitized ordered/unordered `set.*.u32.f32` and `setp.*.f32` comparisons, including `.ftz` forms, plus `testp.*.f32` classification. |
 | `DIV_DISABLE_F32_SELP` | Sanitized `setp.*.f32`, including `.ftz` forms, feeding `selp.f32`. |
-| `DIV_DISABLE_F16_ARITH` | Deterministic prologue coverage for scalar `.f16` and packed `.f16x2` add/sub/mul/fma/min/max/abs/neg, plus randomized in-body scalar `.f16` arithmetic and predicated forms. |
+| `DIV_DISABLE_F16_ARITH` | Deterministic prologue coverage and randomized in-body coverage for scalar `.f16` and packed `.f16x2` add/sub/mul/fma/min/max/abs/neg, including predicated forms. |
 | `DIV_DISABLE_F16_COMPARE` | Deterministic prologue and randomized in-body coverage for scalar `.f16` ordered/unordered `set`, `setp`, `.and/.or/.xor` setp forms, and predicate-fed `selp.b16`. |
 | `DIV_DISABLE_F16_CVT` | Deterministic prologue coverage for `.f16` conversion chains through f32, f64, integer, and packed `.f16x2` forms. |
 | `DIV_DISABLE_BF16_TF32_CVT` | Deterministic prologue coverage for `.bf16`, `.bf16x2`, and `.tf32` conversion forms. |
