@@ -55,11 +55,11 @@ and `%same1 == 0x20`. The original IR simplifies to
 | Toolchain | Result |
 | --- | --- |
 | ROCm 7.2.3 source build from tag `rocm-7.2.3`, commit `f58b06dce1f9c15707c5f808fd002e18c2accf7e`, `Release`, sanitizer coverage, no ASan | Reproduces: `O0=0x00000020`, `O2=0x00000029`. |
-| LLVM HEAD, commit `10756d32f96154f0889eda159ea9a26bc4188bda` | Reproduces: `O0=0x00000020`, `O2=0x00000029`. |
-| ROCm HEAD, commit `9115c466b3577830455f70c4f492429bf6c64b25` | Reproduces: `O0=0x00000020`, `O2=0x00000029`. |
+| LLVM HEAD, commit `0dd29960cd6102b37651cc3f58f872652099b83b`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000029`, `O2=0x00000029`. |
+| ROCm HEAD, commit `a5de13684ba84db953b28e632ea304080a4318d0`, with llvm/llvm-project#198373, llvm/llvm-project#196418, llvm/llvm-project#198412, and llvm/llvm-project#198419 applied locally | Passes: `O0=0x00000029`, `O2=0x00000029`. |
 
 ## Fuzzer Follow-Up
 
-The IR-bitcode fuzzer now suppresses `(x & y) ^ x` and its operand-swapped
-form by default. Set `FUZZX_ALLOW_M023_AND_XOR_IDENTITY=1` to re-enable this
-shape.
+The old fuzzer suppression for `(x & y) ^ x` and its operand-swapped form was
+removed after llvm/llvm-project#198419 fixed this case for the current HEAD
+campaigns.

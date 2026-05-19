@@ -12,6 +12,7 @@
 #   LLVM_APPLY_PR_198373=ON
 #   LLVM_APPLY_PR_196418=ON
 #   LLVM_APPLY_PR_198412=ON
+#   LLVM_APPLY_PR_198419=ON
 #   CMAKE_BUILD_TYPE=Release
 
 set -euo pipefail
@@ -31,6 +32,7 @@ LLVM_PROJECT_DIR="$(cd "$LLVM_PROJECT_DIR" && pwd)"
 LLVM_APPLY_PR_198373="${LLVM_APPLY_PR_198373:-ON}"
 LLVM_APPLY_PR_196418="${LLVM_APPLY_PR_196418:-ON}"
 LLVM_APPLY_PR_198412="${LLVM_APPLY_PR_198412:-ON}"
+LLVM_APPLY_PR_198419="${LLVM_APPLY_PR_198419:-ON}"
 LLVM_BUILD_DIR="${LLVM_BUILD_DIR:-$ROOT/build/llvm-fuzzer}"
 LLVM_INSTALL_DIR="${LLVM_INSTALL_DIR:-$ROOT/build/llvm-fuzzer-install}"
 LLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD:-AMDGPU;X86}"
@@ -72,6 +74,8 @@ apply_optional_patch "LLVM PR 196418" "$LLVM_APPLY_PR_196418" \
     "$ROOT/patches/llvm-pr-196418.diff"
 apply_optional_patch "LLVM PR 198412" "$LLVM_APPLY_PR_198412" \
     "$ROOT/patches/llvm-pr-198412.diff"
+apply_optional_patch "LLVM PR 198419" "$LLVM_APPLY_PR_198419" \
+    "$ROOT/patches/llvm-pr-198419.diff"
 
 cmake_args=(
     -S "$LLVM_PROJECT_DIR/llvm"

@@ -906,12 +906,6 @@ void scrubPoisonAnnotations(Module &M) {
   }
 }
 
-bool isHighBitI32Constant(const Value *V) {
-  const auto *CI = dyn_cast<ConstantInt>(V);
-  return CI && CI->getType()->isIntegerTy(32) &&
-         (CI->getZExtValue() & 0x80000000ull) != 0;
-}
-
 bool triggersM001AShrI16ZExt(const Instruction &I) {
   const auto *ZExt = dyn_cast<ZExtInst>(&I);
   if (!ZExt || !ZExt->getType()->isIntegerTy(32) ||
@@ -924,127 +918,11 @@ bool triggersM001AShrI16ZExt(const Instruction &I) {
   return isConstantIntOrVectorBelow(BO->getOperand(1), 16);
 }
 
-bool isOrWithHighBitConstantOf(const Value *MaybeOr, const Value *Other) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
-  if (!BO || BO->getOpcode() != Instruction::Or)
-    return false;
-  return (BO->getOperand(0) == Other &&
-          isHighBitI32Constant(BO->getOperand(1))) ||
-         (BO->getOperand(1) == Other &&
-          isHighBitI32Constant(BO->getOperand(0)));
-}
-
-bool triggersM019HighBitOrXor(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Xor ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  return isOrWithHighBitConstantOf(BO->getOperand(0), BO->getOperand(1)) ||
-         isOrWithHighBitConstantOf(BO->getOperand(1), BO->getOperand(0));
-}
-
-bool isOrWithOperand(const Value *MaybeOr, const Value *Operand) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
-  if (!BO || BO->getOpcode() != Instruction::Or)
-    return false;
-  return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
-}
-
-bool isXorOfOrWithOrOperand(const Value *MaybeXor, const Value *MaybeOr) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
-  if (!BO || BO->getOpcode() != Instruction::Xor)
-    return false;
-  if (BO->getOperand(0) == MaybeOr)
-    return isOrWithOperand(MaybeOr, BO->getOperand(1));
-  if (BO->getOperand(1) == MaybeOr)
-    return isOrWithOperand(MaybeOr, BO->getOperand(0));
-  return false;
-}
-
-bool triggersM020OrXorAnd(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::And ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  return isXorOfOrWithOrOperand(BO->getOperand(0), BO->getOperand(1)) ||
-         isXorOfOrWithOrOperand(BO->getOperand(1), BO->getOperand(0));
-}
-
-bool feedsM020OrXorAnd(const Instruction &I) {
-  for (const User *U : I.users())
-    if (const auto *UserI = dyn_cast<Instruction>(U))
-      if (triggersM020OrXorAnd(*UserI))
-        return true;
-  return false;
-}
-
-bool triggersM021OrXor(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Xor ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  if (triggersM019HighBitOrXor(I) || feedsM020OrXorAnd(I))
-    return false;
-  return isOrWithOperand(BO->getOperand(0), BO->getOperand(1)) ||
-         isOrWithOperand(BO->getOperand(1), BO->getOperand(0));
-}
-
-const Value *stripI32AndAllOnes(const Value *V) {
-  while (const auto *BO = dyn_cast<BinaryOperator>(V)) {
-    if (BO->getOpcode() != Instruction::And || !BO->getType()->isIntegerTy(32))
-      return V;
-    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(0))) {
-      if (C->isMinusOne()) {
-        V = BO->getOperand(1);
-        continue;
-      }
-    }
-    if (const auto *C = dyn_cast<ConstantInt>(BO->getOperand(1))) {
-      if (C->isMinusOne()) {
-        V = BO->getOperand(0);
-        continue;
-      }
-    }
-    return V;
-  }
-  return V;
-}
-
-bool isXorWithConstantOf(const Value *MaybeXor, const Value *Operand) {
-  const auto *BO = dyn_cast<BinaryOperator>(MaybeXor);
-  if (!BO || BO->getOpcode() != Instruction::Xor)
-    return false;
-  Operand = stripI32AndAllOnes(Operand);
-  return (stripI32AndAllOnes(BO->getOperand(0)) == Operand &&
-          isa<ConstantInt>(BO->getOperand(1))) ||
-         (stripI32AndAllOnes(BO->getOperand(1)) == Operand &&
-          isa<ConstantInt>(BO->getOperand(0)));
-}
-
-bool triggersM022AndXorConstant(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::And ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  const Value *LHS = stripI32AndAllOnes(BO->getOperand(0));
-  const Value *RHS = stripI32AndAllOnes(BO->getOperand(1));
-  return isXorWithConstantOf(LHS, RHS) || isXorWithConstantOf(RHS, LHS);
-}
-
 bool isAndWithOperand(const Value *MaybeAnd, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeAnd);
   if (!BO || BO->getOpcode() != Instruction::And)
     return false;
   return BO->getOperand(0) == Operand || BO->getOperand(1) == Operand;
-}
-
-bool triggersM023AndXorIdentity(const Instruction &I) {
-  const auto *BO = dyn_cast<BinaryOperator>(&I);
-  if (!BO || BO->getOpcode() != Instruction::Xor ||
-      !BO->getType()->isIntegerTy(32))
-    return false;
-  return isAndWithOperand(BO->getOperand(0), BO->getOperand(1)) ||
-         isAndWithOperand(BO->getOperand(1), BO->getOperand(0));
 }
 
 bool isI32XorWithOperand(const Value *MaybeXor, const Value *Operand) {
@@ -1701,11 +1579,6 @@ bool validateMemoryShape(Function &Kernel) {
 
 bool validateIRCorpusModule(Module &M) {
   bool AllowM001 = envFlag("FUZZX_ALLOW_M001_ASHR_I16_ZEXT", false);
-  bool AllowM019 = envFlag("FUZZX_ALLOW_M019_HIGHBIT_OR_XOR", false);
-  bool AllowM020 = envFlag("FUZZX_ALLOW_M020_OR_XOR_AND", false);
-  bool AllowM021 = envFlag("FUZZX_ALLOW_M021_OR_XOR", false);
-  bool AllowM022 = envFlag("FUZZX_ALLOW_M022_AND_XOR_CONSTANT", false);
-  bool AllowM023 = envFlag("FUZZX_ALLOW_M023_AND_XOR_IDENTITY", false);
   bool AllowM026 = envFlag("FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT", false);
   bool AllowM027 = envFlag("FUZZX_ALLOW_M027_XOR_AND_OR", false);
   bool AllowM028 = envFlag("FUZZX_ALLOW_M028_UMAX_AND_NOT", false);
@@ -1741,11 +1614,6 @@ bool validateIRCorpusModule(Module &M) {
               !isValidFPConversionInstruction(I) ||
               !isValidLoopControlInstruction(I) ||
               (!AllowM001 && triggersM001AShrI16ZExt(I)) ||
-              (!AllowM019 && triggersM019HighBitOrXor(I)) ||
-              (!AllowM020 && triggersM020OrXorAnd(I)) ||
-              (!AllowM021 && triggersM021OrXor(I)) ||
-              (!AllowM022 && triggersM022AndXorConstant(I)) ||
-              (!AllowM023 && triggersM023AndXorIdentity(I)) ||
               (!AllowM026 && triggersM026UMaxXorAnd(I)) ||
               (!AllowM027 && triggersM027XorAndOr(I)) ||
               (!AllowM028 && triggersM028UMaxAndNot(I)) ||
