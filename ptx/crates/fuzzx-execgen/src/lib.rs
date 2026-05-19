@@ -4021,6 +4021,12 @@ enum Inst {
         a: Operand,
         b: Operand,
     },
+    /// Local `brx.idx` table whose targets all immediately rejoin.
+    BranchTable {
+        label: u32,
+        dst: u32,
+        selector: Operand,
+    },
     /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
     Scalar16Setp {
         cmp: CmpOp,
@@ -6022,6 +6028,7 @@ struct Generator<'a> {
     prmt_result_regs: Vec<u32>,
     set_result_regs: Vec<u32>,
     lop3_result_regs: Vec<u32>,
+    branch_table_labels: u32,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -6041,6 +6048,7 @@ impl<'a> Generator<'a> {
             prmt_result_regs: Vec::new(),
             set_result_regs: Vec::new(),
             lop3_result_regs: Vec::new(),
+            branch_table_labels: 0,
             counters: Vec::new(),
         }
     }
@@ -6075,6 +6083,12 @@ impl<'a> Generator<'a> {
         let id = self.n_working + 1 + self.counters.len() as u32;
         self.counters.push((id, init));
         id
+    }
+
+    fn alloc_branch_table_label(&mut self) -> u32 {
+        let label = self.branch_table_labels;
+        self.branch_table_labels += 1;
+        label
     }
 
     fn wide_scratch_hi_reg(&self) -> u32 {
@@ -8214,6 +8228,17 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_branch_table(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let label = self.alloc_branch_table_label();
+        let dst = self.pick_dst(u)?;
+        let selector = self.pick_operand(u)?;
+        Ok(Inst::BranchTable {
+            label,
+            dst,
+            selector,
+        })
+    }
+
     fn pick_f16x2_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let pick = u.int_in_range(0..=2)?;
         if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
@@ -9079,6 +9104,9 @@ impl<'a> Generator<'a> {
                     op: pick_prefetch(u)?,
                     offset: u.int_in_range(0..=(input_len() as u32 - 1))?,
                 });
+            }
+            if self.cfg.emit_branch_tables && u.int_in_range(0..=15)? == 0 {
+                return self.pick_branch_table(u);
             }
             if self.cfg.emit_global_store_roundtrips
                 && can_address_thread_output
@@ -10558,6 +10586,7 @@ impl<'a> Generator<'a> {
             | Inst::F16x2Arith { dst, .. }
             | Inst::F16Cvt { dst, .. }
             | Inst::Bf16Tf32Cvt { dst, .. }
+            | Inst::BranchTable { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::F16Selp { dst, .. }
@@ -12141,6 +12170,32 @@ impl<'a> Generator<'a> {
             }
             Inst::Bf16Tf32Cvt { op, dst, a, b } => {
                 self.emit_bf16_tf32_cvt_chain(s, op, dst, a, b, None);
+            }
+            Inst::BranchTable {
+                label,
+                dst,
+                selector,
+            } => {
+                let scratch = self.wide_scratch_hi_reg();
+                write!(s, "    and.b32       %r{scratch}, ").unwrap();
+                selector.emit(s);
+                writeln!(s, ", 3;").unwrap();
+                writeln!(
+                    s,
+                    "fuzzx_inline_brx_table_{label}: .branchtargets fuzzx_inline_brx_{label}_0, fuzzx_inline_brx_{label}_1, fuzzx_inline_brx_{label}_2, fuzzx_inline_brx_{label}_3;"
+                )
+                .unwrap();
+                writeln!(
+                    s,
+                    "    brx.idx         %r{scratch}, fuzzx_inline_brx_table_{label};"
+                )
+                .unwrap();
+                for i in 0..4 {
+                    writeln!(s, "fuzzx_inline_brx_{label}_{i}:").unwrap();
+                    writeln!(s, "    add.u32         %r{dst}, %r{dst}, {};", i + 1).unwrap();
+                    writeln!(s, "    bra             fuzzx_inline_brx_done_{label};").unwrap();
+                }
+                writeln!(s, "fuzzx_inline_brx_done_{label}:").unwrap();
             }
             Inst::Scalar16Setp {
                 cmp,
@@ -23733,6 +23788,25 @@ mod tests {
             assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
         }
         assert!(ptx.contains(".branchtargets"), "missing .branchtargets");
+    }
+
+    #[test]
+    fn randomized_branch_table_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+
+        for seed in 0..4096 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            if ptx.contains("fuzzx_inline_brx_table_") {
+                assert!(
+                    mnemonic_occurrences(&ptx, "brx.idx") > 1,
+                    "inline branch table did not add a second brx.idx"
+                );
+                return;
+            }
+        }
+
+        panic!("sample did not emit an inline branch table");
     }
 
     #[test]
