@@ -21,10 +21,10 @@ made deterministic and race-free in the current differential oracle".
 | Extended-precision integer | `add.cc`, `addc`, `sub.cc`, `subc`, `mad.cc`, `madc` | Covered in 32-bit and 64-bit carry-chain forms. |
 | Logic and shift | `and`, `or`, `xor`, `not`, `cnot`, `lop3`, `shf`, `shl`, `shr` | Includes immediate and register shift counts where safe; funnel shifts use wrap/clamp-aware generation. |
 | Comparison and selection | `set`, `setp`, `selp`, `slct` | Covered for integer, predicate, f32/f64, and 64-bit paths; true-value materialization is tracked to avoid known-bug rediscovery. |
-| Data movement and conversion | `mov`, `ld`, `ld.global.nc`, `ldu`, `st`, `prmt`, `cvta`, `cvt` | Covers globals, const, local, shared, vectors, cache operators, volatile forms, narrow/wide integer conversion, f32/f64 conversion, and special registers. |
+| Data movement and conversion | `mov`, `ld`, `ld.global.nc`, `ldu`, `st`, `prmt`, `cvta`, `cvt`, `isspacep` | Covers globals, const, local, shared, generic addresses, vectors, cache operators, volatile forms, narrow/wide integer conversion, f32/f64 conversion, and special registers. |
 | Floating point f32/f64 | `testp`, `copysign`, `add`, `sub`, `mul`, `fma`, `div`, `abs`, `neg`, `min`, `max`, `rcp`, `sqrt`, `rsqrt`, `sin`, `cos`, `lg2`, `ex2` | Inputs are sanitized to finite domains; approximate operations are used carefully because approximate results can invalidate an exact-output oracle. |
 | Packed/subword integer | `add.u16x2`, `add.s16x2`, `min.u16x2`, `max.u16x2`, scalar `.u16`/`.s16`, `mul.wide.u16`, `mad.wide.u16` | Includes `.b16` scratch-register generation and suppressors for known scalar16 families. |
-| Memory roundtrips | `ld/st.global`, `ld/st.local`, `ld/st.shared`, `ld.const`, vector loads/stores, cache hints, volatile forms | Memory addresses are bounded to per-thread slices or private local/shared storage. |
+| Memory roundtrips | `ld/st.global`, generic `ld/st`, `ld/st.local`, `ld/st.shared`, `ld.const`, vector loads/stores, cache hints, volatile forms | Memory addresses are bounded to per-thread slices or private local/shared storage. Generic pointers are derived from the existing bounded global output region. |
 | Atomics and reductions | `atom.global.{add,exch,cas,inc,dec,min,max,and,or,xor}`, `red.global.{add,inc,dec,min,max,and,or,xor}` | Current work adds per-thread global output-slice roundtrips. Post-known profile keeps min/max suppressed but can exercise add/inc/dec/and. |
 | Control flow | `bra`, predicated instructions, structured braces, `ret` | Generator emits arbitrary CFG or structured if/loop shapes with bounded loop counters. |
 | Special registers and predefined constants | `%tid`, `%ntid`, `%ctaid`, `%nctaid`, `%laneid`, `%nwarpid`, `WARP_SZ`, `%lanemask_*` | Read as deterministic scalar inputs; predicated forms exist for some paths. |
@@ -38,7 +38,6 @@ made deterministic and race-free in the current differential oracle".
 | High | `cvt.pack` and more packed conversions | `cvt.pack`, f16/bf16/tf32 conversions, narrower integer pack/unpack forms | Mostly pure dataflow; good optimizer surface around rounding, saturation, and bit packing. | Add typed scratch registers and avoid approximate/boundary cases unless marked intentionally inexact. |
 | High | More atomics/reductions | Shared-memory atomics/reductions, 64-bit integer atomics, floating add/exch/CAS where supported | Private shared slot and per-thread global slice preserve determinism; old/new values can be folded into outputs. | Extend atomic op/type matrix and add shared-memory address setup. |
 | High | Warp vote/shuffle dataflow | `shfl.sync`, `vote.sync`, `match.sync`, `activemask`, `redux.sync`, `elect.sync` | With a full 32-lane mask and no divergent control around the instruction, these are deterministic across the single CTA. | Add a "warp-uniform island" emitter that guarantees all named lanes execute the instruction. |
-| Medium | Generic-address memory | generic `ld`/`st`, `isspacep`, more `cvta` forms | Existing addresses can be converted to generic and checked with `isspacep`; loads/stores stay within private regions. | Add generic pointer regs and address-space classification asserts folded into outputs. |
 | Medium | Branch table control flow | `brx.idx` | Safe if index is masked to an in-range table and every target rejoins normally. | Generate dense local label tables and bounded index computations. |
 | Medium | Device helper calls | `call`, explicit function ABI patterns | Deterministic helper functions can stress inliner, ABI lowering, and register passing. | Add a small generated `.func` library and marshal params/returns without recursion. |
 | Medium | Uniform synchronization/fences | `membar`/`fence`, `bar.warp.sync`, possibly `bar.sync` in uniform regions | Fences have no direct value but can legally sit around memory roundtrips; barriers are safe only when all participating threads reach them. | Add uniform-only insertion points and avoid divergent/early-exit paths. |
@@ -68,12 +67,10 @@ made deterministic and race-free in the current differential oracle".
 
 ## Suggested next slices
 
-1. Add generic-address `ld/st` plus `isspacep` because it reuses the existing
-   memory safety model and stresses address-space lowering.
-2. Add shared-memory atomics/reductions because the new global atomic framework
+1. Add shared-memory atomics/reductions because the new global atomic framework
    can be reused with the existing per-thread shared slot.
-3. Add half-precision scalar arithmetic and conversion, starting with exact-ish
+2. Add half-precision scalar arithmetic and conversion, starting with exact-ish
    forms and excluding approximations until the oracle is defined.
-4. Add a warp-uniform island emitter, then implement `shfl.sync`, `vote.sync`,
+3. Add a warp-uniform island emitter, then implement `shfl.sync`, `vote.sync`,
    `match.sync`, `activemask`, and `redux.sync`.
-5. Add `brx.idx` branch tables after the next long clean fuzz interval.
+4. Add `brx.idx` branch tables after the next long clean fuzz interval.
