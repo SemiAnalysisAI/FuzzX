@@ -11986,24 +11986,30 @@ impl<'a> Generator<'a> {
         }
         if self.cfg.emit_cvt_pack {
             let scratch = self.wide_scratch_hi_reg();
-            writeln!(s, "    mov.s32         %r1, -40000;").unwrap();
-            writeln!(s, "    mov.s32         %r2, 40000;").unwrap();
-            writeln!(s, "    cvt.pack.sat.s16.s32 %r{scratch}, %r1, %r2;").unwrap();
+            let s1 = self.scratch_reg(1);
+            let s2 = self.scratch_reg(2);
+            let s3 = self.scratch_reg(3);
+            // Use scratch regs (not %r1/%r2/%r3 output pool) for the cvt.pack
+            // operand setup — same anti-pattern that m085 exploited in the
+            // bf16/tf32 prologue.
+            writeln!(s, "    mov.s32         %r{s1}, -40000;").unwrap();
+            writeln!(s, "    mov.s32         %r{s2}, 40000;").unwrap();
+            writeln!(s, "    cvt.pack.sat.s16.s32 %r{scratch}, %r{s1}, %r{s2};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.u16.s32 %r{scratch}, %r1, %r2;").unwrap();
+            writeln!(s, "    cvt.pack.sat.u16.s32 %r{scratch}, %r{s1}, %r{s2};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    mov.u32         %r3, 0x88776655;").unwrap();
-            writeln!(s, "    cvt.pack.sat.u8.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    mov.u32         %r{s3}, 0x88776655;").unwrap();
+            writeln!(s, "    cvt.pack.sat.u8.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.s8.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    cvt.pack.sat.s8.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.u4.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    cvt.pack.sat.u4.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.s4.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    cvt.pack.sat.s4.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.u2.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    cvt.pack.sat.u2.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
-            writeln!(s, "    cvt.pack.sat.s2.s32.b32 %r{scratch}, %r1, %r2, %r3;").unwrap();
+            writeln!(s, "    cvt.pack.sat.s2.s32.b32 %r{scratch}, %r{s1}, %r{s2}, %r{s3};").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_warp_barriers {
