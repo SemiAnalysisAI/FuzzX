@@ -131,6 +131,7 @@ Version | Description |
 | 13.2.78 | [m076-predicated-mad-loop-liveout-fold](known-miscompiles/m076-predicated-mad-loop-liveout-fold/NOTES.md): Loop-body predicated `mad.lo.u32` update is dropped, leaving `%tid.x` instead of `%lanemask_gt` under optimized ptxas. |
 | 13.2.78 | [m077-global-store-loop-liveout-fold](known-miscompiles/m077-global-store-loop-liveout-fold/NOTES.md): Loop-carried value reset after a per-thread global store is ignored, so the final `mad.lo.s32` uses stale pre-store state. |
 | 13.2.78 | [m078-mul-lo-loop-recurrence-fold](known-miscompiles/m078-mul-lo-loop-recurrence-fold/NOTES.md): Low-multiply loop recurrence is skipped for some lanes, leaving `input | 0x20` instead of the iterated value under optimized ptxas. |
+| 13.2.78 | [m079-predicated-packed-add-high-half](known-miscompiles/m079-predicated-packed-add-high-half/NOTES.md): Predicated `add.u16x2` in a branch-local path leaves the low half correct but fills the high half with `%tid.x` under optimized ptxas. |
 | 13.2.78 | [m059-scalar16-pred-mulwide-fold](known-miscompiles/m059-scalar16-pred-mulwide-fold/NOTES.md): Scalar `max.s16` feeding a predicate-guarded `mul.wide.u16` is optimized as if the multiply did not execute. |
 | 13.2.78 | [m025-shl-xor-square-lowbits](known-miscompiles/m025-shl-xor-square-lowbits/NOTES.md): Fold loses the fact that a value is shifted left before testing low bits. |
 | 13.2.78 | [m026-shr-abs-ult-fold](known-miscompiles/m026-shr-abs-ult-fold/NOTES.md): Fold reasons about `0 - abs(n)` as signed or non-wrapping before unsigned compare. |
@@ -312,6 +313,7 @@ that feature.
 | `DIV_DISABLE_MEMORY_CACHE_OPS` | Scalar/vector global-memory cache-policy variants such as `ld.global.ca`, `ld.global.nc`, and `st.global.wt`. |
 | `DIV_DISABLE_VOLATILE_MEMORY` | Volatile scalar/vector global and shared memory loads and store/load roundtrips. |
 | `DIV_DISABLE_BIT_MEMORY` | Scalar/vector memory load/store type suffixes such as `.b8`, `.b16`, `.b32`, and `.b64`. |
+| `DIV_DISABLE_MEMORY_FENCES` | Uniform `membar.{cta,gl,sys}` memory-ordering instructions. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |

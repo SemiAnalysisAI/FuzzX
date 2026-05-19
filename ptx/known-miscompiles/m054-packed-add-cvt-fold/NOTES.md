@@ -40,4 +40,8 @@ release 13.0, V13.0.88
 cuda_13.0.r13.0/compiler.36424714_0
 ```
 
+Retested on 2026-05-19 with CUDA Toolkit 13.2 Update 1 ptxas
+(`release 13.2, V13.2.78`): the checked-in reducer's `-O0` and `-O3`
+outputs match, so this is listed as fixed in 13.2.78.
+
 For continued fuzzing past this family, use `DIV_DISABLE_PACKED_ADD=1`.
