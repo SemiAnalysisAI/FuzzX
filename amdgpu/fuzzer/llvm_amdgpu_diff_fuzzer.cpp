@@ -1701,6 +1701,22 @@ bool hasNameStartingWith(const Value *V, StringRef Prefix) {
   return V && V->hasName() && V->getName().starts_with(Prefix);
 }
 
+bool dependsOnNamePrefix(const Value *V, StringRef Prefix,
+                         SmallPtrSetImpl<const Value *> &Seen,
+                         unsigned Depth = 0) {
+  if (!V || Depth > 64 || !Seen.insert(V).second)
+    return false;
+  if (hasNameStartingWith(V, Prefix))
+    return true;
+  const auto *I = dyn_cast<Instruction>(V);
+  if (!I)
+    return false;
+  for (const Use &Op : I->operands())
+    if (dependsOnNamePrefix(Op.get(), Prefix, Seen, Depth + 1))
+      return true;
+  return false;
+}
+
 bool triggersM053ByteDotHighBit(const Instruction &I) {
   const auto *And = dyn_cast<BinaryOperator>(&I);
   if (!And || And->getOpcode() != Instruction::And ||
@@ -1755,6 +1771,26 @@ bool triggersM054I64PairLowAdd(const Instruction &I) {
     return false;
   return isM054PairOfHighAndLow(Add->getOperand(0), Add->getOperand(1)) ||
          isM054PairOfHighAndLow(Add->getOperand(1), Add->getOperand(0));
+}
+
+bool triggersM055I64BytePermuteLoopPhi(const Instruction &I) {
+  const auto *Phi = dyn_cast<PHINode>(&I);
+  if (!Phi || !Phi->getType()->isIntegerTy(32) ||
+      !hasNameStartingWith(Phi, "fuzz.loop.acc"))
+    return false;
+
+  for (unsigned Idx = 0, End = Phi->getNumIncomingValues(); Idx != End;
+       ++Idx) {
+    SmallPtrSet<const Value *, 32> Seen;
+    if (dependsOnNamePrefix(Phi->getIncomingValue(Idx),
+                            "fuzz.cfg.i64byteperm.idiom", Seen))
+      return true;
+    Seen.clear();
+    if (dependsOnNamePrefix(Phi->getIncomingValue(Idx),
+                            "fuzz.i64byteperm.idiom", Seen))
+      return true;
+  }
+  return false;
 }
 
 bool isFuzzInputLoadIndex(const Value *V, Function &Kernel) {
@@ -1859,6 +1895,7 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM052 = envFlag("FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT", false);
   bool AllowM053 = envFlag("FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT", false);
   bool AllowM054 = envFlag("FUZZX_ALLOW_M054_I64_PAIR_LOW_ADD", false);
+  bool AllowM055 = envFlag("FUZZX_ALLOW_M055_I64BYTEPERM_LOOP", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1907,6 +1944,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM052 && triggersM052TernaryBlendShift(I)) ||
               (!AllowM053 && triggersM053ByteDotHighBit(I)) ||
               (!AllowM054 && triggersM054I64PairLowAdd(I)) ||
+              (!AllowM055 && triggersM055I64BytePermuteLoopPhi(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;

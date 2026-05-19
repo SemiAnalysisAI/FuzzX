@@ -236,6 +236,7 @@ rediscovering the same issue.
 | `FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT=1` | unset | Re-enable `((a ^ b) \| (b & ~(a ^ b))) & 31` shift masks for [m052](known-miscompiles/m052-ternary-blend-shift/NOTES.md). |
 | `FUZZX_ALLOW_M053_BYTEDOT_HIGHBIT=1` | unset | Re-enable byte-dot result values feeding a high-bit mask for [m053](known-miscompiles/m053-bytedot-highbit/NOTES.md). |
 | `FUZZX_ALLOW_M054_I64_PAIR_LOW_ADD=1` | unset | Re-enable `((zext x << 32) \| 0xffff) + zext x` pair-add shapes for [m054](known-miscompiles/m054-i64-pair-low-add/NOTES.md). |
+| `FUZZX_ALLOW_M055_I64BYTEPERM_LOOP=1` | unset | Re-enable loop-carried values depending on i64 byte-permutation idioms for [m055](known-miscompiles/m055-i64byteperm-loop-readfirstlane/NOTES.md). |
 | `FUZZX_ALLOW_C001_SUDOT_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` generation for [c001](known-miscompiles/c001-sudot-isel-ice/NOTES.md). |
 | `FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE=1` | unset | Re-enable `llvm.amdgcn.fma.legacy` generation for [c002](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md). |
 
@@ -331,6 +332,7 @@ Tested toolchains as of 2026-05-19:
 | [m052-ternary-blend-shift](known-miscompiles/m052-ternary-blend-shift/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers `((a ^ b) \| (b & ~(a ^ b))) & 31` as `a & 31`, dropping `b` before a funnel-shift-like expression. |
 | [m053-bytedot-highbit](known-miscompiles/m053-bytedot-highbit/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` lower a byte-dot/high-bit expression through a changed `v_bitop3_b32` / `v_bfi_b32` sequence that clears a high bit before a final xor. |
 | [m054-i64-pair-low-add](known-miscompiles/m054-i64-pair-low-add/NOTES.md) | ❌ | ❌ | ❌ | `-O2` folds `((zext x << 32) \| 0xffff) + zext x` into a u24 multiply-add-like sequence that drops the high-half copy of `x`. |
+| [m055-i64byteperm-loop-readfirstlane](known-miscompiles/m055-i64byteperm-loop-readfirstlane/NOTES.md) | ✅ | ❌ | ✅ | LLVM HEAD `-O0` miscompiles a loop-carried value depending on an i64 byte-permutation fold, returning `0xffffffff` instead of `0xff22dd00`; ROCm 7.2.3 and ROCm HEAD pass. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
