@@ -1523,6 +1523,25 @@ bool triggersM045URemOrOne(const Instruction &I) {
          isI32OrOneOf(BO->getOperand(1), BO->getOperand(0));
 }
 
+bool triggersM046V4I16Cttz(const Instruction &I) {
+  const auto *Call = dyn_cast<CallInst>(&I);
+  if (!Call || !isFixedIntVectorType(Call->getType(), 16) ||
+      cast<FixedVectorType>(Call->getType())->getNumElements() != 4)
+    return false;
+  const Function *Callee = Call->getCalledFunction();
+  return Callee && Callee->isIntrinsic() &&
+         Callee->getIntrinsicID() == Intrinsic::cttz;
+}
+
+bool triggersM047V8I8Shl(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::Shl)
+    return false;
+  const auto *VT = dyn_cast<FixedVectorType>(BO->getType());
+  return VT && VT->getElementType()->isIntegerTy(8) &&
+         VT->getNumElements() == 8;
+}
+
 bool isI32LShrByZeroOf(const Value *MaybeShift, const Value *Operand) {
   const auto *BO = dyn_cast<BinaryOperator>(MaybeShift);
   return BO && BO->getOpcode() == Instruction::LShr &&
@@ -1658,6 +1677,8 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM043 = envFlag("FUZZX_ALLOW_M043_SELF_XOR", false);
   bool AllowM044 = envFlag("FUZZX_ALLOW_M044_V4I32_SELF_AND", false);
   bool AllowM045 = envFlag("FUZZX_ALLOW_M045_UREM_OR_ONE", false);
+  bool AllowM046 = envFlag("FUZZX_ALLOW_M046_V4I16_CTTZ", false);
+  bool AllowM047 = envFlag("FUZZX_ALLOW_M047_V8I8_SHL", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1697,6 +1718,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM043 && triggersM043SelfXor(I)) ||
               (!AllowM044 && triggersM044V4I32SelfAnd(I)) ||
               (!AllowM045 && triggersM045URemOrOne(I)) ||
+              (!AllowM046 && triggersM046V4I16Cttz(I)) ||
+              (!AllowM047 && triggersM047V8I8Shl(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
