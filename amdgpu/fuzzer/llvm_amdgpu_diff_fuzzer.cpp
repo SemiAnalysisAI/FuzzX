@@ -1112,6 +1112,69 @@ bool isI32NotOf(const Value *MaybeNot, const Value **Base = nullptr) {
   return false;
 }
 
+const Value *stripI32AndAllOnes(const Value *V) {
+  const auto *BO = dyn_cast<BinaryOperator>(V);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return V;
+  if (hasI32ConstantValue(BO->getOperand(0), 0xffffffffu))
+    return BO->getOperand(1);
+  if (hasI32ConstantValue(BO->getOperand(1), 0xffffffffu))
+    return BO->getOperand(0);
+  return V;
+}
+
+bool isM052BlendRightArm(const Value *MaybeRight, const Value *Mask,
+                         const BinaryOperator *MaskXor) {
+  const auto *And = dyn_cast<BinaryOperator>(MaybeRight);
+  if (!And || And->getOpcode() != Instruction::And ||
+      !And->getType()->isIntegerTy(32))
+    return false;
+
+  auto IsXorOperand = [&](const Value *V) {
+    return V == MaskXor->getOperand(0) || V == MaskXor->getOperand(1);
+  };
+  auto Matches = [&](const Value *MaybeNot, const Value *Other) {
+    const Value *NotBase = nullptr;
+    return isI32NotOf(MaybeNot, &NotBase) && NotBase == Mask &&
+           IsXorOperand(Other);
+  };
+  return Matches(And->getOperand(0), And->getOperand(1)) ||
+         Matches(And->getOperand(1), And->getOperand(0));
+}
+
+bool isM052TernaryBlendArmPair(const Value *MaybeMask,
+                               const Value *MaybeRight) {
+  const Value *Mask = stripI32AndAllOnes(MaybeMask);
+  const auto *MaskXor = dyn_cast<BinaryOperator>(Mask);
+  if (!MaskXor || MaskXor->getOpcode() != Instruction::Xor ||
+      !MaskXor->getType()->isIntegerTy(32))
+    return false;
+  return isM052BlendRightArm(MaybeRight, Mask, MaskXor);
+}
+
+bool isM052TernaryBlend(const Value *MaybeOr) {
+  const auto *BO = dyn_cast<BinaryOperator>(MaybeOr);
+  if (!BO || BO->getOpcode() != Instruction::Or ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  return isM052TernaryBlendArmPair(BO->getOperand(0), BO->getOperand(1)) ||
+         isM052TernaryBlendArmPair(BO->getOperand(1), BO->getOperand(0));
+}
+
+bool triggersM052TernaryBlendShift(const Instruction &I) {
+  const auto *BO = dyn_cast<BinaryOperator>(&I);
+  if (!BO || BO->getOpcode() != Instruction::And ||
+      !BO->getType()->isIntegerTy(32))
+    return false;
+  const Value *MaybeBlend = nullptr;
+  if (hasI32ConstantValue(BO->getOperand(0), 31))
+    MaybeBlend = BO->getOperand(1);
+  else if (hasI32ConstantValue(BO->getOperand(1), 31))
+    MaybeBlend = BO->getOperand(0);
+  return MaybeBlend && isM052TernaryBlend(MaybeBlend);
+}
+
 bool isM028UMaxOfMaskedNot(const Value *MaybeUMax, const Value *Not) {
   const auto *Call = dyn_cast<CallInst>(MaybeUMax);
   if (!Call)
@@ -1732,6 +1795,7 @@ bool validateIRCorpusModule(Module &M) {
       envFlag("FUZZX_ALLOW_M049_VECTOR_FSHL_ZERO", false);
   bool AllowM050 = envFlag("FUZZX_ALLOW_M050_AND_SUB_ZERO", false);
   bool AllowM051 = envFlag("FUZZX_ALLOW_M051_VECTOR_FSHR_LOOP", false);
+  bool AllowM052 = envFlag("FUZZX_ALLOW_M052_TERNARY_BLEND_SHIFT", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -1777,6 +1841,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM049 && triggersM049VectorFshl(I)) ||
               (!AllowM050 && triggersM050AndSubZero(I)) ||
               (!AllowM051 && triggersM051VectorFshr(I)) ||
+              (!AllowM052 && triggersM052TernaryBlendShift(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
