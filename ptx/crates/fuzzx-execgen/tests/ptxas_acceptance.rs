@@ -76,6 +76,63 @@ fn ptxas_accepts_pred_logic_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_half_precision_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry half_precision_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .pred %p<2>;
+    .reg .b16 %h<4>;
+    .reg .b32 %r<6>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.b16 %h0, 0x3c00;
+    mov.b16 %h1, 0x4000;
+    add.rn.f16 %h2, %h0, %h1;
+    sub.rn.f16 %h2, %h2, %h0;
+    mul.rn.f16 %h2, %h2, %h1;
+    fma.rn.f16 %h2, %h0, %h1, %h2;
+    min.f16 %h2, %h2, %h1;
+    max.f16 %h2, %h2, %h0;
+    abs.f16 %h2, %h2;
+    neg.f16 %h3, %h2;
+    setp.lt.f16 %p0, %h0, %h1;
+    setp.ge.f16 %p1, %h1, %h0;
+    selp.u32 %r0, 1, 0, %p0;
+    selp.u32 %r1, 2, 0, %p1;
+    cvt.u32.u16 %r2, %h3;
+    add.u32 %r0, %r0, %r1;
+    add.u32 %r0, %r0, %r2;
+    mov.b32 %r3, 0x3c004000;
+    mov.b32 %r4, 0x40003c00;
+    add.rn.f16x2 %r5, %r3, %r4;
+    sub.rn.f16x2 %r5, %r5, %r4;
+    mul.rn.f16x2 %r5, %r5, %r4;
+    fma.rn.f16x2 %r5, %r5, %r4, %r4;
+    min.f16x2 %r5, %r5, %r4;
+    max.f16x2 %r5, %r5, %r4;
+    abs.f16x2 %r5, %r5;
+    neg.f16x2 %r5, %r5;
+    add.u32 %r0, %r0, %r5;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_membar_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

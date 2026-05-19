@@ -142,6 +142,8 @@ pub struct GenConfig {
     pub emit_f32_special_math: bool,
     pub emit_f32_compare: bool,
     pub emit_f32_selp: bool,
+    pub emit_f16_arith: bool,
+    pub emit_f16_compare: bool,
     pub emit_f64_arith: bool,
     pub emit_f64_rounding: bool,
     pub emit_f64_unary: bool,
@@ -383,6 +385,8 @@ impl Default for GenConfig {
             emit_f32_special_math: true,
             emit_f32_compare: true,
             emit_f32_selp: true,
+            emit_f16_arith: true,
+            emit_f16_compare: true,
             emit_f64_arith: true,
             emit_f64_rounding: true,
             emit_f64_unary: true,
@@ -10258,6 +10262,9 @@ impl<'a> Generator<'a> {
         if self.cfg.emit_pred_logic {
             total_pred = total_pred.max(4);
         }
+        if self.cfg.emit_f16_compare {
+            total_pred = total_pred.max(2);
+        }
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -10338,6 +10345,43 @@ impl<'a> Generator<'a> {
             writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
+        if self.cfg.emit_f16_arith || self.cfg.emit_f16_compare {
+            writeln!(s, "    mov.b16         %h0, 0x3c00;").unwrap();
+            writeln!(s, "    mov.b16         %h1, 0x4000;").unwrap();
+        }
+        if self.cfg.emit_f16_arith {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    add.rn.f16      %h2, %h0, %h1;").unwrap();
+            writeln!(s, "    sub.rn.f16      %h2, %h2, %h0;").unwrap();
+            writeln!(s, "    mul.rn.f16      %h2, %h2, %h1;").unwrap();
+            writeln!(s, "    fma.rn.f16      %h2, %h0, %h1, %h2;").unwrap();
+            writeln!(s, "    min.f16         %h2, %h2, %h1;").unwrap();
+            writeln!(s, "    max.f16         %h2, %h2, %h0;").unwrap();
+            writeln!(s, "    abs.f16         %h2, %h2;").unwrap();
+            writeln!(s, "    neg.f16         %h3, %h2;").unwrap();
+            writeln!(s, "    cvt.u32.u16     %r{scratch}, %h3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    mov.b32         %r1, 0x3c004000;").unwrap();
+            writeln!(s, "    mov.b32         %r2, 0x40003c00;").unwrap();
+            writeln!(s, "    add.rn.f16x2    %r1, %r1, %r2;").unwrap();
+            writeln!(s, "    sub.rn.f16x2    %r1, %r1, %r2;").unwrap();
+            writeln!(s, "    mul.rn.f16x2    %r1, %r1, %r2;").unwrap();
+            writeln!(s, "    fma.rn.f16x2    %r1, %r1, %r2, %r2;").unwrap();
+            writeln!(s, "    min.f16x2       %r1, %r1, %r2;").unwrap();
+            writeln!(s, "    max.f16x2       %r1, %r1, %r2;").unwrap();
+            writeln!(s, "    abs.f16x2       %r1, %r1;").unwrap();
+            writeln!(s, "    neg.f16x2       %r1, %r1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r1;").unwrap();
+        }
+        if self.cfg.emit_f16_compare {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    setp.lt.f16     %p0, %h0, %h1;").unwrap();
+            writeln!(s, "    setp.ge.f16     %p1, %h1, %h0;").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p0;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p1;").unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_warp_barriers {
@@ -17257,6 +17301,25 @@ mod tests {
         "testp.subnormal.f32",
     ];
     const F32_SELP_MNEMONICS: &[&str] = &["selp.f32"];
+    const F16_ARITH_MNEMONICS: &[&str] = &[
+        "add.rn.f16",
+        "sub.rn.f16",
+        "mul.rn.f16",
+        "fma.rn.f16",
+        "min.f16",
+        "max.f16",
+        "abs.f16",
+        "neg.f16",
+        "add.rn.f16x2",
+        "sub.rn.f16x2",
+        "mul.rn.f16x2",
+        "fma.rn.f16x2",
+        "min.f16x2",
+        "max.f16x2",
+        "abs.f16x2",
+        "neg.f16x2",
+    ];
+    const F16_COMPARE_MNEMONICS: &[&str] = &["setp.lt.f16", "setp.ge.f16"];
     const F64_ARITH_MNEMONICS: &[&str] = &[
         "add.rn.f64",
         "sub.rn.f64",
@@ -17856,6 +17919,8 @@ mod tests {
             F32_SETP_BOOL_MNEMONICS,
             F32_TESTP_MNEMONICS,
             F32_SELP_MNEMONICS,
+            F16_ARITH_MNEMONICS,
+            F16_COMPARE_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
@@ -17942,6 +18007,8 @@ mod tests {
             F32_SETP_BOOL_MNEMONICS,
             F32_TESTP_MNEMONICS,
             F32_SELP_MNEMONICS,
+            F16_ARITH_MNEMONICS,
+            F16_COMPARE_MNEMONICS,
             F64_ARITH_MNEMONICS,
             F64_ROUNDING_MNEMONICS,
             F64_UNARY_MNEMONICS,
@@ -22825,6 +22892,48 @@ mod tests {
                     "seed {seed:x} emitted {mnemonic}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn f16_arith_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, F16_ARITH_MNEMONICS);
+    }
+
+    #[test]
+    fn f16_arith_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f16_arith: false,
+            ..coverage_heavy_config()
+        };
+
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
+        for mnemonic in F16_ARITH_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled f16 arithmetic still emitted {mnemonic}"
+            );
+        }
+    }
+
+    #[test]
+    fn f16_compare_generation_is_reachable() {
+        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, F16_COMPARE_MNEMONICS);
+    }
+
+    #[test]
+    fn f16_compare_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_f16_compare: false,
+            ..coverage_heavy_config()
+        };
+
+        let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
+        for mnemonic in F16_COMPARE_MNEMONICS {
+            assert!(
+                !has_mnemonic(&ptx, mnemonic),
+                "disabled f16 compare still emitted {mnemonic}"
+            );
         }
     }
 

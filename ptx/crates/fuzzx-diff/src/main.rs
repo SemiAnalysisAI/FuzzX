@@ -170,6 +170,10 @@
 //!                         and testp generation
 //!   DIV_DISABLE_F32_SELP default: false; set 1/true/yes/on to suppress
 //!                         sanitized setp.f32, including ftz forms, + selp.f32 generation
+//!   DIV_DISABLE_F16_ARITH default: false; set 1/true/yes/on to suppress
+//!                         deterministic scalar f16 and packed f16x2 arithmetic prologue coverage
+//!   DIV_DISABLE_F16_COMPARE default: false; set 1/true/yes/on to suppress
+//!                         deterministic scalar f16 setp prologue coverage
 //!   DIV_DISABLE_F64_ARITH default: false; set 1/true/yes/on to suppress
 //!                         sanitized f64 add/sub/mul/div/fma/copysign/min/max generation
 //!   DIV_DISABLE_F64_ROUNDING default: false; set 1/true/yes/on to suppress
@@ -697,6 +701,10 @@ struct Args {
     #[arg(long)]
     disable_f32_selp: bool,
     #[arg(long)]
+    disable_f16_arith: bool,
+    #[arg(long)]
+    disable_f16_compare: bool,
+    #[arg(long)]
     disable_f64_arith: bool,
     #[arg(long)]
     disable_f64_rounding: bool,
@@ -1180,6 +1188,8 @@ impl Args {
         );
         set_bool!(self.disable_f32_compare, "DIV_DISABLE_F32_COMPARE");
         set_bool!(self.disable_f32_selp, "DIV_DISABLE_F32_SELP");
+        set_bool!(self.disable_f16_arith, "DIV_DISABLE_F16_ARITH");
+        set_bool!(self.disable_f16_compare, "DIV_DISABLE_F16_COMPARE");
         set_bool!(self.disable_f64_arith, "DIV_DISABLE_F64_ARITH");
         set_bool!(self.disable_f64_rounding, "DIV_DISABLE_F64_ROUNDING");
         set_bool!(self.disable_f64_unary, "DIV_DISABLE_F64_UNARY");
@@ -1624,6 +1634,8 @@ impl Config {
         let disable_f32_special_math = env_bool("DIV_DISABLE_F32_SPECIAL_MATH")?.unwrap_or(false);
         let disable_f32_compare = env_bool("DIV_DISABLE_F32_COMPARE")?.unwrap_or(false);
         let disable_f32_selp = env_bool("DIV_DISABLE_F32_SELP")?.unwrap_or(false);
+        let disable_f16_arith = env_bool("DIV_DISABLE_F16_ARITH")?.unwrap_or(false);
+        let disable_f16_compare = env_bool("DIV_DISABLE_F16_COMPARE")?.unwrap_or(false);
         let disable_f64_arith = env_bool("DIV_DISABLE_F64_ARITH")?.unwrap_or(false);
         let disable_f64_rounding = env_bool("DIV_DISABLE_F64_ROUNDING")?.unwrap_or(false);
         let disable_f64_unary = env_bool("DIV_DISABLE_F64_UNARY")?.unwrap_or(false);
@@ -1936,6 +1948,8 @@ impl Config {
             emit_f32_special_math: !disable_f32_special_math && !disable_bitwise_binops,
             emit_f32_compare: !disable_f32_compare && !disable_bitwise_binops,
             emit_f32_selp: !disable_f32_selp && !disable_f32_compare && !disable_bitwise_binops,
+            emit_f16_arith: !disable_f16_arith,
+            emit_f16_compare: !disable_f16_compare,
             emit_f64_arith: !disable_f64_arith && !disable_bitwise_binops,
             emit_f64_rounding: !disable_f64_rounding
                 && !disable_f64_arith
