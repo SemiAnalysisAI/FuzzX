@@ -1,0 +1,66 @@
+.version 8.8
+.target sm_103
+.address_size 64
+.const .align 16 .b8 fuzzx_const[64] = {3,20,37,54,71,88,105,122,139,156,173,190,207,224,241,2,19,36,53,70,87,104,121,138,155,172,189,206,223,240,1,18,35,52,69,86,103,120,137,154,171,188,205,222,239,0,17,34,51,68,85,102,119,136,153,170,187,204,221,238,255,16,33,50};
+
+.func (.reg .b32 ret0) fuzzx_helper(.reg .b32 a, .reg .b32 b)
+{
+    add.u32         ret0, a, b;
+    ret;
+}
+
+.visible .entry fuzz_kernel(
+    .param .u64 in_ptr,
+    .param .u64 out_ptr,
+    .param .u32 in_n
+)
+{
+    .reg .pred  %p<8>;
+    .reg .b16   %h<4>;
+    .reg .b32   %r<13>;
+    .reg .b64   %rd<10>;
+    .reg .f32   %f<4>;
+    call.uni        (%r9), fuzzx_helper, (%r8, %r2);
+    createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64 %rd7, 0.5;
+    ld.global.L2::cache_hint.u32 %r9, [%rd8], %rd7;
+    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd7, [%rd6], 64, 128;
+    mov.b16         %h1, 0x4000;
+    mov.b32         %r2, 0x40003c00;
+    sub.rn.f16x2    %r1, %r1, %r2;
+    add.u32         %r0, %r0, %r1;
+    mov.u32         %r9, 3;
+    add.u32         %r0, %r0, %r9;
+    add.u32         %r0, %r0, %r9;
+    add.u32         %r0, %r0, %r9;
+    mov.b32         %r1, 0x3f800000;
+    mov.b32         %f0, %r1;
+    cvt.rn.bf16.f32 %h0, %f0;
+    cvt.f32.bf16    %f3, %h1;
+    cvt.rna.tf32.f32 %r9, %f0;
+    mov.s32         %r1, -40000;
+    add.u32         %r0, %r0, %r9;
+    add.u32         %r0, %r0, %r9;
+    setp.lt.u32     %p0, %r8, 16;
+    elect.sync      %r9|%p4, 0xffffffff;
+    redux.sync.max.u32 %r9, %r8, 0xffffffff;
+    and.b32         %r9, %r0, 31;
+    setp.lt.u32     %p0, %r9, 27;
+    shfl.sync.up.b32 %r2, %r2, 21, 31, 0xffffffff;
+    bar.red.popc.u32 %r0, 0, %p0;
+    selp.u32        %r9, 8, 0, %p2;
+fuzzx_brx_2:
+    @%p4 shl.b32  %r7, 8192, 28;
+    mov.u32       %r3, %clusterid.y;
+    add.u32       %r5, 32, %r2;
+    mov.b32       %r9, %r3;
+    mov.b32       %r10, %r3;
+    mov.b32       %r11, %r5;
+    @!%p5 cvt.pack.sat.u8.s32.b32 %r3, %r9, %r10, %r11;
+    add.u32       %r2, %r3, %r5;
+    add.u32         %r3, %r3, 2;
+    add.u32       %r5, 3, 2048;
+    and.b32       %r9, 22, 1023;
+    cvt.s64.s32   %rd7, %r9;
+    st.global.u32   [%rd4 + 4], %r1;
+    st.global.u32   [%rd4 + 8], %r2;
+}
