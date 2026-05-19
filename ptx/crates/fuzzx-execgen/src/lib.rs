@@ -131,6 +131,7 @@ pub struct GenConfig {
     pub emit_bit_memory: bool,
     pub emit_memory_fences: bool,
     pub emit_warp_barriers: bool,
+    pub emit_warp_collectives: bool,
     pub emit_cta_barriers: bool,
     pub emit_cta_barrier_reductions: bool,
     pub emit_prefetch: bool,
@@ -370,6 +371,7 @@ impl Default for GenConfig {
             emit_bit_memory: true,
             emit_memory_fences: true,
             emit_warp_barriers: true,
+            emit_warp_collectives: true,
             emit_cta_barriers: true,
             emit_cta_barrier_reductions: true,
             emit_prefetch: true,
@@ -10244,11 +10246,13 @@ impl<'a> Generator<'a> {
     fn emit_prologue(&self, s: &mut String) {
         let tid_reg = self.tid_reg();
         let total_regs = (self.wide_scratch_hi_reg() + 1).max(1);
-        let total_pred = if self.cfg.emit_cta_barrier_reductions {
-            self.n_pred.max(3)
-        } else {
-            self.n_pred
-        };
+        let mut total_pred = self.n_pred;
+        if self.cfg.emit_cta_barrier_reductions {
+            total_pred = total_pred.max(3);
+        }
+        if self.cfg.emit_warp_collectives {
+            total_pred = total_pred.max(5);
+        }
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -10320,6 +10324,71 @@ impl<'a> Generator<'a> {
         }
         if self.cfg.emit_warp_barriers {
             writeln!(s, "    bar.warp.sync   0xffffffff;").unwrap();
+        }
+        if self.cfg.emit_warp_collectives {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    setp.lt.u32     %p0, %r{tid_reg}, 16;").unwrap();
+            writeln!(s, "    activemask.b32  %r{scratch};").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    vote.sync.all.pred %p1, %p0, 0xffffffff;").unwrap();
+            writeln!(s, "    vote.sync.any.pred %p2, %p0, 0xffffffff;").unwrap();
+            writeln!(s, "    vote.sync.uni.pred %p3, %p0, 0xffffffff;").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 4, 0, %p3;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    vote.sync.ballot.b32 %r{scratch}, %p0, 0xffffffff;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    match.sync.any.b32 %r{scratch}, %r{tid_reg}, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    match.sync.all.b32 %r{scratch}|%p4, %r{tid_reg}, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 8, 0, %p4;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    shfl.sync.idx.b32 %r{scratch}, %r{tid_reg}, 0, 31, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    shfl.sync.up.b32 %r{scratch}, %r{tid_reg}, 1, 31, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    shfl.sync.down.b32 %r{scratch}, %r{tid_reg}, 1, 31, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    shfl.sync.bfly.b32 %r{scratch}, %r{tid_reg}, 1, 31, 0xffffffff;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            for op in [
+                "add.u32", "min.u32", "max.u32", "and.b32", "or.b32", "xor.b32",
+            ] {
+                writeln!(
+                    s,
+                    "    redux.sync.{op} %r{scratch}, %r{tid_reg}, 0xffffffff;"
+                )
+                .unwrap();
+                writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            }
         }
         if self.cfg.emit_cta_barriers {
             writeln!(s, "    bar.sync        0;").unwrap();
@@ -16253,17 +16322,12 @@ mod tests {
         "sub.u16",
         "mul.lo.u16",
         "mul.hi.u16",
-        "add.s16",
-        "sub.s16",
-        "mul.lo.s16",
-        "mul.hi.s16",
         "and.b16",
         "or.b16",
         "xor.b16",
         "not.b16",
         "shl.b16",
         "shr.u16",
-        "shr.s16",
         "setp.eq.u16",
         "setp.ne.u16",
         "setp.lt.u16",
@@ -16385,6 +16449,25 @@ mod tests {
         "fence.sc.sys",
     ];
     const WARP_BARRIER_MNEMONICS: &[&str] = &["bar.warp.sync"];
+    const WARP_COLLECTIVE_MNEMONICS: &[&str] = &[
+        "activemask.b32",
+        "vote.sync.all.pred",
+        "vote.sync.any.pred",
+        "vote.sync.uni.pred",
+        "vote.sync.ballot.b32",
+        "match.sync.any.b32",
+        "match.sync.all.b32",
+        "shfl.sync.idx.b32",
+        "shfl.sync.up.b32",
+        "shfl.sync.down.b32",
+        "shfl.sync.bfly.b32",
+        "redux.sync.add.u32",
+        "redux.sync.min.u32",
+        "redux.sync.max.u32",
+        "redux.sync.and.b32",
+        "redux.sync.or.b32",
+        "redux.sync.xor.b32",
+    ];
     const CTA_BARRIER_MNEMONICS: &[&str] = &["bar.sync", "barrier.sync"];
     const CTA_BARRIER_REDUCTION_MNEMONICS: &[&str] = &[
         "bar.red.popc.u32",
@@ -17709,6 +17792,7 @@ mod tests {
             GENERIC_MEMORY_MNEMONICS,
             MEMORY_FENCE_MNEMONICS,
             WARP_BARRIER_MNEMONICS,
+            WARP_COLLECTIVE_MNEMONICS,
             CTA_BARRIER_MNEMONICS,
             CTA_BARRIER_REDUCTION_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
@@ -17795,6 +17879,7 @@ mod tests {
             GENERIC_MEMORY_MNEMONICS,
             MEMORY_FENCE_MNEMONICS,
             WARP_BARRIER_MNEMONICS,
+            WARP_COLLECTIVE_MNEMONICS,
             CTA_BARRIER_MNEMONICS,
             CTA_BARRIER_REDUCTION_MNEMONICS,
             PREFETCH_MNEMONICS,
@@ -19319,6 +19404,7 @@ mod tests {
             emit_reg_bitfield: false,
             emit_global_atomic_dec: false,
             emit_global_atomic_xor: false,
+            emit_signed_scalar_16bit: false,
             emit_scalar_16bit_min: false,
             emit_scalar_16bit_signed_unary: false,
             emit_addc: false,
@@ -21610,6 +21696,33 @@ mod tests {
             let bytes = bytes_from_seed(seed, 8192);
             let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
             for mnemonic in WARP_BARRIER_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted {mnemonic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn warp_collective_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in WARP_COLLECTIVE_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+    }
+
+    #[test]
+    fn warp_collective_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_warp_collectives: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in WARP_COLLECTIVE_MNEMONICS {
                 assert!(
                     !has_mnemonic(&ptx, mnemonic),
                     "seed {seed:x} emitted {mnemonic}"

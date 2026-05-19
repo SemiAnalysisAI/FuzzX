@@ -139,6 +139,67 @@ fn ptxas_accepts_warp_barrier_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_warp_collectives_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry warp_collective_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .pred %p<5>;
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    setp.lt.u32 %p0, %r0, 16;
+    activemask.b32 %r1;
+    add.u32 %r0, %r0, %r1;
+    vote.sync.all.pred %p1, %p0, 0xffffffff;
+    vote.sync.any.pred %p2, %p0, 0xffffffff;
+    vote.sync.uni.pred %p3, %p0, 0xffffffff;
+    vote.sync.ballot.b32 %r1, %p0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    match.sync.any.b32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    match.sync.all.b32 %r1|%p4, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    shfl.sync.idx.b32 %r1, %r0, 0, 31, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    shfl.sync.up.b32 %r1, %r0, 1, 31, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    shfl.sync.down.b32 %r1, %r0, 1, 31, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    shfl.sync.bfly.b32 %r1, %r0, 1, 31, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.add.u32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.min.u32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.max.u32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.and.b32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.or.b32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    redux.sync.xor.b32 %r1, %r0, 0xffffffff;
+    add.u32 %r0, %r0, %r1;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_cta_barriers_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(
