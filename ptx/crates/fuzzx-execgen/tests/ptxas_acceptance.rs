@@ -145,9 +145,9 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
     .param .u64 out_ptr
 )
 {{
-    .reg .pred %p<2>;
+    .reg .pred %p<16>;
     .reg .b16 %h<4>;
-    .reg .b32 %r<6>;
+    .reg .b32 %r<18>;
     .reg .b64 %rd<1>;
     .reg .f32 %f<2>;
     .reg .f64 %fd<1>;
@@ -176,8 +176,35 @@ fn ptxas_accepts_half_precision_at_both_opt_levels() {
     add.u32 %r0, %r0, %r2;
     set.lt.u32.f16 %r0, %h0, %h1;
     set.ge.u32.f16 %r1, %h1, %h0;
+    set.eq.u32.f16 %r3, %h0, %h1;
+    set.ne.u32.f16 %r4, %h0, %h1;
+    set.le.u32.f16 %r5, %h0, %h1;
+    set.gt.u32.f16 %r6, %h0, %h1;
+    set.equ.u32.f16 %r7, %h0, %h1;
+    set.neu.u32.f16 %r8, %h0, %h1;
+    set.ltu.u32.f16 %r9, %h0, %h1;
+    set.leu.u32.f16 %r10, %h0, %h1;
+    set.gtu.u32.f16 %r11, %h0, %h1;
+    set.geu.u32.f16 %r12, %h0, %h1;
+    set.num.u32.f16 %r13, %h0, %h1;
+    set.nan.u32.f16 %r14, %h0, %h1;
     setp.lt.f16 %p0, %h0, %h1;
     setp.ge.f16 %p1, %h1, %h0;
+    setp.eq.f16 %p2, %h0, %h1;
+    setp.ne.f16 %p3, %h0, %h1;
+    setp.le.f16 %p4, %h0, %h1;
+    setp.gt.f16 %p5, %h0, %h1;
+    setp.equ.f16 %p6, %h0, %h1;
+    setp.neu.f16 %p7, %h0, %h1;
+    setp.ltu.f16 %p8, %h0, %h1;
+    setp.leu.f16 %p9, %h0, %h1;
+    setp.gtu.f16 %p10, %h0, %h1;
+    setp.geu.f16 %p11, %h0, %h1;
+    setp.num.f16 %p12, %h0, %h1;
+    setp.nan.f16 %p13, %h0, %h1;
+    setp.lt.and.f16 %p14, %h0, %h1, %p0;
+    setp.ge.or.f16 %p15, %h0, %h1, %p1;
+    setp.ne.xor.f16 %p14, %h0, %h1, %p15;
     selp.u32 %r2, 1, 0, %p0;
     add.u32 %r0, %r0, %r2;
     selp.u32 %r2, 2, 0, %p1;

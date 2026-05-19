@@ -3579,6 +3579,18 @@ impl FloatCmpOp {
     fn f64_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
         format!("setp.{}.{}.f64", self.suffix(), op.suffix())
     }
+
+    fn f16_set_mnemonic(self) -> String {
+        format!("set.{}.u32.f16", self.suffix())
+    }
+
+    fn f16_setp_mnemonic(self) -> String {
+        format!("setp.{}.f16", self.suffix())
+    }
+
+    fn f16_setp_bool_mnemonic(self, op: PredicateBoolOp) -> String {
+        format!("setp.{}.{}.f16", self.suffix(), op.suffix())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3956,6 +3968,34 @@ enum Inst {
     /// Scalar 16-bit `setp` feeding `selp.{u16,s16}` through `.b16` scratch registers.
     Scalar16Selp {
         cmp: CmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+    },
+    /// Scalar half-precision compare materialized as u32.
+    F16Set {
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
+    /// Scalar half-precision `setp.<cmp>.<and|or|xor>` materialized as u32.
+    F16SetpBool {
+        bool_op: PredicateBoolOp,
+        base_cmp: CmpOp,
+        base_a: Operand,
+        base_b: Operand,
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        base_pred: u32,
+        pred: u32,
+    },
+    /// Scalar half-precision `setp` feeding `selp.b16`.
+    F16Selp {
+        cmp: FloatCmpOp,
         dst: u32,
         a: Operand,
         b: Operand,
@@ -4731,6 +4771,18 @@ enum Inst {
         ca: Operand,
         cb: Operand,
         pred: u32,
+    },
+    /// Instruction-predicated scalar half-precision select.
+    PredicatedF16Selp {
+        cmp: FloatCmpOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: u32,
+        guard_cmp: CmpOp,
+        guard_ca: Operand,
+        guard_cb: Operand,
+        guard_pred: u32,
     },
     /// `setp` + `setp.<cmp>.<bool>` feeding a guarded ALU instruction.
     SetpBoolBin {
@@ -7908,6 +7960,53 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_f16_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let pick = u.int_in_range(0..=2)?;
+        if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
+            Ok(Inst::F16SetpBool {
+                bool_op: pick_predicate_bool_op(u)?,
+                base_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                base_a: self.pick_guard_operand(u)?,
+                base_b: self.pick_guard_operand(u)?,
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                base_pred: self.alloc_pred(),
+                pred: self.alloc_pred(),
+            })
+        } else if pick <= 1 {
+            if self.cfg.emit_predicated_selp && u.arbitrary::<bool>()? {
+                Ok(Inst::PredicatedF16Selp {
+                    cmp: pick_float_cmp(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_cvt_operand(u)?,
+                    b: self.pick_cvt_operand(u)?,
+                    pred: self.alloc_pred(),
+                    guard_cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                    guard_ca: self.pick_guard_operand(u)?,
+                    guard_cb: self.pick_guard_operand(u)?,
+                    guard_pred: self.alloc_inst_pred(u)?,
+                })
+            } else {
+                Ok(Inst::F16Selp {
+                    cmp: pick_float_cmp(u)?,
+                    dst: self.pick_dst(u)?,
+                    a: self.pick_cvt_operand(u)?,
+                    b: self.pick_cvt_operand(u)?,
+                    pred: self.alloc_pred(),
+                })
+            }
+        } else {
+            Ok(Inst::F16Set {
+                cmp: pick_float_cmp(u)?,
+                dst: self.pick_non_output_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_f32_rounding_arith(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let ops = [
             F32RoundingArithOp::AddRz,
@@ -8910,7 +9009,12 @@ impl<'a> Generator<'a> {
                 b: self.pick_bin_operand(u, op)?,
             })
         } else if pick < 115 {
-            if self.cfg.emit_f32_compare
+            if self.cfg.emit_f16_compare
+                && self.cfg.emit_bitwise_binops
+                && u.int_in_range(0..=2)? == 0
+            {
+                self.pick_f16_compare(u)
+            } else if self.cfg.emit_f32_compare
                 && self.cfg.emit_setp_bool
                 && self.cfg.emit_predicated_alu
                 && self.cfg.emit_bitwise_binops
@@ -10055,6 +10159,8 @@ impl<'a> Generator<'a> {
         match inst {
             Inst::Set { dst, .. }
             | Inst::Scalar16Set { dst, .. }
+            | Inst::F16Set { dst, .. }
+            | Inst::F16SetpBool { dst, .. }
             | Inst::F32Set { dst, .. }
             | Inst::PredicatedF32Set { dst, .. }
             | Inst::F32SetpBool { dst, .. }
@@ -10130,6 +10236,7 @@ impl<'a> Generator<'a> {
             | Inst::F16Arith { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
+            | Inst::F16Selp { dst, .. }
             | Inst::GlobalLoad { dst, .. }
             | Inst::PredicatedGlobalLoad { dst, .. }
             | Inst::GlobalStoreRoundtrip { dst, .. }
@@ -10185,6 +10292,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedPackedMinMax { dst, .. }
             | Inst::PredicatedScalar16 { dst, .. }
             | Inst::PredicatedF16Arith { dst, .. }
+            | Inst::PredicatedF16Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
             | Inst::PredLogicBin { dst, .. }
@@ -11566,6 +11674,47 @@ impl<'a> Generator<'a> {
                     cmp.scalar16_output_cvt_mnemonic()
                 )
                 .unwrap();
+            }
+            Inst::F16Set { cmp, dst, a, b } => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                self.emit_sanitized_f16_operand(s, 1, b);
+                writeln!(s, "    {:<13} %r{dst}, %h0, %h1;", cmp.f16_set_mnemonic()).unwrap();
+            }
+            Inst::F16SetpBool {
+                bool_op,
+                base_cmp,
+                base_a,
+                base_b,
+                cmp,
+                dst,
+                a,
+                b,
+                base_pred,
+                pred,
+            } => {
+                write!(s, "    {:<13} %p{base_pred}, ", base_cmp.mnemonic()).unwrap();
+                base_a.emit(s);
+                write!(s, ", ").unwrap();
+                base_b.emit(s);
+                writeln!(s, ";").unwrap();
+                self.emit_sanitized_f16_operand(s, 0, a);
+                self.emit_sanitized_f16_operand(s, 1, b);
+                let mnemonic = cmp.f16_setp_bool_mnemonic(bool_op);
+                writeln!(s, "    {mnemonic:<13} %p{pred}, %h0, %h1, %p{base_pred};").unwrap();
+                writeln!(s, "    selp.u32      %r{dst}, 1, 0, %p{pred};").unwrap();
+            }
+            Inst::F16Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+            } => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                self.emit_sanitized_f16_operand(s, 1, b);
+                writeln!(s, "    {:<13} %p{pred}, %h0, %h1;", cmp.f16_setp_mnemonic()).unwrap();
+                writeln!(s, "    selp.b16      %h2, %h0, %h1, %p{pred};").unwrap();
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h2;").unwrap();
             }
             Inst::GlobalLoad {
                 op,
@@ -13518,6 +13667,30 @@ impl<'a> Generator<'a> {
                     .unwrap();
                 }
                 writeln!(s, "    cvt.u32.u16   %r{dst}, %h3;").unwrap();
+            }
+            Inst::PredicatedF16Selp {
+                cmp,
+                dst,
+                a,
+                b,
+                pred,
+                guard_cmp,
+                guard_ca,
+                guard_cb,
+                guard_pred,
+            } => {
+                self.emit_inst_predicate_setup(s, guard_cmp, guard_ca, guard_cb, guard_pred);
+                self.emit_sanitized_f16_operand(s, 0, a);
+                self.emit_sanitized_f16_operand(s, 1, b);
+                writeln!(s, "    {:<13} %p{pred}, %h0, %h1;", cmp.f16_setp_mnemonic()).unwrap();
+                writeln!(s, "    mov.b16       %h2, %h0;").unwrap();
+                writeln!(
+                    s,
+                    "    {} selp.b16 %h2, %h0, %h1, %p{pred};",
+                    pred_guard(guard_pred)
+                )
+                .unwrap();
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h2;").unwrap();
             }
             Inst::SetpBoolBin {
                 bool_op,
@@ -17979,11 +18152,112 @@ mod tests {
         "abs.f16",
         "neg.f16",
     ];
-    const F16_COMPARE_MNEMONICS: &[&str] = &[
+    const F16_SET_MNEMONICS: &[&str] = &[
+        "set.eq.u32.f16",
+        "set.ne.u32.f16",
         "set.lt.u32.f16",
+        "set.le.u32.f16",
+        "set.gt.u32.f16",
         "set.ge.u32.f16",
+        "set.equ.u32.f16",
+        "set.neu.u32.f16",
+        "set.ltu.u32.f16",
+        "set.leu.u32.f16",
+        "set.gtu.u32.f16",
+        "set.geu.u32.f16",
+        "set.num.u32.f16",
+        "set.nan.u32.f16",
+    ];
+    const F16_SETP_MNEMONICS: &[&str] = &[
+        "setp.eq.f16",
+        "setp.ne.f16",
         "setp.lt.f16",
+        "setp.le.f16",
+        "setp.gt.f16",
         "setp.ge.f16",
+        "setp.equ.f16",
+        "setp.neu.f16",
+        "setp.ltu.f16",
+        "setp.leu.f16",
+        "setp.gtu.f16",
+        "setp.geu.f16",
+        "setp.num.f16",
+        "setp.nan.f16",
+    ];
+    const F16_SETP_BOOL_MNEMONICS: &[&str] = &[
+        "setp.eq.and.f16",
+        "setp.eq.or.f16",
+        "setp.eq.xor.f16",
+        "setp.ne.and.f16",
+        "setp.ne.or.f16",
+        "setp.ne.xor.f16",
+        "setp.lt.and.f16",
+        "setp.lt.or.f16",
+        "setp.lt.xor.f16",
+        "setp.le.and.f16",
+        "setp.le.or.f16",
+        "setp.le.xor.f16",
+        "setp.gt.and.f16",
+        "setp.gt.or.f16",
+        "setp.gt.xor.f16",
+        "setp.ge.and.f16",
+        "setp.ge.or.f16",
+        "setp.ge.xor.f16",
+        "setp.equ.and.f16",
+        "setp.equ.or.f16",
+        "setp.equ.xor.f16",
+        "setp.neu.and.f16",
+        "setp.neu.or.f16",
+        "setp.neu.xor.f16",
+        "setp.ltu.and.f16",
+        "setp.ltu.or.f16",
+        "setp.ltu.xor.f16",
+        "setp.leu.and.f16",
+        "setp.leu.or.f16",
+        "setp.leu.xor.f16",
+        "setp.gtu.and.f16",
+        "setp.gtu.or.f16",
+        "setp.gtu.xor.f16",
+        "setp.geu.and.f16",
+        "setp.geu.or.f16",
+        "setp.geu.xor.f16",
+        "setp.num.and.f16",
+        "setp.num.or.f16",
+        "setp.num.xor.f16",
+        "setp.nan.and.f16",
+        "setp.nan.or.f16",
+        "setp.nan.xor.f16",
+    ];
+    const F16_SELP_MNEMONICS: &[&str] = &["selp.b16"];
+    const F16_COMPARE_MNEMONICS: &[&str] = &[
+        "set.eq.u32.f16",
+        "set.ne.u32.f16",
+        "set.lt.u32.f16",
+        "set.le.u32.f16",
+        "set.gt.u32.f16",
+        "set.ge.u32.f16",
+        "set.equ.u32.f16",
+        "set.neu.u32.f16",
+        "set.ltu.u32.f16",
+        "set.leu.u32.f16",
+        "set.gtu.u32.f16",
+        "set.geu.u32.f16",
+        "set.num.u32.f16",
+        "set.nan.u32.f16",
+        "setp.eq.f16",
+        "setp.ne.f16",
+        "setp.lt.f16",
+        "setp.le.f16",
+        "setp.gt.f16",
+        "setp.ge.f16",
+        "setp.equ.f16",
+        "setp.neu.f16",
+        "setp.ltu.f16",
+        "setp.leu.f16",
+        "setp.gtu.f16",
+        "setp.geu.f16",
+        "setp.num.f16",
+        "setp.nan.f16",
         "selp.b16",
     ];
     const F16_CVT_MNEMONICS: &[&str] = &[
@@ -18639,6 +18913,7 @@ mod tests {
             F32_SELP_MNEMONICS,
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
+            F16_SETP_BOOL_MNEMONICS,
             F16_CVT_MNEMONICS,
             BF16_TF32_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
@@ -18733,6 +19008,7 @@ mod tests {
             F32_SELP_MNEMONICS,
             F16_ARITH_MNEMONICS,
             F16_COMPARE_MNEMONICS,
+            F16_SETP_BOOL_MNEMONICS,
             F16_CVT_MNEMONICS,
             BF16_TF32_CVT_MNEMONICS,
             F64_ARITH_MNEMONICS,
@@ -23950,7 +24226,29 @@ mod tests {
 
     #[test]
     fn f16_compare_generation_is_reachable() {
-        assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, F16_COMPARE_MNEMONICS);
+        let cfg = GenConfig {
+            emit_f16_arith: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            emit_scalar_16bit: false,
+            ..coverage_heavy_config()
+        };
+        assert_mnemonic_coverage(&cfg, 8192, 32768, F16_SET_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 8192, 32768, F16_SETP_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 8192, 65536, F16_SETP_BOOL_MNEMONICS);
+        assert_mnemonic_coverage(&cfg, 4096, 1, F16_SELP_MNEMONICS);
+    }
+
+    #[test]
+    fn predicated_randomized_f16_selp_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_f16_arith: false,
+            emit_f16_cvt: false,
+            emit_bf16_tf32_cvt: false,
+            emit_scalar_16bit: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, F16_SELP_MNEMONICS);
     }
 
     #[test]
@@ -23961,9 +24259,13 @@ mod tests {
         };
 
         let ptx = generate_from_bytes_with_config(&bytes_from_seed(0, 4096), &cfg).unwrap();
-        for mnemonic in F16_COMPARE_MNEMONICS {
+        let seen: HashSet<_> = ptx.lines().filter_map(body_mnemonic).collect();
+        for mnemonic in F16_COMPARE_MNEMONICS
+            .iter()
+            .chain(F16_SETP_BOOL_MNEMONICS.iter())
+        {
             assert!(
-                !has_mnemonic(&ptx, mnemonic),
+                !seen.contains(mnemonic),
                 "disabled f16 compare still emitted {mnemonic}"
             );
         }
