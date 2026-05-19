@@ -328,7 +328,7 @@ that feature.
 | `DIV_DISABLE_PREFETCH` | Bounded `prefetch.global.*` and `prefetchu.L1` cache hints against the input buffer. |
 | `DIV_DISABLE_CACHE_POLICY_HELPERS` | Deterministic prologue coverage for `createpolicy`, `applypriority`, cache-hint `ld.global`, `ld.global.nc`, `st.global`, and, when enabled, cache-hint global atomic/reduction forms. |
 | `DIV_DISABLE_HELPER_CALLS` | Deterministic calls to a generated leaf `.func` in the entry prologue. |
-| `DIV_DISABLE_RICH_HELPER_CALLS` | Deterministic prologue coverage for multi-argument, multi-return, 64-bit return, nested acyclic, explicit `.param` ABI, and mixed register/`.param` helper `.func` calls. |
+| `DIV_DISABLE_RICH_HELPER_CALLS` | Deterministic prologue coverage for multi-argument, multi-return, 64-bit return, nested acyclic, explicit `.param` ABI, mixed register/`.param`, and predicate/select helper `.func` calls. |
 | `DIV_DISABLE_F32_ARITH` | Sanitized `add/sub/mul/div/fma/copysign/min/max.f32` arithmetic, including approximate f32 division, f32 `.sat` arithmetic, and `.ftz` min/max. |
 | `DIV_DISABLE_F32_ROUNDING` | Sanitized non-default rounding and `.ftz` f32 add/sub/mul/div/fma arithmetic. |
 | `DIV_DISABLE_F32_UNARY` | Sanitized `abs/neg.f32`, including `.ftz` forms. |

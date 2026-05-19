@@ -10399,6 +10399,23 @@ impl<'a> Generator<'a> {
             writeln!(s).unwrap();
             writeln!(
                 s,
+                ".func (.reg .b32 ret0) fuzzx_predicated_helper(.reg .b32 a, .reg .b32 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    .reg .pred      %phpr<2>;").unwrap();
+            writeln!(s, "    .reg .b32       %phrr<2>;").unwrap();
+            writeln!(s, "    setp.lo.u32     %phpr0, a, b;").unwrap();
+            writeln!(s, "    selp.u32        %phrr0, a, b, %phpr0;").unwrap();
+            writeln!(s, "    setp.eq.u32     %phpr1, c, 0;").unwrap();
+            writeln!(s, "    mov.u32         %phrr1, %phrr0;").unwrap();
+            writeln!(s, "    @%phpr1 xor.b32 %phrr1, %phrr1, 0x5a5a5a5a;").unwrap();
+            writeln!(s, "    add.u32         ret0, %phrr1, c;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
                 ".func (.reg .b32 ret0) fuzzx_mixed_param_helper(.reg .b32 a, .param .b32 b, .reg .b32 c)"
             )
             .unwrap();
@@ -10542,6 +10559,12 @@ impl<'a> Generator<'a> {
             writeln!(s, "    shr.u64         %rd9, %rd8, 32;").unwrap();
             writeln!(s, "    cvt.u32.u64     %r1, %rd9;").unwrap();
             writeln!(s, "    xor.b32         %r{scratch}, %r{scratch}, %r1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    call.uni        (%r{scratch}), fuzzx_predicated_helper, (%r0, %r1, %r2);"
+            )
+            .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_special_regs {
@@ -22548,6 +22571,18 @@ mod tests {
             "missing wide helper call"
         );
         assert!(
+            ptx.contains("fuzzx_predicated_helper"),
+            "missing predicated helper function"
+        );
+        assert!(
+            ptx.contains("@%phpr1 xor.b32"),
+            "missing predicated helper body instruction"
+        );
+        assert!(
+            ptx.contains("fuzzx_predicated_helper, (%r0, %r1, %r2)"),
+            "missing predicated helper call"
+        );
+        assert!(
             ptx.contains("fuzzx_param_helper"),
             "missing param ABI helper function"
         );
@@ -22608,6 +22643,10 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_wide_helper"),
                 "seed {seed:x} emitted wide helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_predicated_helper"),
+                "seed {seed:x} emitted predicated helper function"
             );
             assert!(
                 !ptx.contains("fuzzx_param_helper"),
