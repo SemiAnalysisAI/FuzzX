@@ -295,6 +295,55 @@ fn ptxas_accepts_helper_call_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_rich_helper_calls_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.func (.reg .b32 ret0, .reg .b32 ret1) fuzzx_helper_pair(.reg .b32 a, .reg .b32 b, .reg .b32 c)
+{{
+    add.u32 ret0, a, b;
+    xor.b32 ret1, ret0, c;
+    ret;
+}}
+
+.func (.reg .b32 ret0) fuzzx_helper_chain(.reg .b32 a, .reg .b32 b, .reg .b32 c, .reg .b32 d)
+{{
+    xor.b32 ret0, a, b;
+    add.u32 ret0, ret0, c;
+    xor.b32 ret0, ret0, d;
+    ret;
+}}
+
+.visible .entry rich_helper_call_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, 7;
+    mov.u32 %r2, 11;
+    call.uni (%r3, %r4), fuzzx_helper_pair, (%r0, %r1, %r2);
+    call (%r5), fuzzx_helper_chain, (%r3, %r4, %r1, %r2);
+    add.u32 %r6, %r3, %r4;
+    add.u32 %r6, %r6, %r5;
+    st.global.u32 [%rd0], %r6;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_membar_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

@@ -137,6 +137,7 @@ pub struct GenConfig {
     pub emit_prefetch: bool,
     pub emit_cache_policy_helpers: bool,
     pub emit_helper_calls: bool,
+    pub emit_rich_helper_calls: bool,
     pub emit_f32_arith: bool,
     pub emit_f32_rounding: bool,
     pub emit_f32_unary: bool,
@@ -385,6 +386,7 @@ impl Default for GenConfig {
             emit_prefetch: true,
             emit_cache_policy_helpers: true,
             emit_helper_calls: true,
+            emit_rich_helper_calls: true,
             emit_f32_arith: true,
             emit_f32_rounding: true,
             emit_f32_unary: true,
@@ -10304,6 +10306,31 @@ impl<'a> Generator<'a> {
             writeln!(s, "}}").unwrap();
             writeln!(s).unwrap();
         }
+        if self.cfg.emit_rich_helper_calls {
+            writeln!(
+                s,
+                ".func (.reg .b32 ret0, .reg .b32 ret1) fuzzx_helper_pair(.reg .b32 a, .reg .b32 b, .reg .b32 c)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    add.u32         ret0, a, b;").unwrap();
+            writeln!(s, "    xor.b32         ret1, ret0, c;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+            writeln!(
+                s,
+                ".func (.reg .b32 ret0) fuzzx_helper_chain(.reg .b32 a, .reg .b32 b, .reg .b32 c, .reg .b32 d)"
+            )
+            .unwrap();
+            writeln!(s, "{{").unwrap();
+            writeln!(s, "    xor.b32         ret0, a, b;").unwrap();
+            writeln!(s, "    add.u32         ret0, ret0, c;").unwrap();
+            writeln!(s, "    xor.b32         ret0, ret0, d;").unwrap();
+            writeln!(s, "    ret;").unwrap();
+            writeln!(s, "}}").unwrap();
+            writeln!(s).unwrap();
+        }
         writeln!(s, ".visible .entry {KERNEL_NAME}(").unwrap();
         writeln!(s, "    .param .u64 in_ptr,").unwrap();
         writeln!(s, "    .param .u64 out_ptr,").unwrap();
@@ -10361,6 +10388,22 @@ impl<'a> Generator<'a> {
             writeln!(
                 s,
                 "    call.uni        (%r{scratch}), fuzzx_helper, (%r{tid_reg}, %r2);"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+        }
+        if self.cfg.emit_rich_helper_calls {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(
+                s,
+                "    call.uni        (%r1, %r2), fuzzx_helper_pair, (%r{tid_reg}, %r0, %r2);"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r2;").unwrap();
+            writeln!(
+                s,
+                "    call            (%r{scratch}), fuzzx_helper_chain, (%r1, %r2, %r{tid_reg}, %r0);"
             )
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
@@ -16718,6 +16761,7 @@ mod tests {
         "ld.global.L2::cache_hint.u32",
     ];
     const HELPER_CALL_MNEMONICS: &[&str] = &["call.uni"];
+    const RICH_HELPER_CALL_MNEMONICS: &[&str] = &["call"];
     const GLOBAL_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.global.add.u32",
         "atom.global.exch.b32",
@@ -18089,6 +18133,7 @@ mod tests {
             CTA_BARRIER_REDUCTION_MNEMONICS,
             BRANCH_TABLE_MNEMONICS,
             HELPER_CALL_MNEMONICS,
+            RICH_HELPER_CALL_MNEMONICS,
             CACHE_POLICY_HELPER_MNEMONICS,
             GLOBAL_ATOMIC_MNEMONICS,
             GLOBAL_REDUCTION_MNEMONICS,
@@ -18185,6 +18230,7 @@ mod tests {
             BRANCH_TABLE_MNEMONICS,
             PREFETCH_MNEMONICS,
             HELPER_CALL_MNEMONICS,
+            RICH_HELPER_CALL_MNEMONICS,
             CACHE_POLICY_HELPER_MNEMONICS,
             POST_KNOWN_GLOBAL_ATOMIC_MNEMONICS,
             POST_KNOWN_GLOBAL_REDUCTION_MNEMONICS,
@@ -22199,6 +22245,49 @@ mod tests {
             assert!(
                 !ptx.contains("fuzzx_helper"),
                 "seed {seed:x} emitted helper function"
+            );
+        }
+    }
+
+    #[test]
+    fn rich_helper_call_generation_is_reachable() {
+        let ptx = generate_from_bytes(&bytes_from_seed(0, 4096)).unwrap();
+        for mnemonic in RICH_HELPER_CALL_MNEMONICS {
+            assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
+        }
+        assert!(
+            ptx.contains("fuzzx_helper_pair"),
+            "missing multi-return helper function"
+        );
+        assert!(
+            ptx.contains("fuzzx_helper_chain"),
+            "missing multi-arg helper function"
+        );
+    }
+
+    #[test]
+    fn rich_helper_call_generation_can_be_disabled() {
+        let cfg = GenConfig {
+            emit_rich_helper_calls: false,
+            ..coverage_heavy_config()
+        };
+
+        for seed in 0..128 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for mnemonic in RICH_HELPER_CALL_MNEMONICS {
+                assert!(
+                    !has_mnemonic(&ptx, mnemonic),
+                    "seed {seed:x} emitted rich helper call mnemonic {mnemonic}"
+                );
+            }
+            assert!(
+                !ptx.contains("fuzzx_helper_pair"),
+                "seed {seed:x} emitted multi-return helper function"
+            );
+            assert!(
+                !ptx.contains("fuzzx_helper_chain"),
+                "seed {seed:x} emitted multi-arg helper function"
             );
         }
     }
