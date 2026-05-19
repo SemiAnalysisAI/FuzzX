@@ -10461,6 +10461,22 @@ impl<'a> Generator<'a> {
             )
             .unwrap();
             writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    cvta.to.global.u64 %rd8, %rd1;").unwrap();
+            writeln!(s, "    mul.wide.u32    %rd9, %r{tid_reg}, 16;").unwrap();
+            writeln!(s, "    add.s64         %rd8, %rd8, %rd9;").unwrap();
+            writeln!(s, "    st.global.L2::cache_hint.u32 [%rd8], %r0, %rd7;").unwrap();
+            writeln!(
+                s,
+                "    ld.global.L2::cache_hint.u32 %r{scratch}, [%rd8], %rd7;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(
+                s,
+                "    ld.global.nc.L2::cache_hint.u32 %r{scratch}, [%rd6], %rd7;"
+            )
+            .unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             writeln!(
                 s,
                 "    createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd7, [%rd6], 64, 128;"
@@ -16811,6 +16827,8 @@ mod tests {
         "createpolicy.range.global.L2::evict_last.L2::evict_first.b64",
         "applypriority.global.L2::evict_normal",
         "ld.global.L2::cache_hint.u32",
+        "ld.global.nc.L2::cache_hint.u32",
+        "st.global.L2::cache_hint.u32",
     ];
     const HELPER_CALL_MNEMONICS: &[&str] = &["call.uni"];
     const RICH_HELPER_CALL_MNEMONICS: &[&str] = &["call"];

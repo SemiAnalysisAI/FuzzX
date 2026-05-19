@@ -497,6 +497,11 @@ fn ptxas_accepts_cache_policy_helpers_at_both_opt_levels() {
     createpolicy.fractional.L2::evict_last.L2::evict_unchanged.b64 %rd2, 0.5;
     applypriority.global.L2::evict_normal [%rd0], 128;
     ld.global.L2::cache_hint.u32 %r0, [%rd0], %rd2;
+    st.global.L2::cache_hint.u32 [%rd1], %r0, %rd2;
+    ld.global.L2::cache_hint.u32 %r1, [%rd1], %rd2;
+    add.u32 %r0, %r0, %r1;
+    ld.global.nc.L2::cache_hint.u32 %r1, [%rd0], %rd2;
+    add.u32 %r0, %r0, %r1;
     createpolicy.range.global.L2::evict_last.L2::evict_first.b64 %rd2, [%rd0], 64, 128;
     ld.global.L2::cache_hint.u32 %r1, [%rd0], %rd2;
     add.u32 %r0, %r0, %r1;
