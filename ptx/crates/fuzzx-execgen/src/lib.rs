@@ -17,8 +17,9 @@
 //!     total back-edge firings ≤ sum of initial counter values.
 //!   * Each thread writes only to its own disjoint output slice, private local
 //!     memory, and private shared-memory slot; global atomics/reductions are
-//!     constrained to the writer thread's output slice; no warp intrinsics or
-//!     `bar.sync`.
+//!     constrained to the writer thread's output slice. Warp/CTA synchronization
+//!     and warp collectives are emitted only in uniform regions before generated
+//!     divergent control flow.
 //!   * Variable shift counts are masked or use `.wrap` semantics. Divisors are
 //!     nonzero. Floating-point inputs are sanitized to a small finite range.
 
@@ -858,6 +859,63 @@ enum Bf16Tf32CvtOp {
     Tf32Rna,
     Tf32Rn,
     Tf32RzRelu,
+}
+
+#[derive(Clone, Copy)]
+enum WarpCollectiveOp {
+    Activemask,
+    VoteAll,
+    VoteAny,
+    VoteUni,
+    VoteBallot,
+    MatchAny,
+    MatchAll,
+    Elect,
+    ShflIdx,
+    ShflUp,
+    ShflDown,
+    ShflBfly,
+    ReduxAdd,
+    ReduxMin,
+    ReduxMax,
+    ReduxAnd,
+    ReduxOr,
+    ReduxXor,
+}
+
+impl WarpCollectiveOp {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            WarpCollectiveOp::Activemask => "activemask.b32",
+            WarpCollectiveOp::VoteAll => "vote.sync.all.pred",
+            WarpCollectiveOp::VoteAny => "vote.sync.any.pred",
+            WarpCollectiveOp::VoteUni => "vote.sync.uni.pred",
+            WarpCollectiveOp::VoteBallot => "vote.sync.ballot.b32",
+            WarpCollectiveOp::MatchAny => "match.sync.any.b32",
+            WarpCollectiveOp::MatchAll => "match.sync.all.b32",
+            WarpCollectiveOp::Elect => "elect.sync",
+            WarpCollectiveOp::ShflIdx => "shfl.sync.idx.b32",
+            WarpCollectiveOp::ShflUp => "shfl.sync.up.b32",
+            WarpCollectiveOp::ShflDown => "shfl.sync.down.b32",
+            WarpCollectiveOp::ShflBfly => "shfl.sync.bfly.b32",
+            WarpCollectiveOp::ReduxAdd => "redux.sync.add.u32",
+            WarpCollectiveOp::ReduxMin => "redux.sync.min.u32",
+            WarpCollectiveOp::ReduxMax => "redux.sync.max.u32",
+            WarpCollectiveOp::ReduxAnd => "redux.sync.and.b32",
+            WarpCollectiveOp::ReduxOr => "redux.sync.or.b32",
+            WarpCollectiveOp::ReduxXor => "redux.sync.xor.b32",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WarpCollectiveIsland {
+    op: WarpCollectiveOp,
+    dst: u32,
+    src: u32,
+    amount: u32,
+    pred: u32,
+    out_pred: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -6029,6 +6087,7 @@ struct Generator<'a> {
     set_result_regs: Vec<u32>,
     lop3_result_regs: Vec<u32>,
     branch_table_labels: u32,
+    warp_collective_islands: Vec<WarpCollectiveIsland>,
     /// (reg id, initial value). reg id is ≥ `n_working` (counters live above
     /// the working-reg range).
     counters: Vec<(u32, u32)>,
@@ -6049,6 +6108,7 @@ impl<'a> Generator<'a> {
             set_result_regs: Vec::new(),
             lop3_result_regs: Vec::new(),
             branch_table_labels: 0,
+            warp_collective_islands: Vec::new(),
             counters: Vec::new(),
         }
     }
@@ -6108,6 +6168,7 @@ impl<'a> Generator<'a> {
             return self.build_structured(u);
         }
 
+        self.gen_warp_collective_islands(u)?;
         let min_blocks = self.cfg.min_blocks.max(1);
         let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
         for i in 0..n_blocks {
@@ -6135,6 +6196,7 @@ impl<'a> Generator<'a> {
     }
 
     fn build_structured(mut self, u: &mut Unstructured) -> Result<String> {
+        self.gen_warp_collective_islands(u)?;
         let min_blocks = self.cfg.min_blocks.max(1);
         let n_blocks = u.int_in_range(min_blocks..=self.cfg.max_blocks.max(min_blocks))?;
         let body = self.gen_structured_seq(u, n_blocks, 0)?;
@@ -8237,6 +8299,51 @@ impl<'a> Generator<'a> {
             dst,
             selector,
         })
+    }
+
+    fn gen_warp_collective_islands(&mut self, u: &mut Unstructured) -> Result<()> {
+        if !self.cfg.emit_warp_collectives {
+            return Ok(());
+        }
+
+        let ops = [
+            WarpCollectiveOp::Activemask,
+            WarpCollectiveOp::VoteAll,
+            WarpCollectiveOp::VoteAny,
+            WarpCollectiveOp::VoteUni,
+            WarpCollectiveOp::VoteBallot,
+            WarpCollectiveOp::MatchAny,
+            WarpCollectiveOp::MatchAll,
+            WarpCollectiveOp::Elect,
+            WarpCollectiveOp::ShflIdx,
+            WarpCollectiveOp::ShflUp,
+            WarpCollectiveOp::ShflDown,
+            WarpCollectiveOp::ShflBfly,
+            WarpCollectiveOp::ReduxAdd,
+            WarpCollectiveOp::ReduxMin,
+            WarpCollectiveOp::ReduxMax,
+            WarpCollectiveOp::ReduxAnd,
+            WarpCollectiveOp::ReduxOr,
+            WarpCollectiveOp::ReduxXor,
+        ];
+        let n_islands = u.int_in_range(1..=3)?;
+        for _ in 0..n_islands {
+            let op = *u.choose(&ops)?;
+            let dst = self.pick_dst(u)?;
+            let src = self.pick_safe_reg(u)?;
+            let amount = u.int_in_range(0..=31)?;
+            let pred = self.alloc_pred();
+            let out_pred = self.alloc_pred();
+            self.warp_collective_islands.push(WarpCollectiveIsland {
+                op,
+                dst,
+                src,
+                amount,
+                pred,
+                out_pred,
+            });
+        }
+        Ok(())
     }
 
     fn pick_f16x2_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
@@ -10853,6 +10960,166 @@ impl<'a> Generator<'a> {
         s
     }
 
+    fn emit_warp_collective_islands(&self, s: &mut String) {
+        let scratch = self.wide_scratch_hi_reg();
+        for island in &self.warp_collective_islands {
+            writeln!(
+                s,
+                "    // fuzzx_random_warp_collective {}",
+                island.op.mnemonic()
+            )
+            .unwrap();
+            match island.op {
+                WarpCollectiveOp::Activemask => {
+                    writeln!(s, "    activemask.b32  %r{};", island.dst).unwrap();
+                }
+                WarpCollectiveOp::VoteAll
+                | WarpCollectiveOp::VoteAny
+                | WarpCollectiveOp::VoteUni
+                | WarpCollectiveOp::VoteBallot => {
+                    let threshold = island.amount + 1;
+                    writeln!(s, "    and.b32         %r{scratch}, %r{}, 31;", island.src).unwrap();
+                    writeln!(
+                        s,
+                        "    setp.lt.u32     %p{}, %r{scratch}, {threshold};",
+                        island.pred
+                    )
+                    .unwrap();
+                    match island.op {
+                        WarpCollectiveOp::VoteAll => {
+                            writeln!(
+                                s,
+                                "    vote.sync.all.pred %p{}, %p{}, 0xffffffff;",
+                                island.out_pred, island.pred
+                            )
+                            .unwrap();
+                            writeln!(
+                                s,
+                                "    selp.u32        %r{}, {threshold}, 0, %p{};",
+                                island.dst, island.out_pred
+                            )
+                            .unwrap();
+                        }
+                        WarpCollectiveOp::VoteAny => {
+                            writeln!(
+                                s,
+                                "    vote.sync.any.pred %p{}, %p{}, 0xffffffff;",
+                                island.out_pred, island.pred
+                            )
+                            .unwrap();
+                            writeln!(
+                                s,
+                                "    selp.u32        %r{}, {threshold}, 0, %p{};",
+                                island.dst, island.out_pred
+                            )
+                            .unwrap();
+                        }
+                        WarpCollectiveOp::VoteUni => {
+                            writeln!(
+                                s,
+                                "    vote.sync.uni.pred %p{}, %p{}, 0xffffffff;",
+                                island.out_pred, island.pred
+                            )
+                            .unwrap();
+                            writeln!(
+                                s,
+                                "    selp.u32        %r{}, {threshold}, 0, %p{};",
+                                island.dst, island.out_pred
+                            )
+                            .unwrap();
+                        }
+                        WarpCollectiveOp::VoteBallot => {
+                            writeln!(
+                                s,
+                                "    vote.sync.ballot.b32 %r{}, %p{}, 0xffffffff;",
+                                island.dst, island.pred
+                            )
+                            .unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                WarpCollectiveOp::MatchAny => {
+                    writeln!(
+                        s,
+                        "    match.sync.any.b32 %r{}, %r{}, 0xffffffff;",
+                        island.dst, island.src
+                    )
+                    .unwrap();
+                }
+                WarpCollectiveOp::MatchAll => {
+                    writeln!(
+                        s,
+                        "    match.sync.all.b32 %r{}|%p{}, %r{}, 0xffffffff;",
+                        island.dst, island.out_pred, island.src
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "    selp.u32        %r{scratch}, 0x80000000, 0, %p{};",
+                        island.out_pred
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "    xor.b32         %r{}, %r{}, %r{scratch};",
+                        island.dst, island.dst
+                    )
+                    .unwrap();
+                }
+                WarpCollectiveOp::Elect => {
+                    writeln!(
+                        s,
+                        "    elect.sync      %r{}|%p{}, 0xffffffff;",
+                        island.dst, island.out_pred
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "    selp.u32        %r{scratch}, 0x40000000, 0, %p{};",
+                        island.out_pred
+                    )
+                    .unwrap();
+                    writeln!(
+                        s,
+                        "    xor.b32         %r{}, %r{}, %r{scratch};",
+                        island.dst, island.dst
+                    )
+                    .unwrap();
+                }
+                WarpCollectiveOp::ShflIdx
+                | WarpCollectiveOp::ShflUp
+                | WarpCollectiveOp::ShflDown
+                | WarpCollectiveOp::ShflBfly => {
+                    writeln!(
+                        s,
+                        "    {} %r{}, %r{}, {}, 31, 0xffffffff;",
+                        island.op.mnemonic(),
+                        island.dst,
+                        island.src,
+                        island.amount
+                    )
+                    .unwrap();
+                }
+                WarpCollectiveOp::ReduxAdd
+                | WarpCollectiveOp::ReduxMin
+                | WarpCollectiveOp::ReduxMax
+                | WarpCollectiveOp::ReduxAnd
+                | WarpCollectiveOp::ReduxOr
+                | WarpCollectiveOp::ReduxXor => {
+                    writeln!(
+                        s,
+                        "    {} %r{}, %r{}, 0xffffffff;",
+                        island.op.mnemonic(),
+                        island.dst,
+                        island.src
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
+
     fn emit_prologue(&self, s: &mut String) {
         let tid_reg = self.tid_reg();
         let total_regs = (self.highest_scratch_reg() + 1).max(1);
@@ -11480,6 +11747,7 @@ impl<'a> Generator<'a> {
                 .unwrap();
                 writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
             }
+            self.emit_warp_collective_islands(s);
         }
         if self.cfg.emit_cta_barriers {
             writeln!(s, "    bar.sync        0;").unwrap();
@@ -23706,6 +23974,37 @@ mod tests {
         for mnemonic in WARP_COLLECTIVE_MNEMONICS {
             assert!(has_mnemonic(&ptx, mnemonic), "missing {mnemonic}");
         }
+    }
+
+    #[test]
+    fn randomized_warp_collective_island_generation_is_reachable() {
+        let cfg = coverage_heavy_config();
+        let mut found = vec![false; WARP_COLLECTIVE_MNEMONICS.len()];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            assert!(
+                ptx.contains("fuzzx_random_warp_collective"),
+                "seed {seed:x} did not emit a random warp collective island"
+            );
+            for (i, mnemonic) in WARP_COLLECTIVE_MNEMONICS.iter().enumerate() {
+                found[i] |= mnemonic_occurrences(&ptx, mnemonic) > 1;
+            }
+            if found.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = WARP_COLLECTIVE_MNEMONICS
+            .iter()
+            .zip(found)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit random islands for {missing:?}"
+        );
     }
 
     #[test]
