@@ -37,6 +37,45 @@ fn ptxas_accepts_warp_size_constant_at_both_opt_levels() {
 }
 
 #[test]
+fn ptxas_accepts_pred_logic_at_both_opt_levels() {
+    let arch_flag = format!("-arch={TARGET_ARCH}");
+    let ptx = format!(
+        r#".version 8.8
+.target {TARGET_ARCH}
+.address_size 64
+
+.visible .entry pred_logic_smoke(
+    .param .u64 out_ptr
+)
+{{
+    .reg .pred %p<4>;
+    .reg .b32 %r<3>;
+    .reg .b64 %rd<1>;
+
+    ld.param.u64 %rd0, [out_ptr];
+    mov.u32 %r0, %tid.x;
+    setp.lt.u32 %p0, %r0, 16;
+    setp.eq.u32 %p1, %r0, 0;
+    and.pred %p2, %p0, %p1;
+    or.pred %p3, %p0, %p1;
+    xor.pred %p1, %p2, %p3;
+    not.pred %p2, %p1;
+    selp.u32 %r1, 1, 0, %p1;
+    selp.u32 %r2, 2, 0, %p2;
+    add.u32 %r0, %r0, %r1;
+    add.u32 %r0, %r0, %r2;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}}
+"#
+    );
+
+    for opt in ["-O0", "-O3"] {
+        compile(&ptx, &[arch_flag.as_str(), opt]).unwrap();
+    }
+}
+
+#[test]
 fn ptxas_accepts_membar_at_both_opt_levels() {
     let arch_flag = format!("-arch={TARGET_ARCH}");
     let ptx = format!(

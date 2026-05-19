@@ -10255,6 +10255,9 @@ impl<'a> Generator<'a> {
         if self.cfg.emit_warp_collectives {
             total_pred = total_pred.max(5);
         }
+        if self.cfg.emit_pred_logic {
+            total_pred = total_pred.max(4);
+        }
 
         writeln!(s, ".version 8.8").unwrap();
         writeln!(s, ".target {TARGET_ARCH}").unwrap();
@@ -10323,6 +10326,19 @@ impl<'a> Generator<'a> {
         }
         for &(reg, init) in &self.counters {
             writeln!(s, "    mov.u32         %r{reg}, {init};").unwrap();
+        }
+        if self.cfg.emit_pred_logic {
+            let scratch = self.wide_scratch_hi_reg();
+            writeln!(s, "    setp.lt.u32     %p0, %r{tid_reg}, 16;").unwrap();
+            writeln!(s, "    setp.eq.u32     %p1, %r{tid_reg}, 0;").unwrap();
+            writeln!(s, "    and.pred        %p2, %p0, %p1;").unwrap();
+            writeln!(s, "    or.pred         %p3, %p0, %p1;").unwrap();
+            writeln!(s, "    xor.pred        %p1, %p2, %p3;").unwrap();
+            writeln!(s, "    not.pred        %p2, %p1;").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 1, 0, %p1;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
+            writeln!(s, "    selp.u32        %r{scratch}, 2, 0, %p2;").unwrap();
+            writeln!(s, "    add.u32         %r0, %r0, %r{scratch};").unwrap();
         }
         if self.cfg.emit_warp_barriers {
             writeln!(s, "    bar.warp.sync   0xffffffff;").unwrap();
