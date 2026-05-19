@@ -18719,6 +18719,7 @@ mod tests {
             emit_f32_slct: false,
             emit_wide_slct: false,
             emit_f64_slct: false,
+            emit_mad_carry: false,
             emit_vsub4: false,
             ..GenConfig::default()
         }
