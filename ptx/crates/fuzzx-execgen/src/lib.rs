@@ -12187,6 +12187,27 @@ impl<'a> Generator<'a> {
             writeln!(s, "    atom.shared.max.s64 %rd9, [%rd6 + 0], %rd9;").unwrap();
             writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
             writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            // red.shared.<op>.<type> on a private slot. The reduction has no
+            // return value, so reload the slot via ld.shared.u64 and fold
+            // the low half into the running output.
+            for (op, init_hex, val_hex) in [
+                ("red.shared.add.u64", "0x1", "0x2"),
+                ("red.shared.min.u64", "0x7", "0x3"),
+                ("red.shared.max.u64", "0x3", "0x7"),
+                ("red.shared.and.b64", "0xf0f0f0f0f0f0f0f0", "0x0f0f0f0f0f0f0f0f"),
+                ("red.shared.or.b64", "0xf0f0f0f0f0f0f0f0", "0x0f0f0f0f0f0f0f0f"),
+                ("red.shared.xor.b64", "0xa5a5a5a5a5a5a5a5", "0x5a5a5a5a5a5a5a5a"),
+                ("red.shared.min.s64", "0xfffffffffffffff0", "0x10"),
+                ("red.shared.max.s64", "0x10", "0xfffffffffffffff0"),
+            ] {
+                writeln!(s, "    mov.b64       %rd8, {init_hex};").unwrap();
+                writeln!(s, "    st.shared.u64 [%rd6 + 0], %rd8;").unwrap();
+                writeln!(s, "    mov.b64       %rd9, {val_hex};").unwrap();
+                writeln!(s, "    {op} [%rd6 + 0], %rd9;").unwrap();
+                writeln!(s, "    ld.shared.u64 %rd9, [%rd6 + 0];").unwrap();
+                writeln!(s, "    cvt.u32.u64   %r{scratch}, %rd9;").unwrap();
+                writeln!(s, "    add.u32       %r0, %r0, %r{scratch};").unwrap();
+            }
             let _ = s_lo; // silence unused
         }
         if self.cfg.emit_cta_barrier_reductions {
@@ -18983,6 +19004,14 @@ mod tests {
         "atom.shared.xor.b64",
         "atom.shared.exch.b64",
         "atom.shared.cas.b64",
+        "red.shared.add.u64",
+        "red.shared.min.u64",
+        "red.shared.max.u64",
+        "red.shared.min.s64",
+        "red.shared.max.s64",
+        "red.shared.and.b64",
+        "red.shared.or.b64",
+        "red.shared.xor.b64",
     ];
     const POST_KNOWN_SHARED_ATOMIC_MNEMONICS: &[&str] = &[
         "atom.shared.add.u32",
