@@ -837,6 +837,17 @@ impl F16ArithOp {
 }
 
 #[derive(Clone, Copy)]
+enum F16CvtOp {
+    F16ToF32ToF16,
+    F16ToF64ToF16,
+    F16ToU32,
+    F16ToS32,
+    U32ToF16,
+    S32ToF16,
+    F32ToF16x2,
+}
+
+#[derive(Clone, Copy)]
 enum GlobalLoadCacheOp {
     Default,
     Ca,
@@ -3971,6 +3982,13 @@ enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// Randomized half-precision conversion chain.
+    F16Cvt {
+        op: F16CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+    },
     /// Scalar 16-bit `setp` through `.b16` scratch registers, consumed by `selp.b32`.
     Scalar16Setp {
         cmp: CmpOp,
@@ -4800,6 +4818,17 @@ enum Inst {
         a: Operand,
         b: Operand,
         c: Operand,
+        cmp: CmpOp,
+        ca: Operand,
+        cb: Operand,
+        pred: u32,
+    },
+    /// Predicated randomized half-precision conversion chain.
+    PredicatedF16Cvt {
+        op: F16CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
         cmp: CmpOp,
         ca: Operand,
         cb: Operand,
@@ -8036,6 +8065,38 @@ impl<'a> Generator<'a> {
         }
     }
 
+    fn pick_f16_cvt(&mut self, u: &mut Unstructured) -> Result<Inst> {
+        let ops = [
+            F16CvtOp::F16ToF32ToF16,
+            F16CvtOp::F16ToF64ToF16,
+            F16CvtOp::F16ToU32,
+            F16CvtOp::F16ToS32,
+            F16CvtOp::U32ToF16,
+            F16CvtOp::S32ToF16,
+            F16CvtOp::F32ToF16x2,
+        ];
+        let op = *u.choose(&ops)?;
+        if self.cfg.emit_predicated_cvt && u.arbitrary::<bool>()? {
+            Ok(Inst::PredicatedF16Cvt {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+                cmp: pick_cmp(u, self.cfg.emit_signed_cmp)?,
+                ca: self.pick_guard_operand(u)?,
+                cb: self.pick_guard_operand(u)?,
+                pred: self.alloc_inst_pred(u)?,
+            })
+        } else {
+            Ok(Inst::F16Cvt {
+                op,
+                dst: self.pick_dst(u)?,
+                a: self.pick_cvt_operand(u)?,
+                b: self.pick_cvt_operand(u)?,
+            })
+        }
+    }
+
     fn pick_f16_compare(&mut self, u: &mut Unstructured) -> Result<Inst> {
         let pick = u.int_in_range(0..=2)?;
         if pick == 0 && self.cfg.emit_setp_bool && self.cfg.emit_predicated_alu {
@@ -8964,6 +9025,10 @@ impl<'a> Generator<'a> {
                 && u.int_in_range(0..=7)? == 0
             {
                 return self.pick_f64_special_math(u);
+            }
+            if self.cfg.emit_f16_cvt && self.cfg.emit_bitwise_binops && u.int_in_range(0..=7)? == 0
+            {
+                return self.pick_f16_cvt(u);
             }
             if self.cfg.emit_f16_arith
                 && self.cfg.emit_bitwise_binops
@@ -10315,6 +10380,7 @@ impl<'a> Generator<'a> {
             | Inst::Scalar16 { dst, .. }
             | Inst::F16Arith { dst, .. }
             | Inst::F16x2Arith { dst, .. }
+            | Inst::F16Cvt { dst, .. }
             | Inst::Scalar16Setp { dst, .. }
             | Inst::Scalar16Selp { dst, .. }
             | Inst::F16Selp { dst, .. }
@@ -10374,6 +10440,7 @@ impl<'a> Generator<'a> {
             | Inst::PredicatedScalar16 { dst, .. }
             | Inst::PredicatedF16Arith { dst, .. }
             | Inst::PredicatedF16x2Arith { dst, .. }
+            | Inst::PredicatedF16Cvt { dst, .. }
             | Inst::PredicatedF16Selp { dst, .. }
             | Inst::SetpBoolBin { dst, .. }
             | Inst::SetpDualBin { dst, .. }
@@ -11564,6 +11631,101 @@ impl<'a> Generator<'a> {
         writeln!(s, "    mov.b32       %r{dst}, {{%h0, %h1}};").unwrap();
     }
 
+    fn emit_bounded_u32_operand(&self, s: &mut String, dst: u32, operand: Operand, mask: u32) {
+        write!(s, "    and.b32       %r{dst}, ").unwrap();
+        operand.emit(s);
+        writeln!(s, ", {mask};").unwrap();
+    }
+
+    fn emit_f16_cvt_chain(
+        &self,
+        s: &mut String,
+        op: F16CvtOp,
+        dst: u32,
+        a: Operand,
+        b: Operand,
+        pred: Option<u32>,
+    ) {
+        let scratch = self.wide_scratch_hi_reg();
+        let guard = pred.map(pred_guard);
+        match op {
+            F16CvtOp::F16ToF32ToF16 => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                writeln!(s, "    mov.b16       %h1, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.f32.f16 %f0, %h0;").unwrap();
+                    writeln!(s, "    {guard} cvt.rn.f16.f32 %h1, %f0;").unwrap();
+                } else {
+                    writeln!(s, "    cvt.f32.f16   %f0, %h0;").unwrap();
+                    writeln!(s, "    cvt.rn.f16.f32 %h1, %f0;").unwrap();
+                }
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h1;").unwrap();
+            }
+            F16CvtOp::F16ToF64ToF16 => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                writeln!(s, "    mov.b16       %h1, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.f64.f16 %fd0, %h0;").unwrap();
+                    writeln!(s, "    {guard} cvt.rn.f16.f64 %h1, %fd0;").unwrap();
+                } else {
+                    writeln!(s, "    cvt.f64.f16   %fd0, %h0;").unwrap();
+                    writeln!(s, "    cvt.rn.f16.f64 %h1, %fd0;").unwrap();
+                }
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h1;").unwrap();
+            }
+            F16CvtOp::F16ToU32 => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.rzi.u32.f16 %r{dst}, %h0;").unwrap();
+                } else {
+                    writeln!(s, "    cvt.rzi.u32.f16 %r{dst}, %h0;").unwrap();
+                }
+            }
+            F16CvtOp::F16ToS32 => {
+                self.emit_sanitized_f16_operand(s, 0, a);
+                writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.rzi.s32.f16 %r{dst}, %h0;").unwrap();
+                } else {
+                    writeln!(s, "    cvt.rzi.s32.f16 %r{dst}, %h0;").unwrap();
+                }
+            }
+            F16CvtOp::U32ToF16 => {
+                self.emit_bounded_u32_operand(s, scratch, a, 31);
+                writeln!(s, "    mov.b16       %h0, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.rn.f16.u32 %h0, %r{scratch};").unwrap();
+                } else {
+                    writeln!(s, "    cvt.rn.f16.u32 %h0, %r{scratch};").unwrap();
+                }
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h0;").unwrap();
+            }
+            F16CvtOp::S32ToF16 => {
+                self.emit_bounded_u32_operand(s, scratch, a, 31);
+                writeln!(s, "    mov.b16       %h0, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.rn.f16.s32 %h0, %r{scratch};").unwrap();
+                } else {
+                    writeln!(s, "    cvt.rn.f16.s32 %h0, %r{scratch};").unwrap();
+                }
+                writeln!(s, "    cvt.u32.u16   %r{dst}, %h0;").unwrap();
+            }
+            F16CvtOp::F32ToF16x2 => {
+                self.emit_bounded_u32_operand(s, scratch, a, 31);
+                writeln!(s, "    cvt.rn.f32.u32 %f0, %r{scratch};").unwrap();
+                self.emit_bounded_u32_operand(s, scratch, b, 31);
+                writeln!(s, "    cvt.rn.f32.u32 %f1, %r{scratch};").unwrap();
+                writeln!(s, "    mov.u32       %r{dst}, 0;").unwrap();
+                if let Some(guard) = guard {
+                    writeln!(s, "    {guard} cvt.rn.f16x2.f32 %r{dst}, %f0, %f1;").unwrap();
+                } else {
+                    writeln!(s, "    cvt.rn.f16x2.f32 %r{dst}, %f0, %f1;").unwrap();
+                }
+            }
+        }
+    }
+
     fn emit_raw_f32_operand(&self, s: &mut String, freg: u32, operand: Operand, signed: bool) {
         let cvt = if signed {
             "cvt.rn.f32.s32"
@@ -11727,6 +11889,9 @@ impl<'a> Generator<'a> {
                     )
                     .unwrap();
                 }
+            }
+            Inst::F16Cvt { op, dst, a, b } => {
+                self.emit_f16_cvt_chain(s, op, dst, a, b, None);
             }
             Inst::Scalar16Setp {
                 cmp,
@@ -13838,6 +14003,19 @@ impl<'a> Generator<'a> {
                     )
                     .unwrap();
                 }
+            }
+            Inst::PredicatedF16Cvt {
+                op,
+                dst,
+                a,
+                b,
+                cmp,
+                ca,
+                cb,
+                pred,
+            } => {
+                self.emit_inst_predicate_setup(s, cmp, ca, cb, pred);
+                self.emit_f16_cvt_chain(s, op, dst, a, b, Some(pred));
             }
             Inst::PredicatedF16Selp {
                 cmp,
@@ -19240,6 +19418,13 @@ mod tests {
             .any(|token| token == mnemonic)
     }
 
+    fn mnemonic_occurrences(ptx: &str, mnemonic: &str) -> usize {
+        ptx.lines()
+            .filter_map(body_mnemonic)
+            .filter(|token| *token == mnemonic)
+            .count()
+    }
+
     fn mnemonic_set(ptx: &str) -> HashSet<&str> {
         ptx.lines()
             .filter_map(|line| line.trim_start().split_whitespace().next())
@@ -24493,6 +24678,66 @@ mod tests {
     #[test]
     fn f16_cvt_generation_is_reachable() {
         assert_mnemonic_coverage(&coverage_heavy_config(), 4096, 1, F16_CVT_MNEMONICS);
+    }
+
+    #[test]
+    fn randomized_f16_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_compare: false,
+            emit_bf16_tf32_cvt: false,
+            emit_arbitrary_loops: false,
+            ..coverage_heavy_config()
+        };
+
+        let baseline_cfg = GenConfig {
+            min_blocks: 1,
+            max_blocks: 1,
+            min_insts_per_block: 0,
+            max_insts_per_block: 0,
+            ..cfg.clone()
+        };
+        let baseline_ptx =
+            generate_from_bytes_with_config(&bytes_from_seed(0, 1024), &baseline_cfg).unwrap();
+        let baseline: Vec<_> = F16_CVT_MNEMONICS
+            .iter()
+            .map(|mnemonic| mnemonic_occurrences(&baseline_ptx, mnemonic))
+            .collect();
+        let mut found_extra = vec![false; F16_CVT_MNEMONICS.len()];
+
+        for seed in 0..32768 {
+            let bytes = bytes_from_seed(seed, 8192);
+            let ptx = generate_from_bytes_with_config(&bytes, &cfg).unwrap();
+            for (i, mnemonic) in F16_CVT_MNEMONICS.iter().enumerate() {
+                found_extra[i] |= mnemonic_occurrences(&ptx, mnemonic) > baseline[i];
+            }
+            if found_extra.iter().all(|seen| *seen) {
+                return;
+            }
+        }
+
+        let missing: Vec<_> = F16_CVT_MNEMONICS
+            .iter()
+            .zip(found_extra)
+            .filter_map(|(mnemonic, seen)| (!seen).then_some(*mnemonic))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "sample did not emit randomized f16 conversion mnemonics beyond the deterministic prologue: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn predicated_randomized_f16_cvt_generation_is_reachable() {
+        let cfg = GenConfig {
+            emit_scalar_16bit: false,
+            emit_f16_arith: false,
+            emit_f16_compare: false,
+            emit_bf16_tf32_cvt: false,
+            ..coverage_heavy_config()
+        };
+        assert_predicated_mnemonic_coverage(&cfg, 8192, 32768, F16_CVT_MNEMONICS);
     }
 
     #[test]
