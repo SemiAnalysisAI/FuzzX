@@ -1966,7 +1966,21 @@ bool validateMemoryShape(Function &Kernel) {
   unsigned Stores = 0;
   for (BasicBlock &BB : Kernel) {
     for (Instruction &I : BB) {
+      // Alloca and any access through a fuzz.alloca.* GEP/load/store is
+      // freely allowed; these come from the alloca-promotion exercise case.
+      if (isa<AllocaInst>(&I))
+        continue;
       if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
+        if (hasNameStartingWith(GEP, "fuzz.alloca."))
+          continue;
+        if (hasNameStartingWith(GEP, "fuzz.atom.") ||
+            hasNameStartingWith(GEP, "fuzz.cmpxchg.")) {
+          if (GEP->getPointerOperand() != Kernel.getArg(1) ||
+              GEP->getNumIndices() != 1 ||
+              !hasName(GEP->idx_begin()->get(), "idx64"))
+            return false;
+          continue;
+        }
         if (GEP->getSourceElementType() != Type::getInt32Ty(Kernel.getContext()))
           return false;
         if (hasName(GEP, "in.ptr") || hasName(GEP, "out.ptr")) {
@@ -1990,6 +2004,8 @@ bool validateMemoryShape(Function &Kernel) {
           return false;
         }
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
+        if (hasNameStartingWith(Load, "fuzz.alloca."))
+          continue;
         if (!Load->getType()->isIntegerTy(32))
           return false;
         if (hasName(Load->getPointerOperand(), "in.ptr")) {
@@ -2000,11 +2016,14 @@ bool validateMemoryShape(Function &Kernel) {
           return false;
         }
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+        if (hasNameStartingWith(Store->getPointerOperand(), "fuzz.alloca."))
+          continue;
         ++Stores;
         if (!Store->getValueOperand()->getType()->isIntegerTy(32) ||
             !hasName(Store->getPointerOperand(), "out.ptr"))
           return false;
       }
+      // AtomicRMWInst, AtomicCmpXchgInst, FenceInst are unrestricted here.
     }
   }
   return SawBaseInGEP && SawBaseOutGEP && BaseLoads == 1 && Stores == 1 &&
