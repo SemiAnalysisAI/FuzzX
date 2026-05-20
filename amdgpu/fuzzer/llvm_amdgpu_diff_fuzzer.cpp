@@ -789,8 +789,9 @@ bool isAllowedIRInstruction(const Instruction &I) {
   if (isa<BranchInst, SwitchInst, ReturnInst, LoadInst, StoreInst,
           GetElementPtrInst, ZExtInst, SExtInst, TruncInst, UIToFPInst,
           SIToFPInst, FPToUIInst, FPToSIInst, FPExtInst, FPTruncInst,
-          BitCastInst,
-          ICmpInst, FCmpInst, PHINode, SelectInst>(&I))
+          BitCastInst, FreezeInst,
+          ICmpInst, FCmpInst, PHINode, SelectInst,
+          AllocaInst, AtomicRMWInst, AtomicCmpXchgInst, FenceInst>(&I))
     return true;
   if (auto *BO = dyn_cast<BinaryOperator>(&I)) {
     switch (BO->getOpcode()) {
