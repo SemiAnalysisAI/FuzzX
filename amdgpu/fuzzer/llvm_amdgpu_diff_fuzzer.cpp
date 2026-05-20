@@ -325,6 +325,18 @@ Function *findIRKernel(Module &M) {
   return F;
 }
 
+Value *findKernelIdx64(Function *F) {
+  if (!F)
+    return nullptr;
+  for (BasicBlock &BB : *F) {
+    for (Instruction &I : BB) {
+      if (I.hasName() && I.getName() == "idx64")
+        return &I;
+    }
+  }
+  return nullptr;
+}
+
 ConstantInt *interestingI32(LLVMContext &Ctx, std::minstd_rand &Gen) {
   static constexpr std::array<uint32_t, 12> Values = {
       0, 1, 2, 3, 7, 31, 0xff, 0xffff, 0x7fffffff, 0x80000000u,
@@ -20073,7 +20085,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1729) {
+  switch (Gen() % 1737) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22457,6 +22469,101 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::copysign, {F32}),
         {FA, FB}, "fuzz.copysign.call");
     return B.CreateFPToUI(R, I32, "fuzz.copysign.toui");
+  }
+  // Atomic ops on per-thread output slot.  Each thread atomics on out[idx];
+  // since each thread owns a distinct slot, there's no contention and the
+  // returned old value is deterministic per-thread across O0/O2 runs.  The
+  // launchKernel hipMemset zeros out before each invocation, so the first
+  // atomic in the chain sees old=0.  Final kernel store overwrites the slot
+  // with the chain's final value, so output is the chain result as usual.
+  case 1729: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateAdd(A, Bv, "fuzz.atom.fallback.add");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::Add, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1730: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateXor(A, Bv, "fuzz.atom.fallback.xor");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::Xor, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1731: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateAnd(A, Bv, "fuzz.atom.fallback.and");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::And, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1732: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateOr(A, Bv, "fuzz.atom.fallback.or");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::Or, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1733: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateCall(
+          Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {I32}),
+          {A, Bv}, "fuzz.atom.fallback.umin");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::UMin, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1734: {
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateCall(
+          Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I32}),
+          {A, Bv}, "fuzz.atom.fallback.umax");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.atom.ptr");
+    return B.CreateAtomicRMW(AtomicRMWInst::UMax, Ptr, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1735: {
+    // cmpxchg out[idx], A, Bv -> {i32 old, i1 success}; extract old.
+    Function *F = B.GetInsertBlock()->getParent();
+    Value *Idx64 = findKernelIdx64(F);
+    if (!Idx64)
+      return B.CreateAdd(A, Bv, "fuzz.cmpxchg.fallback");
+    Value *Ptr = B.CreateGEP(I32, F->getArg(1), Idx64, "fuzz.cmpxchg.ptr");
+    Value *Pair = B.CreateAtomicCmpXchg(Ptr, A, Bv, MaybeAlign(4),
+                                        AtomicOrdering::Monotonic,
+                                        AtomicOrdering::Monotonic);
+    return B.CreateExtractValue(Pair, 0, "fuzz.cmpxchg.old");
+  }
+  case 1736: {
+    // alloca [4 x i32] in entry block, store chain-derived values, then load
+    // at a chain-controlled index.  Exercises AMDGPUPromoteAllocaImpl.
+    Function *F = B.GetInsertBlock()->getParent();
+    ArrayType *AT = ArrayType::get(I32, 4);
+    IRBuilder<NoFolder> EntryB(
+        &*F->getEntryBlock().getFirstInsertionPt());
+    Value *Arr = EntryB.CreateAlloca(AT, nullptr, "fuzz.alloca");
+    Value *Zero = ci32(Ctx, 0);
+    for (unsigned I = 0; I < 4; ++I) {
+      Value *Slot = B.CreateGEP(AT, Arr, {Zero, ci32(Ctx, I)},
+                                "fuzz.alloca.gep");
+      B.CreateStore((I % 2) == 0 ? A : Bv, Slot);
+    }
+    Value *IdxSel = B.CreateAnd(Bv, ci32(Ctx, 3), "fuzz.alloca.idx");
+    Value *ReadSlot = B.CreateGEP(AT, Arr, {Zero, IdxSel},
+                                  "fuzz.alloca.read.gep");
+    return B.CreateLoad(I32, ReadSlot, "fuzz.alloca.read");
   }
   default:
     switch (Gen() % 5) {
