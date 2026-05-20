@@ -49,6 +49,12 @@ LLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD:-AMDGPU;X86}"
 LLVM_ENABLE_ASSERTIONS="${LLVM_ENABLE_ASSERTIONS:-OFF}"
 LLVM_USE_SANITIZER="${LLVM_USE_SANITIZER:-OFF}"
 LLVM_USE_SANITIZE_COVERAGE="${LLVM_USE_SANITIZE_COVERAGE:-ON}"
+# LLVM_FUZZX_SANCOV=ON injects -fsanitize-coverage=... directly into
+# CMAKE_CXX_FLAGS so that all of LLVM/clang gets inline-8bit-counter +
+# pc-table sancov instrumentation, independent of LLVM_USE_SANITIZER (which
+# in upstream gates LLVM_USE_SANITIZE_COVERAGE).  Used to feed compiler-side
+# coverage back into the fuzzer harness as a libFuzzer feature signal.
+LLVM_FUZZX_SANCOV="${LLVM_FUZZX_SANCOV:-OFF}"
 CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
 
 HOST_CLANG="${HOST_CLANG:-/opt/rocm-7.1.1/lib/llvm/bin/clang}"
@@ -113,6 +119,14 @@ if [[ -n "$LLVM_USE_SANITIZER" && "$LLVM_USE_SANITIZER" != "OFF" ]]; then
     cmake_args+=(-DLLVM_USE_SANITIZER="$LLVM_USE_SANITIZER")
 else
     cmake_args+=(-DLLVM_USE_SANITIZER=)
+fi
+
+if [[ "$LLVM_FUZZX_SANCOV" =~ ^(1|ON|on|true|TRUE|yes|YES)$ ]]; then
+    SANCOV_FLAGS="-fsanitize-coverage=inline-8bit-counters,pc-table"
+    cmake_args+=(
+        -DCMAKE_C_FLAGS_INIT="$SANCOV_FLAGS"
+        -DCMAKE_CXX_FLAGS_INIT="$SANCOV_FLAGS"
+    )
 fi
 
 cmake "${cmake_args[@]}"
