@@ -378,6 +378,7 @@ Tested toolchains as of 2026-05-19:
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 | [c003-permlane16-isel-ice](known-miscompiles/c003-permlane16-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.permlane16` ICEs with `Cannot select` on every CDNA target (gfx9xx); the instruction is GFX10+/RDNA only but the intrinsic is declared target-unconditional. |
+| [c004-mov-dpp8-isel-ice](known-miscompiles/c004-mov-dpp8-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.mov.dpp8` ICEs with `Cannot select` on every CDNA target; same root cause as c003 -- DPP8 is GFX10+/RDNA only. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.
 But then it became clear that the ROCm 7.2.3 release didn't have many of these
