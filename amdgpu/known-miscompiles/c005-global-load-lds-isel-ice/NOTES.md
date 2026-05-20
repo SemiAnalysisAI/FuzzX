@@ -2,11 +2,14 @@
 
 The "global-load-to-LDS" intrinsic is documented as a GFX9.4 / GFX10+
 data-movement primitive that copies bytes from a global address directly
-into LDS without going through VGPRs.  On `gfx950` the intrinsic is reached
-by the SDAG ISel but the matcher has no pattern for it on this subtarget,
-so it aborts with `Cannot select` instead of either selecting the right
-instruction (if gfx950 has one) or giving a clean diagnostic (if it does
-not).
+into LDS without going through VGPRs.  On `gfx950` the intrinsic itself
+compiles cleanly for valid byte sizes (1, 2, 4) -- but when the `size`
+immediate is `0`, the SDAG matcher aborts with `Cannot select` instead of
+emitting a clean diagnostic.
+
+`size=0` is not meaningful so this is unreachable in well-formed source,
+but a defended backend should produce a verifier error or a clean
+"unsupported intrinsic argument" message rather than `report_fatal_error`.
 
 ```bash
 known-miscompiles/run_ll_compiler_reproducer.sh \
