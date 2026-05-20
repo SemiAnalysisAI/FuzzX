@@ -20122,7 +20122,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1750) {
+  switch (Gen() % 1758) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22663,6 +22663,45 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     B.CreateStore(Bv, Slot);
     B.CreateFence(AtomicOrdering::Release, SyncScope::SingleThread);
     return B.CreateLoad(I32, Slot, "fuzz.lds.load");
+  }
+  // Uniform-address LDS atomicrmw add (side-effect only).  All lanes atomic
+  // on lds[0] with the same value (constant 1), so this is exactly the
+  // pattern AMDGPUAtomicOptimizerImpl targets for wave-level reduction.  The
+  // returned value is order-dependent / contended across lanes so we ignore
+  // it and continue the chain with A; final kernel store is unchanged.
+  case 1750:
+  case 1751:
+  case 1752:
+  case 1753: {
+    GlobalVariable *LDS = getOrCreateLDSGlobal(M);
+    Value *Zero = ci32(Ctx, 0);
+    Value *Slot = B.CreateGEP(LDS->getValueType(), LDS, {Zero, Zero},
+                              "fuzz.lds.uniform.slot");
+    B.CreateAtomicRMW(AtomicRMWInst::Add, Slot, ci32(Ctx, 1), MaybeAlign(4),
+                      AtomicOrdering::Monotonic);
+    return A;
+  }
+  // Larger alloca ([16 x i32]) -- AMDGPUPromoteAllocaImpl thresholds for
+  // vector promotion need bigger arrays than [4 x i32].
+  case 1754:
+  case 1755:
+  case 1756:
+  case 1757: {
+    Function *F = B.GetInsertBlock()->getParent();
+    ArrayType *AT = ArrayType::get(I32, 16);
+    IRBuilder<NoFolder> EntryB(
+        &*F->getEntryBlock().getFirstInsertionPt());
+    Value *Arr = EntryB.CreateAlloca(AT, nullptr, "fuzz.alloca");
+    Value *Zero = ci32(Ctx, 0);
+    for (unsigned I = 0; I < 16; ++I) {
+      Value *Slot = B.CreateGEP(AT, Arr, {Zero, ci32(Ctx, I)},
+                                "fuzz.alloca.gep");
+      B.CreateStore((I & 1) ? Bv : A, Slot);
+    }
+    Value *IdxSel = B.CreateAnd(Bv, ci32(Ctx, 15), "fuzz.alloca.idx");
+    Value *ReadSlot = B.CreateGEP(AT, Arr, {Zero, IdxSel},
+                                  "fuzz.alloca.read.gep");
+    return B.CreateLoad(I32, ReadSlot, "fuzz.alloca.read");
   }
   default:
     switch (Gen() % 5) {
