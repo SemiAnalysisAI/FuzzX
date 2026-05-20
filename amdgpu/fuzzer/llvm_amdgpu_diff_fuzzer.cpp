@@ -20016,7 +20016,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1698) {
+  switch (Gen() % 1718) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22203,6 +22203,116 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   case 1697:
     return emitRandomI32SignedMin3Max3Idiom(
         B, M, A, Bv, Gen, "fuzz.i32min3max3.idiom");
+  case 1698: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    return B.CreateOr(B.CreateAnd(A, Bv, "fuzz.r3.and"), Cv,
+                      "fuzz.r3.and_or");
+  }
+  case 1699: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    return B.CreateOr(B.CreateOr(A, Bv, "fuzz.r3.or"), Cv, "fuzz.r3.or3");
+  }
+  case 1700: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    return B.CreateAdd(B.CreateAdd(A, Bv, "fuzz.r3.add"), Cv,
+                       "fuzz.r3.add3");
+  }
+  case 1701:
+    return B.CreateAdd(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.r3.shl"), Bv,
+        "fuzz.r3.lshl_add");
+  case 1702:
+    return B.CreateOr(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.r3.shl"), Bv,
+        "fuzz.r3.lshl_or");
+  case 1703: {
+    Value *Sum = B.CreateAdd(A, Bv, "fuzz.r3.add");
+    return B.CreateShl(Sum, ci32(Ctx, Gen() & 31u), "fuzz.r3.add_lshl");
+  }
+  case 1704: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    return B.CreateXor(B.CreateXor(A, Bv, "fuzz.r3.xor"), Cv,
+                       "fuzz.r3.xor3");
+  }
+  case 1705: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    return B.CreateXor(B.CreateAnd(A, Bv, "fuzz.r3.and"), Cv,
+                       "fuzz.r3.and_xor");
+  }
+  case 1706: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *NOr = B.CreateXor(B.CreateOr(A, Bv, "fuzz.r3.or"),
+                             ci32(Ctx, 0xFFFFFFFFu), "fuzz.r3.nor");
+    return B.CreateOr(NOr, Cv, "fuzz.r3.nor_or");
+  }
+  case 1707: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A, Bv,
+                              "fuzz.r3.cmp");
+    return B.CreateSelect(Cmp, Cv, A, "fuzz.r3.select3");
+  }
+  case 1708: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Inner = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {I32}),
+        {Bv, Cv}, "fuzz.r3.umin");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I32}),
+        {A, Inner}, "fuzz.r3.umaxumin");
+  }
+  case 1709: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Inner = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I32}),
+        {A, Bv}, "fuzz.r3.smax");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I32}),
+        {Inner, Cv}, "fuzz.r3.sminmax");
+  }
+  case 1710:
+    return B.CreateAdd(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.r3.shl.a"),
+        B.CreateShl(Bv, ci32(Ctx, Gen() & 31u), "fuzz.r3.shl.b"),
+        "fuzz.r3.dualshl_add");
+  case 1711: {
+    unsigned K1 = (unsigned)Gen();
+    unsigned K2 = ~K1;
+    return B.CreateOr(
+        B.CreateAnd(A, ci32(Ctx, K1), "fuzz.r3.mask.a"),
+        B.CreateAnd(Bv, ci32(Ctx, K2), "fuzz.r3.mask.b"),
+        "fuzz.r3.mask_merge");
+  }
+  case 1712: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Sum = B.CreateAdd(A, Bv, "fuzz.r3.add");
+    return B.CreateSub(Sum, Cv, "fuzz.r3.addsub");
+  }
+  case 1713: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Prod = B.CreateMul(A, Bv, "fuzz.r3.mul");
+    return B.CreateAdd(Prod, Cv, "fuzz.r3.mad");
+  }
+  case 1714:
+    return B.CreateXor(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.r3.shl"), Bv,
+        "fuzz.r3.lshl_xor");
+  case 1715:
+    return B.CreateAnd(
+        B.CreateLShr(A, ci32(Ctx, Gen() & 31u), "fuzz.r3.lshr"), Bv,
+        "fuzz.r3.lshr_and");
+  case 1716: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *NotBv = B.CreateXor(Bv, ci32(Ctx, 0xFFFFFFFFu), "fuzz.r3.notb");
+    Value *Lo = B.CreateAnd(A, NotBv, "fuzz.r3.bfi.lo");
+    Value *Hi = B.CreateAnd(Cv, Bv, "fuzz.r3.bfi.hi");
+    return B.CreateOr(Lo, Hi, "fuzz.r3.bfi");
+  }
+  case 1717: {
+    Value *Cv = chooseI32Value(InsertPt, Gen);
+    Value *Xor = B.CreateXor(A, Bv, "fuzz.r3.cxor");
+    Value *Masked = B.CreateAnd(Xor, Cv, "fuzz.r3.cmask");
+    return B.CreateXor(Masked, Bv, "fuzz.r3.cinv");
+  }
   default:
     switch (Gen() % 5) {
     case 0:
@@ -22237,7 +22347,7 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Type *I8 = Type::getInt8Ty(Ctx);
   Type *I16 = Type::getInt16Ty(Ctx);
   Type *I32 = Type::getInt32Ty(Ctx);
-  switch (Gen() % 1690) {
+  switch (Gen() % 1710) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.cfg.add");
   case 1:
@@ -24421,6 +24531,118 @@ Value *emitRandomCFGArmInstruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   case 1689:
     return emitRandomI32SignedMin3Max3Idiom(
         B, M, A, Bv, Gen, "fuzz.cfg.i32min3max3.idiom");
+  case 1690: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    return B.CreateOr(B.CreateAnd(A, Bv, "fuzz.cfg.r3.and"), Cv,
+                      "fuzz.cfg.r3.and_or");
+  }
+  case 1691: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    return B.CreateOr(B.CreateOr(A, Bv, "fuzz.cfg.r3.or"), Cv,
+                      "fuzz.cfg.r3.or3");
+  }
+  case 1692: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    return B.CreateAdd(B.CreateAdd(A, Bv, "fuzz.cfg.r3.add"), Cv,
+                       "fuzz.cfg.r3.add3");
+  }
+  case 1693:
+    return B.CreateAdd(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.shl"), Bv,
+        "fuzz.cfg.r3.lshl_add");
+  case 1694:
+    return B.CreateOr(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.shl"), Bv,
+        "fuzz.cfg.r3.lshl_or");
+  case 1695: {
+    Value *Sum = B.CreateAdd(A, Bv, "fuzz.cfg.r3.add");
+    return B.CreateShl(Sum, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.add_lshl");
+  }
+  case 1696: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    return B.CreateXor(B.CreateXor(A, Bv, "fuzz.cfg.r3.xor"), Cv,
+                       "fuzz.cfg.r3.xor3");
+  }
+  case 1697: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    return B.CreateXor(B.CreateAnd(A, Bv, "fuzz.cfg.r3.and"), Cv,
+                       "fuzz.cfg.r3.and_xor");
+  }
+  case 1698: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *NOr = B.CreateXor(B.CreateOr(A, Bv, "fuzz.cfg.r3.or"),
+                             ci32(Ctx, 0xFFFFFFFFu), "fuzz.cfg.r3.nor");
+    return B.CreateOr(NOr, Cv, "fuzz.cfg.r3.nor_or");
+  }
+  case 1699: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A, Bv,
+                              "fuzz.cfg.r3.cmp");
+    return B.CreateSelect(Cmp, Cv, A, "fuzz.cfg.r3.select3");
+  }
+  case 1700: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Inner = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umin, {I32}),
+        {Bv, Cv}, "fuzz.cfg.r3.umin");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::umax, {I32}),
+        {A, Inner}, "fuzz.cfg.r3.umaxumin");
+  }
+  case 1701: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Inner = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smax, {I32}),
+        {A, Bv}, "fuzz.cfg.r3.smax");
+    return B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::smin, {I32}),
+        {Inner, Cv}, "fuzz.cfg.r3.sminmax");
+  }
+  case 1702:
+    return B.CreateAdd(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.shl.a"),
+        B.CreateShl(Bv, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.shl.b"),
+        "fuzz.cfg.r3.dualshl_add");
+  case 1703: {
+    unsigned K1 = (unsigned)Gen();
+    unsigned K2 = ~K1;
+    return B.CreateOr(
+        B.CreateAnd(A, ci32(Ctx, K1), "fuzz.cfg.r3.mask.a"),
+        B.CreateAnd(Bv, ci32(Ctx, K2), "fuzz.cfg.r3.mask.b"),
+        "fuzz.cfg.r3.mask_merge");
+  }
+  case 1704: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Sum = B.CreateAdd(A, Bv, "fuzz.cfg.r3.add");
+    return B.CreateSub(Sum, Cv, "fuzz.cfg.r3.addsub");
+  }
+  case 1705: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Prod = B.CreateMul(A, Bv, "fuzz.cfg.r3.mul");
+    return B.CreateAdd(Prod, Cv, "fuzz.cfg.r3.mad");
+  }
+  case 1706:
+    return B.CreateXor(
+        B.CreateShl(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.shl"), Bv,
+        "fuzz.cfg.r3.lshl_xor");
+  case 1707:
+    return B.CreateAnd(
+        B.CreateLShr(A, ci32(Ctx, Gen() & 31u), "fuzz.cfg.r3.lshr"), Bv,
+        "fuzz.cfg.r3.lshr_and");
+  case 1708: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *NotBv = B.CreateXor(Bv, ci32(Ctx, 0xFFFFFFFFu),
+                               "fuzz.cfg.r3.notb");
+    Value *Lo = B.CreateAnd(A, NotBv, "fuzz.cfg.r3.bfi.lo");
+    Value *Hi = B.CreateAnd(Cv, Bv, "fuzz.cfg.r3.bfi.hi");
+    return B.CreateOr(Lo, Hi, "fuzz.cfg.r3.bfi");
+  }
+  case 1709: {
+    Value *Cv = interestingI32(Ctx, Gen);
+    Value *Xor = B.CreateXor(A, Bv, "fuzz.cfg.r3.cxor");
+    Value *Masked = B.CreateAnd(Xor, Cv, "fuzz.cfg.r3.cmask");
+    return B.CreateXor(Masked, Bv, "fuzz.cfg.r3.cinv");
+  }
   default:
     switch (Gen() % 5) {
     case 0:
