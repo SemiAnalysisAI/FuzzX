@@ -20122,7 +20122,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1741) {
+  switch (Gen() % 1750) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22513,7 +22513,10 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   // launchKernel hipMemset zeros out before each invocation, so the first
   // atomic in the chain sees old=0.  Final kernel store overwrites the slot
   // with the chain's final value, so output is the chain result as usual.
-  case 1729: {
+  case 1729:
+  case 1741:
+  case 1742:
+  case 1743: {
     Function *F = B.GetInsertBlock()->getParent();
     Value *Idx64 = findKernelIdx64(F);
     if (!Idx64)
@@ -22583,7 +22586,10 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
                                         AtomicOrdering::Monotonic);
     return B.CreateExtractValue(Pair, 0, "fuzz.cmpxchg.old");
   }
-  case 1736: {
+  case 1736:
+  case 1744:
+  case 1745:
+  case 1746: {
     // alloca [4 x i32] in entry block, store chain-derived values, then load
     // at a chain-controlled index.  Exercises AMDGPUPromoteAllocaImpl.
     Function *F = B.GetInsertBlock()->getParent();
@@ -22605,7 +22611,10 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   // LDS (addrspace(3)) per-workitem store-then-load.  LDS is per-workgroup
   // and uninitialized; each thread writes to its own slot @fuzz.lds.arr[WI]
   // then reads it back.  Exercises AMDGPUSwLowerLDS / AMDGPULowerModuleLDS.
-  case 1737: {
+  case 1737:
+  case 1747:
+  case 1748:
+  case 1749: {
     GlobalVariable *LDS = getOrCreateLDSGlobal(M);
     Function *WIFn = Intrinsic::getOrInsertDeclaration(
         &M, Intrinsic::amdgcn_workitem_id_x);
