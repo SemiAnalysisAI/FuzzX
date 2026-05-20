@@ -20016,7 +20016,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1718) {
+  switch (Gen() % 1729) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22312,6 +22312,94 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     Value *Xor = B.CreateXor(A, Bv, "fuzz.r3.cxor");
     Value *Masked = B.CreateAnd(Xor, Cv, "fuzz.r3.cmask");
     return B.CreateXor(Masked, Bv, "fuzz.r3.cinv");
+  }
+  case 1718:
+    return B.CreateFreeze(A, "fuzz.freeze");
+  case 1719: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.fma");
+    Value *FB = boundedUIToF32(B, Bv, 31, "fuzz.fma.b");
+    Value *FC = boundedUIToF32(B, chooseI32Value(InsertPt, Gen), 1023,
+                               "fuzz.fma.c");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fma, {F32}),
+        {FA, FB, FC}, "fuzz.fma.call");
+    return B.CreateFPToUI(R, I32, "fuzz.fma.toui");
+  }
+  case 1720: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.fmuladd");
+    Value *FB = boundedUIToF32(B, Bv, 31, "fuzz.fmuladd.b");
+    Value *FC = boundedUIToF32(B, chooseI32Value(InsertPt, Gen), 1023,
+                               "fuzz.fmuladd.c");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fmuladd, {F32}),
+        {FA, FB, FC}, "fuzz.fmuladd.call");
+    return B.CreateFPToUI(R, I32, "fuzz.fmuladd.toui");
+  }
+  case 1721: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.fminimum");
+    Value *FB = boundedUIToF32(B, Bv, 1023, "fuzz.fminimum.b");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::minimum, {F32}),
+        {FA, FB}, "fuzz.fminimum.call");
+    return B.CreateFPToUI(R, I32, "fuzz.fminimum.toui");
+  }
+  case 1722: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.fmaximum");
+    Value *FB = boundedUIToF32(B, Bv, 1023, "fuzz.fmaximum.b");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::maximum, {F32}),
+        {FA, FB}, "fuzz.fmaximum.call");
+    return B.CreateFPToUI(R, I32, "fuzz.fmaximum.toui");
+  }
+  case 1723: {
+    Value *Scale = ci32(Ctx, Gen() & 7u);
+    Value *R = B.CreateIntrinsic(Intrinsic::smul_fix, {I32},
+                                 {A, Bv, Scale}, nullptr, "fuzz.smul.fix");
+    return R;
+  }
+  case 1724: {
+    Value *Scale = ci32(Ctx, Gen() & 7u);
+    Value *R = B.CreateIntrinsic(Intrinsic::umul_fix, {I32},
+                                 {A, Bv, Scale}, nullptr, "fuzz.umul.fix");
+    return R;
+  }
+  case 1725: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.ldexp");
+    Value *Exp = B.CreateAnd(Bv, ci32(Ctx, 7), "fuzz.ldexp.exp");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::ldexp, {F32, I32}),
+        {FA, Exp}, "fuzz.ldexp.call");
+    return B.CreateFPToUI(R, I32, "fuzz.ldexp.toui");
+  }
+  case 1726: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.canon");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::canonicalize, {F32}),
+        {FA}, "fuzz.canon.call");
+    return B.CreateFPToUI(R, I32, "fuzz.canon.toui");
+  }
+  case 1727: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.fabs");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fabs, {F32}),
+        {FA}, "fuzz.fabs.call");
+    return B.CreateFPToUI(R, I32, "fuzz.fabs.toui");
+  }
+  case 1728: {
+    Type *F32 = Type::getFloatTy(Ctx);
+    Value *FA = boundedUIToF32(B, A, 1023, "fuzz.copysign");
+    Value *FB = boundedUIToF32(B, Bv, 1023, "fuzz.copysign.b");
+    Value *R = B.CreateCall(
+        Intrinsic::getOrInsertDeclaration(&M, Intrinsic::copysign, {F32}),
+        {FA, FB}, "fuzz.copysign.call");
+    return B.CreateFPToUI(R, I32, "fuzz.copysign.toui");
   }
   default:
     switch (Gen() % 5) {
