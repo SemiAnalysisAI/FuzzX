@@ -1853,6 +1853,34 @@ bool triggersM065OvByteGatherStore(const Instruction &I) {
                              "fuzz.cfg.ovbytegather.idiom", Seen);
 }
 
+bool triggersM068M069UmaxBitop3CascadeStore(const Instruction &I) {
+  const auto *Store = dyn_cast<StoreInst>(&I);
+  if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(Store->getValueOperand(),
+                          "fuzz.umaxbitop3cascade.idiom", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Store->getValueOperand(),
+                             "fuzz.cfg.umaxbitop3cascade.idiom", Seen);
+}
+
+bool triggersM067BytecondselSelfAndStore(const Instruction &I) {
+  const auto *Store = dyn_cast<StoreInst>(&I);
+  if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  if (dependsOnNamePrefix(Store->getValueOperand(),
+                          "fuzz.bytecondsel.idiom", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Store->getValueOperand(),
+                             "fuzz.cfg.bytecondsel.idiom", Seen);
+}
+
 bool triggersM066Veci16ZExtMulBitop3LoopStore(const Instruction &I) {
   const auto *Store = dyn_cast<StoreInst>(&I);
   if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
@@ -2016,6 +2044,11 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM065 = envFlag("FUZZX_ALLOW_M065_USUB_OVERFLOW_XOR_FOLD", false);
   bool AllowM066 =
       envFlag("FUZZX_ALLOW_M066_VECI16ZEXTMUL_BITOP3_LOOP", false);
+  bool AllowM067 =
+      envFlag("FUZZX_ALLOW_M067_BYTECONDSEL_SELF_AND", false);
+  bool AllowM068M069 =
+      envFlag("FUZZX_ALLOW_M068_LOOP_VOP3FUSED_UMAXBITOP3", false) ||
+      envFlag("FUZZX_ALLOW_M069_UMAXBITOP3CASCADE_STORE", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -2068,6 +2101,8 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM064 && triggersM064NibbleCarryLoopStore(I)) ||
               (!AllowM065 && triggersM065OvByteGatherStore(I)) ||
               (!AllowM066 && triggersM066Veci16ZExtMulBitop3LoopStore(I)) ||
+              (!AllowM067 && triggersM067BytecondselSelfAndStore(I)) ||
+              (!AllowM068M069 && triggersM068M069UmaxBitop3CascadeStore(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
