@@ -1853,6 +1853,29 @@ bool triggersM065OvByteGatherStore(const Instruction &I) {
                              "fuzz.cfg.ovbytegather.idiom", Seen);
 }
 
+bool triggersM066Veci16ZExtMulBitop3LoopStore(const Instruction &I) {
+  const auto *Store = dyn_cast<StoreInst>(&I);
+  if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
+    return false;
+
+  SmallPtrSet<const Value *, 32> Seen;
+  bool HasLoop =
+      dependsOnNamePrefix(Store->getValueOperand(), "fuzz.loop.acc", Seen);
+  Seen.clear();
+  HasLoop |= dependsOnNamePrefix(Store->getValueOperand(),
+                                 "fuzz.loop.nest.acc", Seen);
+  if (!HasLoop)
+    return false;
+
+  Seen.clear();
+  if (dependsOnNamePrefix(Store->getValueOperand(),
+                          "fuzz.veci16zextmul.idiom", Seen))
+    return true;
+  Seen.clear();
+  return dependsOnNamePrefix(Store->getValueOperand(),
+                             "fuzz.cfg.veci16zextmul.idiom", Seen);
+}
+
 bool triggersM064NibbleCarryLoopStore(const Instruction &I) {
   const auto *Store = dyn_cast<StoreInst>(&I);
   if (!Store || !Store->getValueOperand()->getType()->isIntegerTy(32))
@@ -1991,6 +2014,8 @@ bool validateIRCorpusModule(Module &M) {
   bool AllowM063 = envFlag("FUZZX_ALLOW_M063_OVERFLOW_CARRY_BITOP3", false);
   bool AllowM064 = envFlag("FUZZX_ALLOW_M064_NIBBLECARRY_LOOP", false);
   bool AllowM065 = envFlag("FUZZX_ALLOW_M065_USUB_OVERFLOW_XOR_FOLD", false);
+  bool AllowM066 =
+      envFlag("FUZZX_ALLOW_M066_VECI16ZEXTMUL_BITOP3_LOOP", false);
   bool AllowC001 = envFlag("FUZZX_ALLOW_C001_SUDOT_ISEL_ICE", false);
   bool AllowC002 = envFlag("FUZZX_ALLOW_C002_FMA_LEGACY_ISEL_ICE", false);
   Function *Kernel = findIRKernel(M);
@@ -2042,6 +2067,7 @@ bool validateIRCorpusModule(Module &M) {
               (!AllowM063 && triggersM063OverflowCarryStore(I)) ||
               (!AllowM064 && triggersM064NibbleCarryLoopStore(I)) ||
               (!AllowM065 && triggersM065OvByteGatherStore(I)) ||
+              (!AllowM066 && triggersM066Veci16ZExtMulBitop3LoopStore(I)) ||
               (!AllowC001 && triggersC001SUDotISELICE(I)) ||
               (!AllowC002 && triggersC002FMALegacyISELICE(I)))
             return false;
