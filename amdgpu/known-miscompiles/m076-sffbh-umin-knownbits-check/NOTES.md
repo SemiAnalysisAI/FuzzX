@@ -1,7 +1,7 @@
 # m076: `umin(amdgcn.sffbh(x), Clamp)` folds to `sffbh(x)` when `x` could be `-1` at runtime
 
-Found by reading `performMinMaxCombine` in `SIISelLowering.cpp` (around line
-16175 in current HEAD).  The fold:
+*Discovery method: code inspection.* Found by reading `performMinMaxCombine`
+in `SIISelLowering.cpp` (around line 16175 in current HEAD).  The fold:
 
 ```cpp
 // umin(sffbh(x), bitwidth) -> sffbh(x) if x is known to be not 0 or -1.
