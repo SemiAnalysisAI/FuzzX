@@ -381,6 +381,7 @@ Tested toolchains as of 2026-05-19:
 | [c004-mov-dpp8-isel-ice](known-miscompiles/c004-mov-dpp8-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.mov.dpp8` ICEs with `Cannot select` on every CDNA target; same root cause as c003 -- DPP8 is GFX10+/RDNA only. |
 | [c005-global-load-lds-isel-ice](known-miscompiles/c005-global-load-lds-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.global.load.lds` ICEs with `Cannot select` on gfx950; same family as c003/c004. `llvm.amdgcn.ds.ordered.add` ICEs the same way (mentioned in the c005 notes rather than getting its own entry). |
 | [c006-tanh-isel-ice](known-miscompiles/c006-tanh-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.tanh` (both `.f32` and `.f16`) ICEs with `Cannot select` on gfx950; `v_tanh_*` is a GFX12 instruction not available on CDNA. Same fix shape as c003. |
+| [c007-fcmp-i32-wave64-fold-ice](known-miscompiles/c007-fcmp-i32-wave64-fold-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.fcmp.i32` with two equal constant FP operands ICEs at `-O2` on any wave64 target with `invalid type for register "exec"`; the constant folder doesn't validate that the requested return width matches the wave size. Distinct shape from c003--c006 -- a constant-folder bug rather than a missing subtarget predicate. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.
 But then it became clear that the ROCm 7.2.3 release didn't have many of these
