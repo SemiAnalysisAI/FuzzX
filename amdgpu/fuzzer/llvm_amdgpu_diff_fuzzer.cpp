@@ -337,6 +337,20 @@ Value *findKernelIdx64(Function *F) {
   return nullptr;
 }
 
+GlobalVariable *getOrCreateLDSGlobal(Module &M) {
+  if (auto *GV = M.getNamedGlobal("fuzz.lds.arr"))
+    return GV;
+  LLVMContext &Ctx = M.getContext();
+  ArrayType *AT = ArrayType::get(Type::getInt32Ty(Ctx), 256);
+  auto *GV = new GlobalVariable(M, AT, /*isConstant=*/false,
+                                GlobalValue::InternalLinkage,
+                                UndefValue::get(AT), "fuzz.lds.arr", nullptr,
+                                GlobalValue::NotThreadLocal,
+                                /*AddrSpace=*/3);
+  GV->setAlignment(Align(16));
+  return GV;
+}
+
 ConstantInt *interestingI32(LLVMContext &Ctx, std::minstd_rand &Gen) {
   static constexpr std::array<uint32_t, 12> Values = {
       0, 1, 2, 3, 7, 31, 0xff, 0xffff, 0x7fffffff, 0x80000000u,
@@ -1971,7 +1985,8 @@ bool validateMemoryShape(Function &Kernel) {
       if (isa<AllocaInst>(&I))
         continue;
       if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-        if (hasNameStartingWith(GEP, "fuzz.alloca."))
+        if (hasNameStartingWith(GEP, "fuzz.alloca.") ||
+            hasNameStartingWith(GEP, "fuzz.lds."))
           continue;
         if (hasNameStartingWith(GEP, "fuzz.atom.") ||
             hasNameStartingWith(GEP, "fuzz.cmpxchg.")) {
@@ -2004,7 +2019,8 @@ bool validateMemoryShape(Function &Kernel) {
           return false;
         }
       } else if (auto *Load = dyn_cast<LoadInst>(&I)) {
-        if (hasNameStartingWith(Load, "fuzz.alloca."))
+        if (hasNameStartingWith(Load, "fuzz.alloca.") ||
+            hasNameStartingWith(Load, "fuzz.lds."))
           continue;
         if (!Load->getType()->isIntegerTy(32))
           return false;
@@ -2016,7 +2032,8 @@ bool validateMemoryShape(Function &Kernel) {
           return false;
         }
       } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
-        if (hasNameStartingWith(Store->getPointerOperand(), "fuzz.alloca."))
+        if (hasNameStartingWith(Store->getPointerOperand(), "fuzz.alloca.") ||
+            hasNameStartingWith(Store->getPointerOperand(), "fuzz.lds."))
           continue;
         ++Stores;
         if (!Store->getValueOperand()->getType()->isIntegerTy(32) ||
@@ -20105,7 +20122,7 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
   Type *I32 = Type::getInt32Ty(Ctx);
   Value *A = Current;
   Value *Bv = chooseI32Value(InsertPt, Gen);
-  switch (Gen() % 1737) {
+  switch (Gen() % 1741) {
   case 0:
     return B.CreateAdd(A, Bv, "fuzz.add");
   case 1:
@@ -22584,6 +22601,59 @@ Value *emitRandomIRInstruction(IRBuilder<NoFolder> &B, Module &M,
     Value *ReadSlot = B.CreateGEP(AT, Arr, {Zero, IdxSel},
                                   "fuzz.alloca.read.gep");
     return B.CreateLoad(I32, ReadSlot, "fuzz.alloca.read");
+  }
+  // LDS (addrspace(3)) per-workitem store-then-load.  LDS is per-workgroup
+  // and uninitialized; each thread writes to its own slot @fuzz.lds.arr[WI]
+  // then reads it back.  Exercises AMDGPUSwLowerLDS / AMDGPULowerModuleLDS.
+  case 1737: {
+    GlobalVariable *LDS = getOrCreateLDSGlobal(M);
+    Function *WIFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::amdgcn_workitem_id_x);
+    Value *WI = B.CreateCall(WIFn, {}, "fuzz.lds.wi");
+    Value *Zero = ci32(Ctx, 0);
+    Value *Slot = B.CreateGEP(LDS->getValueType(), LDS, {Zero, WI},
+                              "fuzz.lds.slot");
+    B.CreateStore(Bv, Slot);
+    return B.CreateLoad(I32, Slot, "fuzz.lds.load");
+  }
+  case 1738: {
+    // LDS atomicrmw add on per-WI slot, monotonic, workgroup scope.
+    GlobalVariable *LDS = getOrCreateLDSGlobal(M);
+    Function *WIFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::amdgcn_workitem_id_x);
+    Value *WI = B.CreateCall(WIFn, {}, "fuzz.lds.wi");
+    Value *Zero = ci32(Ctx, 0);
+    Value *Slot = B.CreateGEP(LDS->getValueType(), LDS, {Zero, WI},
+                              "fuzz.lds.slot");
+    return B.CreateAtomicRMW(AtomicRMWInst::Add, Slot, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1739: {
+    // LDS atomicrmw xor on per-WI slot.
+    GlobalVariable *LDS = getOrCreateLDSGlobal(M);
+    Function *WIFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::amdgcn_workitem_id_x);
+    Value *WI = B.CreateCall(WIFn, {}, "fuzz.lds.wi");
+    Value *Zero = ci32(Ctx, 0);
+    Value *Slot = B.CreateGEP(LDS->getValueType(), LDS, {Zero, WI},
+                              "fuzz.lds.slot");
+    return B.CreateAtomicRMW(AtomicRMWInst::Xor, Slot, Bv, MaybeAlign(4),
+                             AtomicOrdering::Monotonic);
+  }
+  case 1740: {
+    // Fence release (single-thread) — exercises waitcnt insertion.  Sandwiched
+    // between an LDS store and a load on the same slot to keep the optimizer
+    // from removing it.
+    GlobalVariable *LDS = getOrCreateLDSGlobal(M);
+    Function *WIFn = Intrinsic::getOrInsertDeclaration(
+        &M, Intrinsic::amdgcn_workitem_id_x);
+    Value *WI = B.CreateCall(WIFn, {}, "fuzz.lds.wi");
+    Value *Zero = ci32(Ctx, 0);
+    Value *Slot = B.CreateGEP(LDS->getValueType(), LDS, {Zero, WI},
+                              "fuzz.lds.slot");
+    B.CreateStore(Bv, Slot);
+    B.CreateFence(AtomicOrdering::Release, SyncScope::SingleThread);
+    return B.CreateLoad(I32, Slot, "fuzz.lds.load");
   }
   default:
     switch (Gen() % 5) {
