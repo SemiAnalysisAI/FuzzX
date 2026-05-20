@@ -227,7 +227,7 @@ rediscovering the same issue.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable scalar `llvm.fshl.i32` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md) and [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md); the legacy `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` flag is also accepted. |
+| `FUZZX_ALLOW_M016_SCALAR_FSHL=1` | unset | Re-enable scalar `llvm.fshl.i32` generation for [m015](known-miscompiles/m015-scalar-fshl-zero/NOTES.md), [m016](known-miscompiles/m016-scalar-fshl-one/NOTES.md), and [m070](known-miscompiles/m070-scalar-fshl-shift8/NOTES.md); the legacy `FUZZX_ALLOW_M015_SCALAR_FSHL_ZERO=1` flag is also accepted. |
 | `FUZZX_ALLOW_M026_UMAX_XOR_AND_HIGHBIT=1` | unset | Re-enable `(umax(a, b) ^ b) & umax(a, b)` shapes for [m026](known-miscompiles/m026-shl-umax-xor-and/NOTES.md). |
 | `FUZZX_ALLOW_M028_UMAX_AND_NOT=1` | unset | Re-enable `(umax((y & ~x), C) & x) & ~x` shapes for [m028](known-miscompiles/m028-umax-and-not/NOTES.md). |
 | `FUZZX_ALLOW_M030_CTLZ_SHL_OR_BITOP3=1` | unset | Re-enable `or(add(shl(...), z), z)` and `or(smin(add(shl(...), z), z), z)` tails for [m030](known-miscompiles/m030-ctlz-shl-or-bitop3/NOTES.md). |
@@ -371,6 +371,7 @@ Tested toolchains as of 2026-05-19:
 | [m067-bytecondsel-and-i1-self](known-miscompiles/m067-bytecondsel-and-i1-self/NOTES.md) | ✅ | ❌ | ❌ | LLVM HEAD and ROCm HEAD `-O0` mis-lower `select i1 (and i1 X, X) c, 0` (where `X = icmp ult i32 a, 0`, always false) by evaluating the select as if the condition were true, storing `0xCE` instead of the oracle/`-O2` result `0x59`; ROCm 7.2.3 passes. |
 | [m068-loop-vop3fused-umaxbitop3](known-miscompiles/m068-loop-vop3fused-umaxbitop3/NOTES.md) | ❌ | ❌ | ❌ | `-O2` miscompiles a nested loop whose accumulator is seeded from `vop3fused` + `umaxbitop3cascade` shapes, storing `0x937E` instead of the oracle/`-O0` `0x8210A05D`. |
 | [m069-umaxbitop3cascade-store](known-miscompiles/m069-umaxbitop3cascade-store/NOTES.md) | ❌? | ❌ | ❌? | `-O2` miscompiles a final store whose value is `fuzz.umaxbitop3cascade.idiom.a.add`, storing `0x5C83AF47` instead of the oracle/`-O0` `0x814EF57`.  Sibling bug to m068; ROCm 7.2.3 / ROCm HEAD not yet verified. |
+| [m070-scalar-fshl-shift8](known-miscompiles/m070-scalar-fshl-shift8/NOTES.md) | ✅ | ❌ | ❌ | `-O0` lowers scalar `fshl.i32(x, 0, 8)` to a 64-bit shift by `-8`, returning `x >> 24` instead of `x << 8`; same lowering family as m015/m016 but shows the bug applies to every non-zero constant shift, not just `c=1`. |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
 
