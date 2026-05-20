@@ -1,6 +1,7 @@
 # m074: `amdgcn.fmed3(x, y, NaN)` with IEEE-off mode constant-folds to `maximumnum` instead of `minimumnum`
 
-Found by reading `AMDGPUInstCombineIntrinsic.cpp`.  The InstCombine fold
+*Discovery method: code inspection.* Found by reading
+`AMDGPUInstCombineIntrinsic.cpp`.  The InstCombine fold
 for `amdgcn.fmed3` enumerates which of the three operands is a known NaN
 / infinity, then rewrites the call into a two-operand `min/max` of the
 remaining operands.  The polarity used for the third-operand (`Src2`)

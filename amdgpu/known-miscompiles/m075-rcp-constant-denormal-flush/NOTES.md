@@ -1,7 +1,8 @@
 # m075: `amdgcn.rcp.f32(C)` constant folder ignores f32 flush-to-zero, producing a denormal the hardware would have flushed
 
-Found by reading `AMDGPUInstCombineIntrinsic.cpp` around the `amdgcn_rcp`
-fold.  The fold for a constant operand computes `1.0 / C` with full
+*Discovery method: code inspection.* Found by reading
+`AMDGPUInstCombineIntrinsic.cpp` around the `amdgcn_rcp` fold.  The
+fold for a constant operand computes `1.0 / C` with full
 APFloat precision and inserts the result as a `ConstantFP`.  A `TODO`
 comment immediately above the fold even calls out the issue:
 
