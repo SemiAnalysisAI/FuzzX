@@ -2196,7 +2196,7 @@ Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
   Value *A64 = extendI32ToI64(B, A, Gen);
   Value *B64 = extendI32ToI64(B, Bv, Gen);
   Value *Result = nullptr;
-  switch (Gen() % 28) {
+  switch (Gen() % 36) {
   case 0:
     Result = B.CreateAdd(A64, B64, "fuzz.i64.add");
     break;
@@ -2321,6 +2321,63 @@ Value *emitRandomI64Instruction(IRBuilder<NoFolder> &B, Module &M, Value *A,
         Intrinsic::getOrInsertDeclaration(&M, Intrinsic::abs, {I64}),
         {A64, ConstantInt::getFalse(Ctx)}, "fuzz.i64.abs");
     break;
+  case 27: {
+    Value *Sum = B.CreateAdd(A64, B64, "fuzz.i64.r3.add");
+    Value *X = B.CreateXor(A64, B64, "fuzz.i64.r3.xor");
+    Result = B.CreateAdd(Sum, X, "fuzz.i64.r3.add3");
+    break;
+  }
+  case 28:
+    Result = B.CreateAdd(
+        B.CreateShl(A64, ConstantInt::get(I64, Gen() & 63u),
+                    "fuzz.i64.r3.shl"),
+        B64, "fuzz.i64.r3.lshl_add");
+    break;
+  case 29:
+    Result = B.CreateOr(
+        B.CreateShl(A64, ConstantInt::get(I64, Gen() & 63u),
+                    "fuzz.i64.r3.shl"),
+        B64, "fuzz.i64.r3.lshl_or");
+    break;
+  case 30: {
+    Value *Sum = B.CreateAdd(A64, B64, "fuzz.i64.r3.add");
+    Result = B.CreateShl(Sum, ConstantInt::get(I64, Gen() & 63u),
+                         "fuzz.i64.r3.add_lshl");
+    break;
+  }
+  case 31: {
+    Value *Inner = B.CreateOr(A64, B64, "fuzz.i64.r3.or");
+    Value *NotOr = B.CreateXor(Inner, ConstantInt::get(I64, ~uint64_t(0)),
+                               "fuzz.i64.r3.nor");
+    Value *X = B.CreateXor(A64, B64, "fuzz.i64.r3.xor");
+    Result = B.CreateXor(NotOr, X, "fuzz.i64.r3.xor3");
+    break;
+  }
+  case 32: {
+    Value *Prod = B.CreateMul(A64, B64, "fuzz.i64.r3.mul");
+    Value *X = B.CreateXor(A64, B64, "fuzz.i64.r3.xor");
+    Result = B.CreateAdd(Prod, X, "fuzz.i64.r3.mad");
+    break;
+  }
+  case 33: {
+    uint64_t K1 = (uint64_t(Gen()) << 32) | uint64_t(Gen());
+    uint64_t K2 = ~K1;
+    Result = B.CreateOr(
+        B.CreateAnd(A64, ConstantInt::get(I64, K1),
+                    "fuzz.i64.r3.mask.a"),
+        B.CreateAnd(B64, ConstantInt::get(I64, K2),
+                    "fuzz.i64.r3.mask.b"),
+        "fuzz.i64.r3.mask_merge");
+    break;
+  }
+  case 34: {
+    Value *NotB = B.CreateXor(B64, ConstantInt::get(I64, ~uint64_t(0)),
+                              "fuzz.i64.r3.notb");
+    Value *Lo = B.CreateAnd(A64, NotB, "fuzz.i64.r3.bfi.lo");
+    Value *Hi = B.CreateAnd(B64, A64, "fuzz.i64.r3.bfi.hi");
+    Result = B.CreateOr(Lo, Hi, "fuzz.i64.r3.bfi");
+    break;
+  }
   default: {
     Value *Cmp = B.CreateICmp(randomICmpPredicate(Gen), A64, B64,
                               "fuzz.i64.cmp");
