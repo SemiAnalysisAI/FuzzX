@@ -377,6 +377,7 @@ Tested toolchains as of 2026-05-19:
 | [m073-bitop3-t1t2-and-or-xor](known-miscompiles/m073-bitop3-t1t2-and-or-xor/NOTES.md) | ❌ | ❌ | ❌ | `-O0` lowers `((a&b) & (a|c)) ^ ((a&b) | (a|c))` to `v_bitop3_b32` truth table `0x5e` instead of `0x1e`; an extra minterm fires at `(a=1, b=1, c=0)`. Structurally distinct from m071/m072 (5 ops, two intermediate values reused with AND/OR/XOR -- no `~T` term). |
 | [c001-sudot-isel-ice](known-miscompiles/c001-sudot-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.sudot4` / `llvm.amdgcn.sudot8` abort in AMDGPU instruction selection with `Cannot select`. |
 | [c002-fma-legacy-isel-ice](known-miscompiles/c002-fma-legacy-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `-O0` leaves `llvm.amdgcn.fma.legacy` for AMDGPU instruction selection, which aborts with `Cannot select`; `-O2` compiles the reduced case. |
+| [c003-permlane16-isel-ice](known-miscompiles/c003-permlane16-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.permlane16` ICEs with `Cannot select` on every CDNA target (gfx9xx); the instruction is GFX10+/RDNA only but the intrinsic is declared target-unconditional. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.
 But then it became clear that the ROCm 7.2.3 release didn't have many of these
