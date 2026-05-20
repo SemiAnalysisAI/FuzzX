@@ -380,6 +380,7 @@ Tested toolchains as of 2026-05-19:
 | [c003-permlane16-isel-ice](known-miscompiles/c003-permlane16-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.permlane16` ICEs with `Cannot select` on every CDNA target (gfx9xx); the instruction is GFX10+/RDNA only but the intrinsic is declared target-unconditional. |
 | [c004-mov-dpp8-isel-ice](known-miscompiles/c004-mov-dpp8-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.mov.dpp8` ICEs with `Cannot select` on every CDNA target; same root cause as c003 -- DPP8 is GFX10+/RDNA only. |
 | [c005-global-load-lds-isel-ice](known-miscompiles/c005-global-load-lds-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.global.load.lds` ICEs with `Cannot select` on gfx950; same family as c003/c004. `llvm.amdgcn.ds.ordered.add` ICEs the same way (mentioned in the c005 notes rather than getting its own entry). |
+| [c006-tanh-isel-ice](known-miscompiles/c006-tanh-isel-ice/NOTES.md) | ❌ | ❌ | ❌ | `llvm.amdgcn.tanh` (both `.f32` and `.f16`) ICEs with `Cannot select` on gfx950; `v_tanh_*` is a GFX12 instruction not available on CDNA. Same fix shape as c003. |
 
 *Human-written note:* Up through bug m016 I was testing against upstream LLVM.
 But then it became clear that the ROCm 7.2.3 release didn't have many of these
