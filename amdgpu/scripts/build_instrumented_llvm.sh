@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
 ROOT="$(pwd)"
 
 LLVM_PROJECT_DIR="${LLVM_PROJECT_DIR:-$ROOT/third_party/llvm-project}"

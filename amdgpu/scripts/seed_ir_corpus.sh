@@ -3,7 +3,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 if [[ "$#" -ne 1 ]]; then
     echo "usage: $0 CORPUS_DIR" >&2

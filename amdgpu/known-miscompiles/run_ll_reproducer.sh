@@ -5,7 +5,7 @@
 set -euo pipefail
 
 CALLER_PWD="$(pwd)"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [[ "${1:-}" == /* ]]; then
