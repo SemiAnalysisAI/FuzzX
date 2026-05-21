@@ -218,16 +218,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 182 | [182-simplifycfg-sink-merges-two-fences](bugs/182-simplifycfg-sink-merges-two-fences/) | SimplifyCFG SinkCommonCodeFromPredecessors | two `fence` instructions in mutually-exclusive predecessors collapsed to one — one of two release-acquire pairs destroyed | confirmed (opt diff) |
 | 183 | [183-simplifycfg-hoist-memintrinsic-drops-nontemporal](bugs/183-simplifycfg-hoist-memintrinsic-drops-nontemporal/) | SimplifyCFG hoistCommonCodeFromSuccessors | hoisted `llvm.memcpy` drops `!nontemporal` when only one of two carries it (combineMetadataForCSE writes JMD) | confirmed (opt diff) |
 | 184 | [184-instcombine-atomic-memcpy-memset-loses-element-atomicity](bugs/184-instcombine-atomic-memcpy-memset-loses-element-atomicity/) | InstCombineCalls SimplifyAnyMemTransfer/Set | element-atomic memcpy/memset with elt=1, len=4 collapsed to single i32 atomic load+store; per-byte atomicity granularity lost | confirmed (opt diff) |
-
-### Worker w71 coverage (LoopVectorize)
-- Hunted LV miscompiles via C-level random fuzz, IR-level random fuzz, and pattern-targeted tests
-- Compared O0 vs O2; also O2 vs O2 with -fno-vectorize/-fno-slp-vectorize as reference
-- Patterns probed: tail-folded reductions, predicated div/rem, first-order recurrence, stride-3/5 interleave, min/max reduction with index (FindLast), early-exit, anyOf, gather/scatter, conditional store, conditional load, alignment edges, multiple inductions, reverse iteration, u8 wrap accum, FP min/max
-- Flag combos: default O2; predicate-dont-vectorize; force-vector-width 2/4/8/16/32; force-vector-interleave 2/4/8; -mavx2; -mavx512f/vl/bw/dq; -enable-masked-interleaved-mem-accesses; -enable-early-exit-vectorization
-- Initial integer C-fuzz found 13 mismatches (signed-overflow / INT_MIN/-1 UB — disappeared with -fwrapv, not LV bugs)
-- FP fuzz with -ffast-math found 122 mismatches but all persist with -fno-vectorize (generic FP reassoc, not LV)
-- After UB-filtering: 0 confirmed LV miscompiles in ~12 minutes
-- Conclusion: LoopVectorize at default O2 is robust against these patterns; no bugs added
 | 185 | [185-licm-promote-hoists-conditional-load-to-preheader](bugs/185-licm-promote-hoists-conditional-load-to-preheader/) | LICM promoteLoopAccessesToScalars | hoists a conditional load to unconditional preheader load; UB-injection if pointer was only deref-after-store | confirmed (opt diff) |
 | 186 | [186-licm-promote-sinks-conditional-store-via-thread-local](bugs/186-licm-promote-sinks-conditional-store-via-thread-local/) | LICM promoteLoopAccessesToScalars | sinks N conditional stores into single exit-store via "thread-local" gate; signal-handler / setjmp observability lost | confirmed (opt diff) |
 | 187 | [187-gvn-freeze-cse-distinct-instances](bugs/187-gvn-freeze-cse-distinct-instances/) | **Standard GVN** ValueTable lookupOrAddImpl | freeze falls through to createExpr → two distinct `freeze` of same poison-able operand assigned same VN, one replaces the other (Alive2-falsifiable, default O2) | confirmed (opt diff) |
@@ -297,3 +287,15 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 251 | [251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw](bugs/251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw/) | CVP runImpl + processBinOp via ValueLattice.h:247 | `select i1 %cmp, i64 undef, i64 1` taints lattice; CVP adds `range(i64 1,3)` return attr AND `add nuw nsw`; both unsound for `undef = INT_MAX`. Matches upstream #114902 | confirmed (opt diff) |
 | 252 | [252-jumpthreading-unfoldSelectInstr-branches-on-poison](bugs/252-jumpthreading-unfoldSelectInstr-branches-on-poison/) | JumpThreading.cpp:2792 unfoldSelectInstr | original safely freezes potentially-poison condition before branching; after JT, the freeze is gone and `br i1 %maybe_poison` is direct UB | confirmed (opt diff) |
 | 253 | [253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred](bugs/253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred/) | InstCombineAddSub.cpp:1355 foldAddLikeCommutative | `or disjoint (add nsw A, 5), (B & 250)` → `add nsw A, (or B, 5)` but `disjoint` only proves no unsigned carry, not signed; for a=100,b=130 source returns -21, target → poison | confirmed (opt diff) |
+
+## Coverage notes
+
+### Worker w71 (LoopVectorize)
+- Hunted LV miscompiles via C-level random fuzz, IR-level random fuzz, and pattern-targeted tests
+- Compared O0 vs O2; also O2 vs O2 with -fno-vectorize/-fno-slp-vectorize as reference
+- Patterns probed: tail-folded reductions, predicated div/rem, first-order recurrence, stride-3/5 interleave, min/max reduction with index (FindLast), early-exit, anyOf, gather/scatter, conditional store, conditional load, alignment edges, multiple inductions, reverse iteration, u8 wrap accum, FP min/max
+- Flag combos: default O2; predicate-dont-vectorize; force-vector-width 2/4/8/16/32; force-vector-interleave 2/4/8; -mavx2; -mavx512f/vl/bw/dq; -enable-masked-interleaved-mem-accesses; -enable-early-exit-vectorization
+- Initial integer C-fuzz found 13 mismatches (signed-overflow / INT_MIN/-1 UB — disappeared with -fwrapv, not LV bugs)
+- FP fuzz with -ffast-math found 122 mismatches but all persist with -fno-vectorize (generic FP reassoc, not LV)
+- After UB-filtering: 0 confirmed LV miscompiles in ~12 minutes
+- Conclusion: LoopVectorize at default O2 is robust against these patterns; no bugs added
