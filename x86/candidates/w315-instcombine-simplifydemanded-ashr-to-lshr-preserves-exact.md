@@ -122,7 +122,30 @@ established that the bottom-`N` bits are zero -- but for *negative* values
 "bottom bits == sign bit == 1", not "bottom bits == 0", so the `exact`
 flag remains valid for `ashr` but becomes a false claim under `lshr`.
 
+## Existing LLVM test bakes in the bug
+
+`llvm/test/Transforms/InstCombine/ashr-demand.ll` has the test
+`ashr_can_be_lshr` which asserts the buggy behavior verbatim:
+
+```llvm
+; "If it does not matter if we do ashr or lshr, then we canonicalize to lshr."
+define i16 @ashr_can_be_lshr(i32 %a) {
+; CHECK-NEXT:    [[ASHR:%.*]] = lshr exact i32 [[A:%.*]], 16
+; CHECK-NEXT:    [[TRUNC:%.*]] = trunc nuw i32 [[ASHR]] to i16
+  %ashr = ashr exact i32 %a, 16
+  %trunc = trunc nsw i32 %ashr to i16
+  ret i16 %trunc
+}
+```
+
+The test comment "if it does not matter" is wrong: it DOES matter for the
+poison set when `a` is negative. The check pattern needs to be updated to
+expect plain `lshr i32 %a, 16` (without `exact`) once the fix lands.
+
 ## Confidence
 
 High (verified by reproducer against the built `opt`).
-Root cause is localized to two lines; the fix is mechanical.
+Root cause is localized to two lines; the fix is mechanical (drop
+`setIsExact` from the `!ShiftedInBitsDemanded` arm). The CHECK pattern in
+`ashr-demand.ll` provides additional evidence that the buggy transform is
+the routine, intended path of this code -- this is not a rare corner case.

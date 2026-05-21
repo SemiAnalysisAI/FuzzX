@@ -101,47 +101,52 @@ The fix mirrors what `BranchFolder::mergeOperations` learned (see existing
 catalog bug #141): also require `hasIdenticalMMOs` (or `cloneMergedMemRefs`
 the survivor with the dropped MI's MMOs to widen rather than narrow).
 
-## Reproduction sketch
-
-Construct (via MIR) two identical `MOV32rm $rsp, 1, $noreg, 0, $noreg`
-candidates, one with a `(load (s32) from %stack.0)` MMO carrying
-`MONonTemporal`, one without:
+## Reproduction (confirmed)
 
 ```mir
 # RUN: llc -mtriple=x86_64-linux-gnu -run-pass=machine-latecleanup %s
+--- |
+  @const = private unnamed_addr constant i32 42
+  define i32 @trigger(ptr %p) { ret i32 0 }
+...
 ---
 name: trigger
 tracksRegLiveness: true
-stack:
-  - { id: 0, size: 4, alignment: 4 }
 body: |
   bb.0:
-    successors: %bb.1, %bb.2
-    JCC_1 %bb.1, 5, implicit-def $eflags
-  bb.1:
     renamable $eax = MOV32rm $rsp, 1, $noreg, 0, $noreg ::
-        (load (s32) from %stack.0, !nontemporal !0)
-    JMP_1 %bb.3
-  bb.2:
+        (dereferenceable invariant load (s32) from @const)
     renamable $eax = MOV32rm $rsp, 1, $noreg, 0, $noreg ::
-        (load (s32) from %stack.0)
-    JMP_1 %bb.3
-  bb.3:
+        (non-temporal dereferenceable invariant load (s32) from @const)
     RET 0, $eax
-!0 = !{i32 1}
 ...
 ```
 
-The two reloads are identical except for the MMO `MONonTemporal` flag. After
-`MachineLateInstrsCleanup`, depending on which block is processed first,
-the survivor may drop the nontemporal hint.
+Output after `machine-latecleanup`:
+```
+bb.0:
+    renamable $eax = MOV32rm $rsp, 1, $noreg, 0, $noreg ::
+        (dereferenceable invariant load (s32) from @const)
+    RET 0, $eax
+```
 
-Note: an end-to-end .ll-driven trigger is hard because earlier passes
-(SimplifyCFG, GVN) tend to merge or eliminate the loads before MIR. The
-MIR-level repro above is the cleanest way to exhibit the gap.
+The non-temporal hint is dropped: the FIRST load (plain) survives, the
+SECOND (non-temporal) is removed. The result is a plain temporal load even
+though the source IR / MIR requested nontemporal. The order is
+implementation-detail of the iteration (MBBDefs picks the first identical
+def encountered, then later identicals are removed).
+
+Reverse order (`(non-temporal ...)` first, then plain) keeps the
+nontemporal: also dropping the second is wrong but in a less visible way —
+it dropped the LATER nontemporal request rather than the survivor's
+nontemporal-ness.
 
 ## Confidence
 
 High on the structural gap (the omission of MMO comparison in `isIdenticalTo`
-+ `hasIdentical` is mechanical). Medium on the practical trigger reaching
-this pass — earlier IR-level passes often collapse the duplicates first.
++ `hasIdentical` is mechanical) and confirmed in repro: a non-temporal load
+silently becomes a plain load. End-to-end .ll triggering through the
+default `-O2` pipeline requires constant-pool-load duplication that the
+upstream passes (CSE / GVN at IR level, MachineCSE at MIR level) tend to
+collapse before reaching `machine-latecleanup`, but post-RA rematerialization
+or per-block reload duplication can land such pairs.

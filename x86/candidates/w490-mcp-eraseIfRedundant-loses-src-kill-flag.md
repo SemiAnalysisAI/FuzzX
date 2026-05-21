@@ -134,8 +134,29 @@ $rbx. The verifier should flag this.
 
 ## Confidence
 
-Medium-high. The asymmetric handling of CopyDst vs. CopySrc kill flags is
-visible at lines 650-652. The bug only manifests when `Copy` carries
-`isKill` on its source AND that kill is not already present on PrevCopy
-or an intermediate user. RA-produced MIR commonly has both copies of the
-same nop kill-source.
+High (confirmed via MIR repro). The asymmetric handling of CopyDst vs.
+CopySrc kill flags is visible at lines 650-652. The MIR repro above
+demonstrates that after MCP, no operand in the function carries
+`killed $rbx` even though the source IR's intent (via the second COPY's
+`killed` flag) was for $rbx to die at that program point.
+
+## Reproduction verified
+
+```
+$ llc -mtriple=x86_64-linux-gnu -run-pass=machine-cp <input.mir>
+
+Before:
+  renamable $rax = COPY renamable $rbx
+  renamable $rdx = ADD64rr renamable $rdx, renamable $rbx, implicit-def dead $eflags
+  renamable $rax = COPY killed renamable $rbx
+  RET 0, $rax, $rdx
+
+After:
+  renamable $rax = COPY renamable $rbx
+  renamable $rdx = ADD64rr renamable $rdx, renamable $rbx, implicit-def dead $eflags
+  RET 0, $rax, $rdx
+```
+
+The second COPY is correctly erased; the `killed` flag is incorrectly lost.
+A correct fix would transfer the kill to ADD64rr's $rbx operand (the new
+last-use).
