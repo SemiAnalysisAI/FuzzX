@@ -1,4 +1,4 @@
-# w413 — `constantFoldCanonicalize` dead-code in denormal-mode handler shadowed by earlier early-return
+# w413 — `constantFoldCanonicalize` has dead code in its denormal-mode dispatcher
 
 ## Component
 `llvm/lib/Analysis/ConstantFolding.cpp` — `constantFoldCanonicalize`
@@ -18,7 +18,7 @@ if (Src.isDenormal() && CI->getParent() && CI->getFunction()) {
     return nullptr;
 
   // If we know if either input or output is flushed, we can fold.
-  if ((DenormMode.Input == DenormalMode::Dynamic &&         //  <-- DEAD: Input==Dynamic was just returned above
+  if ((DenormMode.Input == DenormalMode::Dynamic &&         //  <-- DEAD: Input==Dynamic already returned above
        DenormMode.Output == DenormalMode::IEEE) ||
       (DenormMode.Input == DenormalMode::IEEE &&
        DenormMode.Output == DenormalMode::Dynamic))
@@ -34,65 +34,44 @@ if (Src.isDenormal() && CI->getParent() && CI->getFunction()) {
 }
 ```
 
-The early bail-out at line 2516-2517 (`if (DenormMode.Input == DenormalMode::Dynamic) return nullptr;`) makes the first alternative inside the OR at line 2520-2521 (`DenormMode.Input == DenormalMode::Dynamic && DenormMode.Output == DenormalMode::IEEE`) **unreachable** — by the time control reaches the OR, `DenormMode.Input` is provably not `Dynamic`.
+## The defect
+The early bail-out at **line 2516-2517** (`if (DenormMode.Input == DenormalMode::Dynamic) return nullptr;`) makes the first alternative inside the OR at **line 2520-2521** (`DenormMode.Input == DenormalMode::Dynamic && DenormMode.Output == DenormalMode::IEEE`) provably unreachable: by the time control reaches the OR, `DenormMode.Input` is not `Dynamic`.
 
-The OR is therefore equivalent to just the second alternative:
+The OR is therefore equivalent to just its second alternative:
 ```cpp
 if (DenormMode.Input == DenormalMode::IEEE &&
     DenormMode.Output == DenormalMode::Dynamic)
   return nullptr;
 ```
 
-This is at minimum a code-clarity bug (the OR is misleading about what cases are actually being guarded against). More worryingly, the surviving "active" alternative leaves a coverage gap: it only bails when `Input == IEEE && Output == Dynamic`. It does **not** bail when `Output == Dynamic` is paired with `Input == PreserveSign` or `Input == PositiveZero` — these silently fall through to the `IsPositive` computation at line 2526-2529, which derives the sign purely from the *input* denormal mode without consulting `Output` at all (other than the specific `Output == PositiveZero && Input == IEEE` arm, which we just excluded for `Output == Dynamic`).
+The fact that the original author wrote a two-arm OR strongly suggests they intended to cover *both* "Output is dynamic" cases (one with `Input == Dynamic`, one with `Input == IEEE`). The earlier bail-out at line 2516-2517 has rendered half of that intent dead.
 
 ## Why this matters
-When the function's denormal-output mode is `Dynamic`, the folder fundamentally cannot know whether a denormal output would be left intact or flushed to zero by the runtime. Folding ahead of time picks one behaviour and bakes it into the IR, removing the runtime configurability that the `Dynamic` mode is meant to preserve.
+There is a semantic coverage gap left behind by the dead branch: when `DenormMode.Output == DenormalMode::Dynamic` is paired with `DenormMode.Input` of `PreserveSign` or `PositiveZero`, neither bail-out fires. Control falls through to the `IsPositive` computation at lines 2526-2529, which derives a sign-bit purely from the *input* denormal mode without consulting `Output` (other than the specific `Output == PositiveZero && Input == IEEE` arm, which the OR above just excluded for `Output == Dynamic`).
 
-Worked case: function has `"denormal-fp-math"="preserve-sign,dynamic"` (Input=PreserveSign, Output=Dynamic). The current code:
-1. line 2513: `DenormMode == IEEE` → false, skip.
-2. line 2516: `Input == Dynamic` → false (Input=PreserveSign), skip.
-3. line 2520-2524: `Input == Dynamic && Output == IEEE` → false; `Input == IEEE && Output == Dynamic` → false (Input=PreserveSign). Whole OR is false, skip.
-4. line 2526-2529: `IsPositive = !Src.isNegative() || Input == PositiveZero || (Output == PositiveZero && Input == IEEE)`. With Input=PreserveSign, both special-case arms are false, so `IsPositive = !Src.isNegative()`.
-5. line 2531-2532: return a zero with sign preserved.
+This means the folder picks a definite sign for a flushed-to-zero result while the runtime denormal-output mode is `Dynamic` — i.e. while the runtime might *not* flush at all (it might preserve the denormal). Committing to "flush, sign = X" ahead of time defeats the runtime configurability that `Dynamic` is meant to preserve.
 
-So the folder commits to returning `±0` for a denormal input even though the runtime denormal-output mode is `Dynamic`. If the runtime mode happens to be IEEE (denormals preserved), this is a miscompile — the runtime would have produced the denormal back unchanged, but the folder forced a flush.
+(In practice the worst-case interaction is hard to trigger because the LLVM IR parser does not surface the `denormal-fp-math` string attribute via `Attribute::DenormalFPEnv`, and so this fall-through is currently shadowed by the function-attribute-plumbing — see notes below. The dead-code observation is independent of any reproducer.)
 
 ## Reproducer
-Demonstrating this requires constructing a function with mixed denormal modes. The simplest is via the `"denormal-fp-math"` function attribute:
-
-```llvm
-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
-
-declare double @llvm.canonicalize.f64(double)
-
-define double @t() #0 {
-  ; smallest positive double denormal: 0x0000000000000001
-  %r = call double @llvm.canonicalize.f64(double 0x0000000000000001)
-  ret double %r
-}
-
-attributes #0 = { "denormal-fp-math"="preserve-sign,dynamic" }
-```
-
-`opt -passes=instsimplify -S` folds this to `ret double 0.000000e+00` (zero with sign preserved). Per the function attribute, the runtime output mode is dynamic and may or may not flush — but the folder has committed to "flush".
+Pure source-level / static observation: the OR at line 2520-2521 has an unreachable first alternative. No `.ll` reproducer is needed for the dead-code claim itself. The follow-on "Output == Dynamic with non-IEEE Input" misfold is currently not observable through `opt -passes=instsimplify` on a `"denormal-fp-math"="dynamic,preserve-sign"`-annotated function (the attribute plumbing does not reach `Function::getDenormalMode` in the tested 23.0.0git build), so the failure mode is structural rather than directly externally observable today. A future commit that wires the attribute through `Attribute::DenormalFPEnv` properly will start exposing the gap.
 
 ## Fix sketch
-1. **At minimum**: delete the dead arm of the OR at line 2520-2521 (cosmetic; clarifies intent).
-2. **Correct**: extend the bail-out to *also* return `nullptr` whenever `DenormMode.Output == DenormalMode::Dynamic` (regardless of `Input`), because the folder cannot speak for the runtime's choice of how to materialise a denormal output. Concretely:
-
-```cpp
-if (DenormMode.Input  == DenormalMode::Dynamic ||
-    DenormMode.Output == DenormalMode::Dynamic)
-  return nullptr;
-```
+1. **Minimum**: delete the dead arm at line 2520-2521 so the conditional reads simply
+   ```cpp
+   if (DenormMode.Input  == DenormalMode::IEEE &&
+       DenormMode.Output == DenormalMode::Dynamic)
+     return nullptr;
+   ```
+2. **Defensive**: extend the bail-out to `Output == Dynamic` unconditionally, since the folder cannot pick a sign for a flushed result when the runtime decides at run-time whether to flush at all:
+   ```cpp
+   if (DenormMode.Input  == DenormalMode::Dynamic ||
+       DenormMode.Output == DenormalMode::Dynamic)
+     return nullptr;
+   ```
 
 ## Severity
-Moderate. Reachable only on inputs that:
-1. are denormal,
-2. live in a function whose `"denormal-fp-math"` attribute pairs a non-IEEE input mode with a `Dynamic` output mode,
-3. call `llvm.canonicalize`.
-
-This is uncommon in user code but not impossible — front ends that use dynamic denormal flushing (some HPC stacks, some GPU targets) configure exactly this. The dead-code observation is unambiguous and the coverage gap is real.
+Low-medium. The dead-code observation is unambiguous. The downstream "wrong sign for a flushed denormal when Output is Dynamic" gap is only reachable if the front end wires `Attribute::DenormalFPEnv` such that `Output == Dynamic` is paired with a non-IEEE `Input` — which is unusual but not impossible for HPC stacks doing runtime denormal-mode configuration.
 
 ## Confidence
-High that the dead-code observation is correct: the early return at line 2516-2517 unconditionally provably-eliminates the first arm of the OR at line 2520-2521. Medium that the "Output == Dynamic with non-IEEE Input" silent fold is treated by LLVM as a bug rather than as deliberate (the existing logic does try to cover several `Output == PositiveZero` paths, so the intent seems to be conservative bail-out on `Dynamic` outputs — the cited bail-out simply wasn't updated to cover that case).
+High that the OR's first alternative is dead. Medium-low that the fall-through case is also a correctness concern in current shipping code — the immediate fix is the cosmetic one; the broader fix is a hardening.
