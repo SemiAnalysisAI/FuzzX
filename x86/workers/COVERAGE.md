@@ -1696,7 +1696,8 @@ Other observations (no candidate filed):
   - `psra big_shift` correctly clamps to bitwidth-1 per x86 semantics.
 - Potential bugs filed:
   - candidates/w64-instcombine-constfold-fmf-nnan-ninf-produces-finite-instead-of-poison.md — `ConstantFoldFPInstOperands` (binops fadd/fsub/fmul/fdiv/frem) and `ConstantFoldFP` (sqrt/log/log2/exp/sin/cos/fma/fmuladd/rint/canonicalize/etc.) ignore the `nnan` / `ninf` fast-math flags on the context instruction, so an `nnan`-flagged op whose mathematical result IS NaN folds to a NaN constant (and `ninf` whose result IS Inf folds to Inf) instead of `PoisonValue`. Per LangRef (D47963) the IR contract makes the result `poison`. Confirmed reproducer drift between the two consumers of the same value: `direct() = fdiv nnan 0.0,0.0; fcmp ord %r,0.0` folds to `i1 false` (constant fold first → NaN → ord NaN = false) while `via_sqrt() = call nnan @llvm.sqrt(-1.0); fcmp ord %r,0.0` folds to `i1 true` (nnan-aware simplifier first → r-not-NaN → ord = true) — the same poison value, two contradictory refinements observable from one IR. Concrete reproducers in the candidate cover fdiv, fmul, fadd, fsub, frem, fneg, fma, sqrt, log, fmuladd in scalar and vector forms.
-- New confirmed bugs filed: 1.
+  - candidates/w64-instcombine-fcmp-fmf-nnan-ninf-with-nan-inf-constant-folds-to-bool-instead-of-poison.md — `simplifyFCmpInst` invokes `ConstantFoldCompareInstOperands` *before* its FMF-aware ord/uno fold runs (lines 4159-4220). The constant-folder ignores `FMF`, so `fcmp nnan oeq NaN, 1.0` collapses to `i1 false`, `fcmp nnan ord NaN, 1.0` to `i1 false`, `fcmp nnan uno NaN, 1.0` to `i1 true`, and `fcmp ninf olt Inf, 1.0` to `i1 false`, even though every case is `poison` per LangRef. Same root cause class as the binop candidate but a separate code path (constant fold of `fcmp` rather than of arithmetic). Twin to the previous candidate; downstream consumers that use `KnownFPClass` + the nnan-aware fold will produce opposite booleans for the same value.
+- New confirmed bugs filed: 2.
 
 ## worker-91 2026-05-21
 - File: llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp (expandLdexp, expandFrexp, ExpandFPLibCall, ConvertNodeToLibcall switch arms for FLDEXP/FPOWI/FFREXP/FMODF, FP_TO_INT_SAT clamp).
@@ -1716,3 +1717,24 @@ Other observations (no candidate filed):
 - Potential bugs filed:
   - candidates/w91-strict-ldexp-i64-libcall-silent-truncation.md — STRICT variant of #011: `llvm.experimental.constrained.ldexp.f64.i64` lowers to `ldexp@PLT` with i64 in %rdi (low 32 bits read as int, high silently dropped, no diagnostic); root cause: `expandLdexp` bails on STRICT_FLDEXP (LegalizeDAG.cpp:2572 TODO) and `ConvertNodeToLibcall` for FLDEXP/STRICT_FLDEXP (5031-5035) lacks the FPOWI-style sizeof(int) guard.
   - candidates/w91-frexp-i64-libcall-stack-slot-overrun.md — `llvm.frexp.f64.i64` allocates an i64 stack slot for the exponent output, calls `frexp(double, int*)` which writes only 4 bytes, then loads 8 bytes back; high 32 bits leak the caller's stale `%rax` (via the slot-establishing `pushq %rax`). Root cause: `TargetLowering::expandMultipleResultFPLibCall` (TargetLowering.cpp:13245+) sizes both the temp slot and the read-back load by `Node->getValueType(ResNo)` without an `IntSize` width check.
+
+## worker-70 2026-05-21
+- File: llvm/lib/Transforms/Vectorize/SLPVectorizer.cpp — broad SLP hunt focused on FP/integer reductions, alt-shuffle, MinBWs narrowing, copyable elements, propagateIRFlags, non-pow-of-2 vectors, store-chain rewrite (d5ad8116f).
+- Approach: Diverse runtime-equivalence fuzzer (~1500 random seeds across integer arith, FP, cmp/select, MinBWs, non-pow-of-2 widths) comparing scalar IR vs SLP-vectorized IR linked together and run on random inputs with NaN/Inf/denormal coverage.
+- Hand-tested patterns:
+  - FAdd/FSub chains without fast-math (correctly NOT vectorized when ordered)
+  - smax/smin reductions with mixed signs (correctly vectorize to vector.reduce.smax/smin)
+  - add nsw/nuw widening (flags correctly dropped via andIRFlags)
+  - alt-shuffle fadd/fsub, shl/lshr (correctly use shufflevector to pick lanes)
+  - canConvertToFMA: multi-use FMul correctly not fused
+  - Copyable elements: passthrough lanes get correct add-0/sub-0/shl-0 identities
+  - Logical AND/OR short-circuit: SLP correctly adds freeze for poison-blocking
+  - MinBWs narrowing zext slt to i16 (correct because zext non-negative)
+  - icmp samesign on lane 0 only: correctly dropped via andIRFlags
+  - i8 -> i32 zext multiply chain: correctly narrowed
+- Patterns ruled out:
+  - propagateIRFlags(IncludeWrapFlags=false) path properly removes nsw/nuw from vectorized arith
+  - copyIRFlags wrap flag plumbing for trunc looks safe in SLP context (trunc never propagated by SLP CreateBinOp path)
+  - HorizontalReduction::createOp drops wrap flags via IncludeWrapFlags=false
+  - Volatile load between stores blocks SLP store-vectorization correctly
+- Potential bugs filed: NONE — no runtime miscompile found in default pipeline within time budget.
