@@ -1,0 +1,54 @@
+# Reproduces SSID merge bug in SIMemOpAccess::constructFromMIWithMMO
+# (SIMemoryLegalizer.cpp:836).  When a MachineInstr carries multiple
+# MMOs with different SSIDs, the merge logic only checks
+# isSyncScopeInclusion(A,B); if neither subsumes the other (e.g. one
+# is "one-as" and the other is cross-AS), it falls through to
+# overwriting SSID = B.  This silently drops a stronger AGENT scope
+# when paired with a weaker WORKGROUP scope in the wrong order.
+#
+# Run with:
+#   llc -mtriple=amdgcn-amd-amdhsa -mcpu=gfx950 \
+#       -run-pass=si-memory-legalizer reduced.mir -o -
+#
+# Expected: emit BUFFER_WBL2 16 + BUFFER_INV 16 around the atomic
+# (the agent-one-as ordering requires AGENT-scope cache management).
+# Observed: only LDS waitcnt; agent-level cache ops are silently
+# dropped because the workgroup SSID overwrites the agent-one-as.
+#
+# Swapping the MMO order produces correct output -- the bug is
+# order-dependent, demonstrating that the merge is buggy.
+
+--- |
+  target triple = "amdgcn-amd-amdhsa"
+
+  define amdgpu_kernel void @merge_ssid(ptr %p, i32 %v) #0 {
+    %r = atomicrmw add ptr %p, i32 %v syncscope("agent-one-as") seq_cst,
+         align 4
+    ret void
+  }
+
+  attributes #0 = { "target-cpu"="gfx950" }
+...
+---
+name:           merge_ssid
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $sgpr0, $sgpr1, $sgpr2, $sgpr3
+
+    ; FLAT_ATOMIC_ADD with TWO memory operands:
+    ; (1) syncscope("agent-one-as") seq_cst -- AGENT scope
+    ; (2) syncscope("workgroup") seq_cst    -- WORKGROUP scope (cross-AS)
+    ;
+    ; The "isSyncScopeInclusion" check on agent-one-as vs workgroup
+    ; returns nullopt (neither subsumes the other) which the code
+    ; treats as "not included" -> SSID := workgroup. AGENT scope is
+    ; dropped.
+    renamable $vgpr0_vgpr1 = COPY $sgpr0_sgpr1
+    renamable $vgpr2 = COPY $sgpr2
+    FLAT_ATOMIC_ADD renamable $vgpr0_vgpr1, renamable $vgpr2, 0, 0,
+         implicit $exec, implicit $flat_scr ::
+         (load store syncscope("agent-one-as") seq_cst (s32)),
+         (load store syncscope("workgroup") seq_cst (s32))
+    S_ENDPGM 0
+...
