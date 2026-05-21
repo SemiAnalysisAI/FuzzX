@@ -1671,3 +1671,29 @@ Other observations (no candidate filed):
 - Potential bugs filed:
   - candidates/w65-indvars-scev-fuzz-no-runtime-misc.md — *no* new candidate; documents 8 verified-correct patterns + notes unexercised areas (LSR runtime, `samesign` interactions, multi-exit loops, applyLoopGuards/assume-bundle).
 - New confirmed bugs filed: 0.
+
+## worker-64 2026-05-21
+- Hunt: x86 LLVM miscompiles involving undef/poison/freeze propagation.
+- Approach: hand-crafted IR around known-hot LangRef edges (nnan/ninf produce poison, freeze of poison, select with undef cond + poison arm, partial-undef vector divisor, vector demanded-elements lane→poison, fcmp ord/uno + undef + nnan, fdiv 0/0 / sqrt(-1) / log(-1) / fma(0,inf,0) under nnan, fadd(inf,-inf), ldexp NaN, x86 psra/psrl/pmulhuw with m_One and partial undef, sub nuw 0,x, neg INT_MIN nsw, fcmp nnan oeq/ord/uno with NaN constant, fshl/fshr shift=0 vs bitwidth, freeze undef as branch condition, GVN/SimplifyCFG merging two freezes of same value, phi of two undef with self-arith). Each candidate run through `opt -passes=instcombine -S` and cross-checked against the LangRef refinement rule (defined→poison ⇒ miscompile; poison→defined or undef→defined ⇒ valid refinement).
+- File: llvm/lib/Analysis/ConstantFolding.cpp:1573-1610 (`ConstantFoldFPInstOperands`) — FMF check is limited to nsz/algebraic and a NaN-payload bail under `!AllowNonDeterministic`; nnan/ninf never inspected.
+- File: llvm/lib/Analysis/ConstantFolding.cpp:2263-2284 (`ConstantFoldFP`) for unary FP intrinsics (sqrt, log, log2, exp, exp2, sin, cos, tan, atan, fma, fmuladd, pow, rint, canonicalize, ...) — entirely FMF-agnostic.
+- File: llvm/lib/Analysis/InstructionSimplify.cpp:566-590 (`foldOrCommuteConstant`) — routes FP binops through `ConstantFoldFPInstOperands(..., /*AllowNonDeterministic=*/default true)`, so even the NaN-payload bail never fires from InstSimplify; FMF-aware folds at lines 6150-6197 (`simplifyFDivInst`) only fire after the constant fold and only catch `nnan&ninf X / [-]0.0`.
+- File: llvm/lib/Analysis/InstructionSimplify.cpp:4159-4220 (`simplifyFCmpInst`) — constant fold via `ConstantFoldCompareInstOperands` at line 4167 dominates and never sees FMF; the FMF-aware paths at 4209-4218 only run for non-constant operands.
+- File: llvm/lib/Analysis/InstructionSimplify.cpp:5037-5062 (`simplifySelectInst`) — `select undef, X, Y` returns Y when Y is a Constant else X; produces a single PoisonValue for `select undef, %x, poison`, which is a valid refinement (poison ∈ {X, poison}) but worth noting.
+- File: llvm/lib/Transforms/InstCombine/InstCombineNegator.cpp:120-130, 273-288 — `-(undef)` and SDiv negation already guard against undef/poison; no defect.
+- File: llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp grep for m_One/m_Zero — partial-undef vector divisors fold to poison; valid because a 0 in any divisor lane is UB for the whole vector div.
+- Patterns ruled out (refinements but not miscompiles):
+  - `select undef, X, Y` choosing one specific arm (including poison-arm) is valid refinement.
+  - `sub nuw 0, x → 0` for x ∈ unknown is valid (poison refined to 0).
+  - `add nsw 2147483647, 1 → INT_MIN` and similar overflow folds refine poison to wrap-around value.
+  - `freeze i1 undef → false` and `freeze i32 undef → 0` are valid refinements of "arbitrary value".
+  - `srem x, splat 1 → 0` and `sdiv vec %x, <1, undef, 1, 1> → poison` are valid because any zero divisor lane is UB.
+  - `freeze i32 (sdiv 1, 0) → 0` and `chain_poison() → -2147483647` are refinements of `freeze poison`.
+  - `xor undef, undef → 0` is a valid refinement (two undefs can be any value, including equal).
+  - `phi [undef, t], [undef, e]; and p,1; icmp eq → true` chooses undef=0, refinement of undef.
+  - `fcmp ord NaN, 1.0 → false` (no FMF) is correct per LangRef.
+  - `pmulhuw <1, undef, ...>` covered by w04 already.
+  - `psra big_shift` correctly clamps to bitwidth-1 per x86 semantics.
+- Potential bugs filed:
+  - candidates/w64-instcombine-constfold-fmf-nnan-ninf-produces-finite-instead-of-poison.md — `ConstantFoldFPInstOperands` (binops fadd/fsub/fmul/fdiv/frem) and `ConstantFoldFP` (sqrt/log/log2/exp/sin/cos/fma/fmuladd/rint/canonicalize/etc.) ignore the `nnan` / `ninf` fast-math flags on the context instruction, so an `nnan`-flagged op whose mathematical result IS NaN folds to a NaN constant (and `ninf` whose result IS Inf folds to Inf) instead of `PoisonValue`. Per LangRef (D47963) the IR contract makes the result `poison`. Confirmed reproducer drift between the two consumers of the same value: `direct() = fdiv nnan 0.0,0.0; fcmp ord %r,0.0` folds to `i1 false` (constant fold first → NaN → ord NaN = false) while `via_sqrt() = call nnan @llvm.sqrt(-1.0); fcmp ord %r,0.0` folds to `i1 true` (nnan-aware simplifier first → r-not-NaN → ord = true) — the same poison value, two contradictory refinements observable from one IR. Concrete reproducers in the candidate cover fdiv, fmul, fadd, fsub, frem, fneg, fma, sqrt, log, fmuladd in scalar and vector forms.
+- New confirmed bugs filed: 1.
