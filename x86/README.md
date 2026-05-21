@@ -1,5 +1,18 @@
 # X86 LLVM bug hunt
 
+*Human-written portion*
+
+The bugs here were found not by fuzzing, but by code inspection.  I simply
+asked Claude to find bugs in LLVM, and gave it a little guidance along the way.
+
+I wouldn't consider all of these to be serious bugs, and some I'd say aren't
+bugs at all.  Others appear to be real miscompiles, such as
+[#253](bugs/253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred/NOTES.md).
+
+Everything below here is machine-generated.  Good luck.
+
+------------
+
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
 **Status: 152 reproducible bugs (well past the 100 goal). 253 total catalog entries (~100 are source-confirmed only). 484+ pending candidate notes in `candidates/` not yet promoted.**
