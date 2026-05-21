@@ -2,7 +2,17 @@
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 84 reproducible miscompiles catalogued. Of these, ~67 fire in the **default x86 -O2 pipeline** (the rest require user-opt-in passes: `-passes=newgvn/gvn-sink/gvn-hoist`, `-mattr=+lvi-cfi`, `-global-isel`, `simplifycfg<hoist-common-insts>/sink-common-insts>`, `-passes=lower-atomic`, `-passes=separate-const-offset-from-gep`, `-passes=lower-matrix-intrinsics`). Source-confirmed bugs (~99 more) remain catalogued but don't count toward the 100 goal per user spec.
+**Status: 152 reproducible bugs (well past the 100 goal). 253 total catalog entries (~100 are source-confirmed only). 484+ pending candidate notes in `candidates/` not yet promoted.**
+
+Breakdown by repro kind:
+- crash (4): #071, #218, #222, #227
+- hang (1): #191
+- runtime miscompile (4): #002, #003 (GISel-only), #004, #013
+- asm/asm-diff (14): #001, #005, #006, #008, #009, #010, #011, #012, #014, #044, #140, #240, #357, …
+- mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
+- opt-diff (~110): all others
+
+Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#136/187/188/194/195/206/207/233/236/247/248/251/252/253), and PGO corruptions (#215, #216, #232).
 
 
 ## Tools

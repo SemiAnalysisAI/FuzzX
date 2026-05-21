@@ -1,0 +1,195 @@
+# Triage by Severity (upstream-impact focused)
+
+253 catalog entries. 152 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+
+---
+
+## S0 — Hard crashes (4)
+
+Compiler ICE / verifier abort on legal IR. These prevent compilation entirely. **File these first; they are unambiguous bugs.**
+
+| # | Bug | Trigger | Fix complexity |
+|---|-----|---------|----------------|
+| **071** | `opt -passes=codegenprepare` SIGSEGV | any module via opt's new-PM | medium — null-deref in PSI lookup, needs PSI to be materialized or null-guarded |
+| **218** | Verifier null-deref on malformed `!prof !"VP"` | hand-crafted IR or bitcode round-trip | trivial — mirror branch-weights null-check |
+| **222** | ExpandIRInsts ICE on `<2 x i256> @llvm.fpto{u,s}i.sat` | source-level vector convert with element > 128b | small — add IntrinsicInst case to `scalarize` |
+| **227** | AtomicExpandPass crash on `load atomic <2 x i64>` (+cx16) | `_Atomic __int128` vector load in Clang | small — bitcast non-int/non-ptr before cmpxchg, mirror `createCmpXchgInstFun` |
+
+## S1 — Runtime miscompiles (7) — produces wrong runtime value
+
+End-user observable wrong-value miscompiles. Highest non-crash severity.
+
+| # | Bug | What goes wrong |
+|---|-----|-----------------|
+| **002** | DAGCombiner `visitFMinMax`: `llvm.minimumnum(sNaN, qNaN)` | returns raw sNaN instead of quieted qNaN |
+| **004** | X86 LowerFLDEXP AVX-512F: `<4 x float> @llvm.ldexp` | missing `vcvtdq2ps` → returns x × 1.0 instead of x × 2^exp |
+| **011** | LegalizeDAG ldexp.f64.i64 libcall | i64 exponent silently truncated to int → returns wrong magnitude |
+| **013** | InstCombine `vector_reduce_mul(sext <n x i1>)` | for odd n with all-true input, returns +1 instead of -1 |
+| **155** | frexp.f64.i64 libcall stack-slot overrun | reads 8 bytes from a 4-byte write → uninitialized upper bytes (also info leak) |
+| **233** | ConstantFolding `llvm.fmuladd` folded as FMA, x86 lowers as `mulsd;addsd` | same IR yields `2^-104` (compile-time fold) vs `0.0` (runtime). Real value divergence visible by toggling constness. |
+| **003 / 110** | X86 GISel UADDE / USUBE inverted carry on multi-word add/sub | wrong upper word — only fires with `-global-isel` (NOT default on x86) |
+
+## S2 — Alive2-falsifiable poison/refinement miscompiles (~22) — turns defined value into poison, or over-infers a flag that makes downstream code poison
+
+These are the strongest correctness-class non-runtime bugs. Several are already-known patterns getting independent confirmation; others are net-new.
+
+**Sound-direction wins (defined → poison) — file as bugs:**
+
+| # | Bug | Fold |
+|---|-----|------|
+| **136** | NewGVN distinct `freeze` CSE | two `freeze X` from distinct sites — LangRef says each picks its own value |
+| **187** | Standard GVN distinct `freeze` CSE | sibling of #136 |
+| **188** | EarlyCSE distinct `freeze` CSE | sibling of #136 |
+| **194** | InstCombine distinct `freeze` CSE | sibling of #136 — fires WITHOUT GVN/EarlyCSE/NewGVN |
+| **195** | InstCombine `ldexp(ldexp(x, INT_MAX), INT_MAX)` | folds to `fmul x, 0.25` (i32 sum wraps to -2 inverting overflow → underflow); should be `+inf` |
+| **206** | SimplifyLibCalls `fmod(NaN, 1.0)` | folded to `frem nnan NaN, 1.0` → poison (mis-named `IsNoNan` actually means no-errno) |
+| **207** | SimplifyLibCalls `fdim(±Inf, ±Inf)` | folds to qNaN instead of `+0` per C99 |
+| **220** | GVN `patchReplacementInstruction` | global `dropPoisonGeneratingFlags()` strips `nsw`/`nuw` from kept dominator — affects pre-existing shared users, not just CSE site |
+| **234** | InstSimplify strict-FP `constrained.fadd nnan` fold | drops FE_INVALID exception side-effect (strict-FP semantics violated) |
+| **236** | InstCombineSimplifyDemanded `ashr exact → lshr exact` | for `%x=-1`, source returns 255; target returns poison (anti-refinement) |
+| **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
+| **247** | ConstantFolding `bitcast <i16 0, i16 poison> to i32` | treats poison lane as 0 — downstream `icmp eq , 0` → `true` instead of `poison` |
+| **248** | InstCombine `foldSelectIntoOp` ninf mis-propagation | `select c, fmul ninf(x,y), x` → `fmul (select ninf c, y, 1.0), x`; for x=0,y=+inf,c=true source returns NaN, new select returns +inf → poison |
+| **251** | CVP undef-tainted lattice | `select i1 %cmp, i64 undef, i64 1` taints lattice → CVP adds `range(i64 1,3)` AND `add nuw nsw`; both unsound for undef=INT_MAX (matches upstream #114902) |
+| **252** | JumpThreading `unfoldSelectInstr` branches on poison | original uses `freeze`; after JT, freeze is gone and `br i1 %maybe_poison` → UB |
+| **253** | InstCombine `foldAddLikeCommutative` | `or disjoint (add nsw A,5), (B&250)` → `add nsw A, (or B,5)`; disjoint only proves no unsigned carry, not signed — for a=100,b=130 source returns -21, target → poison |
+
+**Codegen sNaN-quieting losses (Alive2-falsifiable, IEEE-754 mandate):**
+
+| # | Bug |
+|---|-----|
+| **112** | `(float)(double)x` folded to identity without `nnan`; IEEE-754 requires quieting on every convertFormat |
+| **115** | DAG `simplifyFPBinop` `fmul X,1.0`/`fdiv X,1.0` folded to bare `ret` with no `nnan` check |
+| **116** | Same for `fadd X,-0.0`/`fsub X,+0.0` |
+| **117** | `fdiv X,-1.0` → bare `xorps sign-mask` (no `divsd`); in-source FIXME |
+| **123** | InstCombine ConstantFoldFPInstOperands: `nnan`/`ninf` op with NaN/Inf result folds to NaN/Inf constant instead of `poison` per LangRef |
+| **156** | InstCombine `fcmp nnan` with NaN constant folds to `true`/`false` instead of `poison` |
+
+**SeparateConstOffsetFromGEP, mem2reg, LICM (default O2 — UB-injection):**
+
+| # | Bug |
+|---|-----|
+| **181** | SeparateConstOffsetFromGEP `swapGEPOperand` unconditionally `setIsInBounds(true)` — can mark temporarily-OOB GEP as inbounds → guaranteed poison (NOT in default x86 -O3 but in many other pipelines) |
+| **166** | mem2reg `!noundef` with PHI undef edge silently lost — immediate-UB contract gone |
+| **185** | LICM `promoteLoopAccessesToScalars` hoists a conditional load to unconditional preheader load — UB-injection if pointer was only deref'd after a guarding store |
+| **186** | LICM sinks N conditional stores into single exit-store via "thread-local" gate — signal-handler / setjmp observability lost |
+| **061** | DAGCombiner `visitMULHU` vector splat-1: `mulhu x, splat(1)` falls through to `srl x, BW` (UB shift-by-bitwidth) |
+
+## S3 — Memory-model / atomic / volatile semantic breakage (~45)
+
+`isVolatile()`/`isAtomic()` not checked, syncscope narrowed/widened, atomic ordering dropped. Semantic contract broken even when no observable wrong-value today.
+
+**Volatile silently dropped or moved:**
+- **001** `atomicrmw or %p, 0` (idempotent) volatile bit dropped
+- **015 / 041** X86AvoidStoreForwardingBlocks no volatile check (load & blocker arms)
+- **017** AtomicExpand `widenPartwordAtomicRMW` drops volatile
+- **075** GISel matchUndefStore drops volatile/atomic
+- **093** AVX512 VMOVS load-fold under masking misses suppress
+- **102** X86LowerTileCopy RAX spill MOV without MMO
+- **108** DSE partial-merge drops volatile/atomic
+- **109** MemCpyOpt processMemSetMemCpyDependence drops volatile memset
+- **111** lower-atomic strips volatile/ordering/syncscope (non-default pipeline)
+- **114** GVNSink volatile included in hash → merged
+- **120, 121, 122** SimplifyCFG sink/hoist merges 2× volatile / seq_cst atomic / atomic loads
+- **128** LowerMatrix fuseFlatten drops volatile
+- **141** BranchFolder merges volatile + plain store
+- **142** MachineLICM hoists volatile/atomic stack-cookie stores
+- **143** MemCpyOpt processMemMove drops volatile memset (source-confirmed)
+- **148, 190, 191** VectorCombine scalarize{LoadExtract,LoadBitcast,Load} strips atomic / infinite-loops (#191 hang)
+- **152, 154** SimplifyCFG sink merges 2× volatile seq_cst {cmpxchg, atomicrmw}
+- **182** SimplifyCFG sink merges 2× `fence`
+
+**Atomic ordering / syncscope narrowed or widened:**
+- **072** GVN-MSSA computeLoadStoreVN ignores atomic/volatile/ordering/syncscope
+- **088** SCEV howManyLessThans unsigned uses signed stride
+- **118, 137, 138** SROA drops atomic
+- **124, 125** AtomicExpand i128 load/store to cmpxchg drops volatile+syncscope
+- **126, 144, 160, 161** LICM promote drops/narrows syncscope (4 variants)
+- **131** AtomicExpand insertRMWCmpXchgLoop InitLoaded non-atomic (race)
+- **132, 133, 174, 175, 176** AtomicExpand drops AAMD on various paths
+- **134** AtomicExpand RMW/CAS/Load/StoreToLibcall drops volatile+SSID
+- **135** LICM hoists `fence acquire`/`seq_cst` out of loop — collapses N fences to 1
+- **184** InstCombine element-atomic memcpy/memset collapses per-byte granularity
+- **224** SDAGBuilder visitAtomicRMW/CmpXchg drops `I.getAlign()` + AAMD
+- **226, 238** BranchFolding tail-merge: drops atomic ordering / narrows syncscope
+- **239** MachineLateInstrsCleanup hasIdentical ignores MMOs (NT lost on merged invariant-load)
+
+## S4 — PGO / profile data corruption (8)
+
+Silently wrong branch weights — affects code layout, inlining, MachineBlockPlacement, MachineOutliner. No wrong code values, but PGO-driven builds get the wrong topology.
+
+| # | Bug |
+|---|-----|
+| **139** | CGP `splitBranchCondition` passes original weights instead of scaled-down weights |
+| **215** | LowerExpect `handleBrSelExpect` overwrites pre-existing PGO `!prof {5000,100}` with `{"expected",1,2000}` |
+| **216** | LowerExpect `handleSwitchExpect` overwrites per-case PGO weights with `{1,2000,1,...}` |
+| **232** | SimpleLoopUnswitch + `SwitchInstProfUpdateWrapper::getSuccessorWeight` zeroes default-case weight when `"expected"` tag present |
+| **099** | ImplicitNullChecks `insertFaultingInstr` drops MI flags (FrameSetup/FrameDestroy/TailCall) — affects CFI |
+| **018** | CALL_RVMARKER hard-codes SysV preserved mask on Windows — wrong ABI clobber set |
+| **036, 045, 076, 077, 030, 046** | Various CFI/EH frame emission gaps (mostly source-confirmed) |
+
+## S5 — Silent codegen asm/MIR wrong (15)
+
+Wrong assembly emitted at the codegen level — observable when reading the asm but no wrong runtime value (memory-model softening) or no value-diff at runtime (NT hint lost → MOVNT replaced by cached MOV).
+
+- **005** X86FixupInstTuning `ProcessShiftLeftToAdd` mutates MI but returns false — pass lies about preservation
+- **006** SESES `one-lfence-per-bb` uses `break` instead of `continue` — drops mitigation
+- **008, 010** ReturnThunks / LVI-RET miss RETI/LRET/IRET — security mitigation gap
+- **009** CET-IBT missing endbr on WinEH funclet entry
+- **012** CGP `splitMergedValStore` strips atomic on i64 split
+- **014** RESET_FPENV MMO mis-tagged as MOStore on load
+- **044** TileConfig `ConstPos` position drift
+- **140** CGP `splitMergedValStore` drops NT/tbaa/alias.scope/noalias
+- **151** strict-FP ldexp libcall silent truncation (sibling of #011)
+- **197** DAGCombiner `mergeTruncStores` drops MONonTemporal → no MOVNTI
+- **240** X86 stack-probe completely skipped for one-page alloca (defeats `-fstack-clash-protection`)
+- **357 (in candidates)** BranchFolder drops pcsections
+- **231** BranchFolding tail-merge strengthens `nuw` flag (unsound direction)
+
+## S6 — Metadata loss (~85)
+
+Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!invariant.load`, `!noalias`, `!alias.scope`, `!access_group`, `!align`, `!noundef`, `!dereferenceable`, `!unpredictable`, etc., dropped by passes that should have called `combineMetadataForCSE`/`copyMetadataForLoad`/etc.
+
+**Most can be closed by a handful of upstream patches in shared helpers:**
+
+- `Local.cpp combineMetadata` (#219, #229, #230, #287, #288, #289) — the `MD_nontemporal`/`MD_nosanitize`/`MD_alloc_token` arms incorrectly strip K's metadata when J lacks it; the function iterates only K's kinds, dropping J-only kinds
+- `Local.cpp dropUBImplyingAttrsAndMetadata` keep-list (#420, #421) — too narrow; affects SimplifyCFG `speculativelyExecuteBB` and `foldTwoEntryPHINode`
+- `MachineInstr::isIdenticalTo` ignores MMOs (#141, #237, #239, #357, #358) — affects MachineCSE, BranchFolder, MachineLateInstrsCleanup
+- `MachineMemOperand::operator==` omits SuccessOrdering/FailureOrdering/SyncScopeID (#226, #238, #355, #356)
+- `DAGCombiner` 4-arg `getLoad`/`getStore` overloads default AAInfo to empty (#196–#199, #221, #220, #224)
+- `ScalarizeMaskedMemIntrin` const+dyn-mask paths miss `Load/Store->copyMetadata(*CI)` (#180, #202–#205)
+- `SROA` hand-rolled metadata copy lists (#118, #137, #138, #158, #159, #245, #290–#293)
+- `LICM promoteLoopAccessesToScalars` per-access metadata copy (#126, #144, #160, #161, #297, #298)
+- `InstCombine unpack{Load,Store}ToAggregate` (#211, #212, #245)
+- `InstCombine mergeStoreIntoSuccessor` (#221, #312)
+- `JumpThreading` only forwards MD_prof (#214, #260–#263, #670)
+- `SDAG memcpy/memmove/memset getMemcpyLoadsAndStores` series (#208–#210, #460–#462, #510)
+
+(Full list: bugs #022, #023, #091, #103, #132, #133, #145, #146, #147, #149, #150, #153, #157, #163, #164, #165, #167, #168, #169, #170, #171, #172, #176, #177, #178, #179, #180, #183, #189, #196–#214, #228–#230, #237, #239, #241–#247, #250, #439, #460–#462, #485, #486, #489, …)
+
+## S7 — Source-confirmed / latent (~100)
+
+Reads-correct-as-buggy in source but no opt/llc reproducer constructed (often because the buggy code path is unreachable on current x86 -O2 IR, or requires fuzzed MIR). Useful to bundle as "code-quality / API-tightening" patches.
+
+(Bugs #007, #014, #015–#024, #025–#070, #073, #074, #076–#107 …)
+
+---
+
+## Recommended report-first batch (12 bugs to upstream first)
+
+Pick the smallest set with the highest signal:
+
+1. **#218** verifier crash (~10-line null-check fix, prevents fuzzers from finding more issues hidden behind the crash)
+2. **#071** opt-passes=codegenprepare SIGSEGV (affects every opt user trying to test CGP in isolation)
+3. **#227** atomic vector load ICE (compilable C++ source can hit)
+4. **#222** vector fpto_sat ICE
+5. **#195** InstCombine ldexp chain — clean Alive2-falsifiable miscompile
+6. **#206** fmod(NaN) → poison (clean Alive2)
+7. **#207** fdim(±Inf,±Inf) wrong constant fold (clear C99 violation)
+8. **#236** ashr exact → lshr exact anti-refinement (clean Alive2; the in-tree test asserts the buggy output, so the fix needs to update the test)
+9. **#247** bitcast vector with poison lane → 0 (clean Alive2)
+10. **#251** CVP undef-tainted lattice (matches existing upstream #114902)
+11. **#240** stack-probe full-page alloca completely unprobed (security mitigation defeated)
+12. **#240** is in S5 but security-critical for `-fstack-clash-protection` users — file with `-mllvm` flag context to make the trigger clear
+
+Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes: ~30 bugs collapse to ~6 root-cause patches in `Local.cpp combineMetadata`, `MachineInstr::isIdenticalTo`/`MachineMemOperand::operator==`, and the DAGCombiner 4-arg `getLoad`/`getStore` overloads.
