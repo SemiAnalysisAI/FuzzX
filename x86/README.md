@@ -218,3 +218,4 @@ Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeli
 - FP fuzz with -ffast-math found 122 mismatches but all persist with -fno-vectorize (generic FP reassoc, not LV)
 - After UB-filtering: 0 confirmed LV miscompiles in ~12 minutes
 - Conclusion: LoopVectorize at default O2 is robust against these patterns; no bugs added
+| 185 | [185-licm-promote-hoists-conditional-load-to-preheader](bugs/185-licm-promote-hoists-conditional-load-to-preheader/) | LICM promoteLoopAccessesToScalars | hoists a conditional load to unconditional preheader load; UB-injection if pointer was only deref-after-store | confirmed (opt diff) |
