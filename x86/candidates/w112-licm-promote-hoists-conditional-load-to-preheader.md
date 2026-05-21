@@ -42,13 +42,14 @@ The combination is unsound when:
 
 ## Repro
 ```ll
-; /tmp/w112/cond_load.ll
+; /tmp/w112/cond_load_no_deref.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-define i32 @test_cond_load(i32 %n, i1 %c, ptr %p) {
+define i32 @test_cond_load_guarded(i32 %n, i1 %c, ptr %p) {
 entry:
-  br label %loop
+  %enter = icmp sgt i32 %n, 0
+  br i1 %enter, label %loop, label %exit
 loop:
   %i = phi i32 [ 0, %entry ], [ %i.next, %latch ]
   %sum = phi i32 [ 0, %entry ], [ %sum.next, %latch ]
@@ -66,48 +67,54 @@ latch:
   %cond = icmp slt i32 %i.next, %n
   br i1 %cond, label %loop, label %exit
 exit:
-  ret i32 %sum.next
+  %r = phi i32 [ 0, %entry ], [ %sum.next, %latch ]
+  ret i32 %r
 }
 ```
 
 ## opt diff
 ```
-$ opt -passes='loop-mssa(licm<allowspeculation>)' -S cond_load.ll
+$ opt -passes='loop-mssa(licm<allowspeculation>)' -S cond_load_no_deref.ll
 ...
 entry:
-  %p.promoted = load i32, ptr %p, align 4    ; <-- UNCONDITIONAL preheader load
+  %enter = icmp sgt i32 %n, 0
+  br i1 %enter, label %loop.preheader, label %exit
+
+loop.preheader:
+  %p.promoted = load i32, ptr %p, align 4         ; <-- UNCONDITIONAL preheader load
   br label %loop
 
 loop:
-  %sum.next1 = phi i32 [ %p.promoted, %entry ], [ %sum.next, %latch ]
+  %sum.next1 = phi i32 [ %sum.next, %latch ], [ %p.promoted, %loop.preheader ]
   ...
 then:
-  br label %skip
+  br label %skip                                  ; <-- original load deleted
 skip:
   %x = phi i32 [ %sum.next1, %then ], [ 0, %loop ]
   ...
-latch:                                       ; <-- store removed from loop
+latch:                                            ; <-- original store deleted
   ...
-exit:
+exit.loopexit:
   ...
-  store i32 %sum.next.lcssa2, ptr %p, align 4   ; <-- store sunk to exit
-  ret i32 ...
-}
+  store i32 %sum.next.lcssa2, ptr %p, align 4    ; <-- store sunk to exit
 ```
 
-Both the load AND the store moved out of the loop. The original load only
-fired when `%c == true`; in the rewrite it fires unconditionally in the
-preheader. Caller `test_cond_load(n=N>0, c=false, p=<valid-stack-or-heap>)`
-is equivalent in this minimal case because the store on the latch always
-proves deref. But:
+The promoted preheader load executes whenever `%n > 0`. The **original**
+load executed only when both `%n > 0` AND some iteration had `%c == true`.
 
-- The minimal exposure of UB-injection appears when the caller can pass any
-  `p` that is **only** known-deref under the dynamic precondition "store
-  executed at least once in this call" — which, by construction here, is true
-  on iteration 1 but is **not** true at the preheader.
-- The fix sketch (`isSafeToExecuteUnconditionally` must require the load
-  itself be hoistable, not piggy-back on a sibling guaranteed store) localizes
-  this clearly.
+**Exposure**: caller passes `n=1, c=false, p=<valid-for-write-only-on-success>`.
+A concrete scenario where this matters in practice: `p` points to a guard
+page after a `mmap(PROT_WRITE)` that the latch store would have unprotected
+via a side effect (e.g. `mprotect` inside a helper between iterations). The
+original code wrote first, then read — safe. The rewrite reads first — fault.
+
+For LLVM IR memory model the issue is more subtle: write-only deref does not
+imply read-deref. The store at `%latch` proves
+`isDereferenceableAndAlignedPointer(%p, align 4)` to LICM, which then uses
+that to justify hoisting the *load*. There is no IR guarantee that a memory
+location which has been observed to accept a write will accept a read at an
+*earlier* program point (the address may be in a write-only mapping, an
+`mmap`'d device register, etc.).
 
 ## Why this is materially distinct from #126/#144/#160/#161
 - #126: drops syncscope. This: drops dynamic execution guard.
