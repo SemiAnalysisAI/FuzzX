@@ -1738,3 +1738,31 @@ Other observations (no candidate filed):
   - HorizontalReduction::createOp drops wrap flags via IncludeWrapFlags=false
   - Volatile load between stores blocks SLP store-vectorization correctly
 - Potential bugs filed: NONE — no runtime miscompile found in default pipeline within time budget.
+
+## worker-63b 2026-05-21
+- Hunt focus: less-obvious volatile/atomic-strip passes + integer-arith miscompiles in directories user flagged (JumpThreading, LoopUtils, LoopIdiomRecognize, SeparateConstOffsetFromGEP, PlaceSafepoints, GlobalOpt, ScalarizeMaskedMemIntrin, InferAlignment, SafeStack, InductiveRangeCheckElimination, InstCombine, IndVarSimplify, LoopVectorize, VectorCombine, LowerMatrixIntrinsics) plus GISel `add/sub i128/i256` family (already-known bug 110/111 sibling expansions: ascertained `add i128/i256`, `sub i128/i256/i192/i96/i65`, `neg/inc/dec i128`, `usub.with.overflow.i128` all share the same `setb %sX; cmpb $1, %sX; adcq/sbbq` root cause — single fix would close them all, no separate filings).
+- Reviewed without finding new bugs:
+  - JumpThreading simplifyPartiallyRedundantLoad: gated on `LoadI->isUnordered()` (rejects volatile and ordered atomic).
+  - LoopLoadElimination propagateStoredValueToLoadUsers: passes `isVolatile=false` to new pre-header LoadInst BUT upstream `LoopAccessInfo` already rejects loops with non-simple loads/stores (`LoopAccessAnalysis.cpp:2635, 2659`), so unreachable on volatile/atomic.
+  - LoopIdiomRecognize processLoopMemoryCopy/MemSet (lines 461, 819, 882, 1425): correctly checks `isVolatile()` / `isUnordered()` before forming memcpy/memset; for atomic stores it emits ElementUnorderedAtomicMemCpy via `getAtomicMemIntrinsicMaxElementSize`.
+  - InferAlignment (entire file): only adjusts alignment metadata (a hint upgrade); not a value change. Safe for volatile/atomic.
+  - SeparateConstOffsetFromGEP: works on GEPs only; never touches load/store volatile/atomic state.
+  - PlaceSafepoints/GlobalOpt (TryToShrinkGlobalToBoolean): GlobalStatus.cpp:95/104 rejects globals with volatile loads/stores; GlobalOpt `processInternalGlobal` further requires `GS.Ordering == NotAtomic` for the shrink-to-bool and stored-once paths. Safe.
+  - ScalarizeMaskedMemIntrin: masked intrinsics carry no volatile flag in IR; CreateAlignedLoad/Store on resulting scalar pieces is correct.
+  - LowerAtomicPass: only rewrites atomic ordering via `setAtomic(NotAtomic)`; `LowerAtomic.cpp` `lowerAtomicRMWInst`/`lowerAtomicCmpXchgInst` already filed as bug 111.
+  - SafeStack: thread-local stack-pointer accesses, no user-controlled volatile semantics.
+  - SimplifyCFG sink/hoist common: `hasSameSpecialState` checks volatile equality; sinking N branch-conditional volatile loads collapses to 1 load that executes exactly once per dynamic path — preserves dynamic volatile-access count.
+  - SCCP/IPSCCP visitLoadInst (SCCPSolver.cpp:1893): only folds loads of `constant` globals, where ordering is irrelevant. Safe.
+  - MergedLoadStoreMotion: line 331 checks `S0->isSimple()`; safe.
+  - DSE isRemovable (DeadStoreElimination.cpp:1452-1471): correctly checks `isUnordered()` for stores and `!isVolatile()` for memintrins.
+  - GVN eliminatePartiallyRedundantLoad (GVN.cpp:1573): propagates `Load->isVolatile()`, `Load->getOrdering()`, `Load->getSyncScopeID()` to new LoadInst.
+  - ArgumentPromotion HandleEndUser (ArgumentPromotion.cpp:557): `I->isSimple()` gate.
+  - ConstraintElimination only uses load/store as facts; doesn't mutate them.
+  - FunctionSpecialization getPromotableAlloca: stores to local alloca; atomic on alloca has no cross-thread meaning (alloca not escaped to other threads in spec context).
+  - VectorCombine vectorizeLoadInsert / widenSubvectorLoad / shrinkLoadForShuffles / foldSingleElementStore: all use `Load->isSimple()` / `SI->isSimple()` gating. Safe.
+  - InstCombine select-folds, sext+add, distribute mul, freeze+nuw add, abs(abs), avgfloor/ceil, mod-pow-of-2: hand-verified ~25 patterns for correctness via Alive2-style reasoning. None miscompile.
+  - Recent commit `c497efb82` (InstCombine logical and/or trunc-nuw->i1 fold): proof linked, `isGuaranteedNotToBePoison(A) && KnownBits(A).getMaxValue() == 1` predicate is correct.
+  - Recent commit `f63b8ee1e` (X86 combineSelect with non-i1 cond): fixed by gating `Cond.isVector()`; other call sites of `IsNOT` (lines 49586, 51847, 56860, 56956, 58094) are all vector-typed paths.
+- Potential bugs filed:
+  - candidates/w63b-lower-matrix-fuseFlatten-drops-volatile.md — `LowerMatrixIntrinsics.cpp:1723` matmul "dot-product flatten" path matches a `matrix.column.major.load` and emits `Builder.CreateLoad(Op->getType(), Arg)` without forwarding the intrinsic's `i1 immarg %isVolatile` (arg index 2). When fusion picks the flatten lowering (stride=1 via `CanBeFlattened` `m_One()`), a `volatile` matrix load is silently rewritten to a non-volatile load and freely DCE'd/coalesced by later passes.
+  - candidates/w63b-vectorcombine-scalarizeLoadExtract-strips-atomic.md — `VectorCombine.cpp:2015` entry to `scalarizeLoad` only rejects `isVolatile()`; an `atomic` (unordered/monotonic) `<N x T>` load passes through to `scalarizeLoadExtract` (line 2130) or `scalarizeLoadBitcast` (line 2202), where it is broken into N plain non-atomic scalar `Builder.CreateLoad(...)` loads. The no-torn-read guarantee is silently lost. Fix: tighten the gate to `LI->isSimple()`. Reproduces with `-O3` (vector-combine is in the default pipeline).
