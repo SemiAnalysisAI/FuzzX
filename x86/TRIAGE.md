@@ -175,21 +175,25 @@ Reads-correct-as-buggy in source but no opt/llc reproducer constructed (often be
 
 ---
 
-## Recommended report-first batch (12 bugs to upstream first)
+## Recommended report-first batch (12 bugs)
 
-Pick the smallest set with the highest signal:
+Annotated with upstream-issue status as of 2026-05-21:
 
-1. **#218** verifier crash (~10-line null-check fix, prevents fuzzers from finding more issues hidden behind the crash)
-2. **#071** opt-passes=codegenprepare SIGSEGV (affects every opt user trying to test CGP in isolation)
-3. **#227** atomic vector load ICE (compilable C++ source can hit)
-4. **#222** vector fpto_sat ICE
-5. **#195** InstCombine ldexp chain — clean Alive2-falsifiable miscompile
-6. **#206** fmod(NaN) → poison (clean Alive2)
-7. **#207** fdim(±Inf,±Inf) wrong constant fold (clear C99 violation)
-8. **#236** ashr exact → lshr exact anti-refinement (clean Alive2; the in-tree test asserts the buggy output, so the fix needs to update the test)
-9. **#247** bitcast vector with poison lane → 0 (clean Alive2)
-10. **#251** CVP undef-tainted lattice (matches existing upstream #114902)
-11. **#240** stack-probe full-page alloca completely unprobed (security mitigation defeated)
-12. **#240** is in S5 but security-critical for `-fstack-clash-protection` users — file with `-mllvm` flag context to make the trigger clear
+| # | Bug | Upstream status | Action |
+|---|-----|-----------------|--------|
+| **218** | Verifier null-deref on `!prof !"VP"` | PR [#145584](https://github.com/llvm/llvm-project/pull/145584) merged, added shape checks but does NOT cover this null-deref. **Residual bug.** | File as new issue |
+| **071** | `opt -passes=codegenprepare` SIGSEGV | **Duplicate**: open issue [#173360](https://github.com/llvm/llvm-project/issues/173360), fix PR [#173385](https://github.com/llvm/llvm-project/pull/173385) pending merge | Comment on existing issue / verify the pending PR fixes our case |
+| **227** | AtomicExpand `load atomic <2 x i64>` crash | Adjacent PR [#148900](https://github.com/llvm/llvm-project/pull/148900) fixed libcall path but not cmpxchg path at lines 668-687. **Likely residual.** | Re-verify at upstream HEAD; file if still crashing |
+| **222** | ExpandIRInsts ICE on vector fpto_sat | No duplicate found. **Novel.** | File as new issue |
+| **195** | InstCombine ldexp chain integer overflow | No duplicate. **Novel.** | File |
+| **206** | `fmod(NaN)` → poison via mis-named `IsNoNan` | No duplicate. **Novel.** | File |
+| **207** | `fdim(±Inf,±Inf)` → qNaN | No duplicate. **Novel.** | File |
+| **236** | ashr exact → lshr exact anti-refinement | No duplicate. **Novel** (in-tree test `ashr_can_be_lshr` bakes in the buggy output and needs updating with the fix) | File |
+| **247** | `bitcast <i16 0, i16 poison>` poison-lane→0 | No duplicate. **Novel.** | File |
+| **251** | CVP undef-tainted lattice | **Duplicate**: open issue [#114902](https://github.com/llvm/llvm-project/issues/114902), still open and unfixed | Comment on existing issue with our `add nuw nsw` additional case |
+| **240** | X86 stack-probe skips one-page alloca | No duplicate. **Novel** (security mitigation defeated under `-fstack-clash-protection`) | File |
+| **253** | InstCombine `foldAddLikeCommutative` over-infers nsw from `or disjoint` | No duplicate. **Novel.** | File |
 
-Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes: ~30 bugs collapse to ~6 root-cause patches in `Local.cpp combineMetadata`, `MachineInstr::isIdenticalTo`/`MachineMemOperand::operator==`, and the DAGCombiner 4-arg `getLoad`/`getStore` overloads.
+**Net actionable**: 10 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
+
+Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~40 of the ~85 S6 metadata-loss bugs.
