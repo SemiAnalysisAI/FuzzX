@@ -2,7 +2,7 @@
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 26 reproducible miscompiles in the **default** x86 pass pipeline, plus ~99 source-confirmed bugs and 3 reproducible-but-not-default (#003 / #110 GISel — `-global-isel` is opt-in for x86; #111 `lower-atomic` — pass is opt-in). The user only counts default-pipeline reproducible ones toward 100.
+**Status: 84 reproducible miscompiles catalogued. Of these, ~67 fire in the **default x86 -O2 pipeline** (the rest require user-opt-in passes: `-passes=newgvn/gvn-sink/gvn-hoist`, `-mattr=+lvi-cfi`, `-global-isel`, `simplifycfg<hoist-common-insts>/sink-common-insts>`, `-passes=lower-atomic`, `-passes=separate-const-offset-from-gep`, `-passes=lower-matrix-intrinsics`). Source-confirmed bugs (~99 more) remain catalogued but don't count toward the 100 goal per user spec.
 
 
 ## Tools
@@ -208,3 +208,13 @@ Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeli
 | 182 | [182-simplifycfg-sink-merges-two-fences](bugs/182-simplifycfg-sink-merges-two-fences/) | SimplifyCFG SinkCommonCodeFromPredecessors | two `fence` instructions in mutually-exclusive predecessors collapsed to one — one of two release-acquire pairs destroyed | confirmed (opt diff) |
 | 183 | [183-simplifycfg-hoist-memintrinsic-drops-nontemporal](bugs/183-simplifycfg-hoist-memintrinsic-drops-nontemporal/) | SimplifyCFG hoistCommonCodeFromSuccessors | hoisted `llvm.memcpy` drops `!nontemporal` when only one of two carries it (combineMetadataForCSE writes JMD) | confirmed (opt diff) |
 | 184 | [184-instcombine-atomic-memcpy-memset-loses-element-atomicity](bugs/184-instcombine-atomic-memcpy-memset-loses-element-atomicity/) | InstCombineCalls SimplifyAnyMemTransfer/Set | element-atomic memcpy/memset with elt=1, len=4 collapsed to single i32 atomic load+store; per-byte atomicity granularity lost | confirmed (opt diff) |
+
+### Worker w71 coverage (LoopVectorize)
+- Hunted LV miscompiles via C-level random fuzz, IR-level random fuzz, and pattern-targeted tests
+- Compared O0 vs O2; also O2 vs O2 with -fno-vectorize/-fno-slp-vectorize as reference
+- Patterns probed: tail-folded reductions, predicated div/rem, first-order recurrence, stride-3/5 interleave, min/max reduction with index (FindLast), early-exit, anyOf, gather/scatter, conditional store, conditional load, alignment edges, multiple inductions, reverse iteration, u8 wrap accum, FP min/max
+- Flag combos: default O2; predicate-dont-vectorize; force-vector-width 2/4/8/16/32; force-vector-interleave 2/4/8; -mavx2; -mavx512f/vl/bw/dq; -enable-masked-interleaved-mem-accesses; -enable-early-exit-vectorization
+- Initial integer C-fuzz found 13 mismatches (signed-overflow / INT_MIN/-1 UB — disappeared with -fwrapv, not LV bugs)
+- FP fuzz with -ffast-math found 122 mismatches but all persist with -fno-vectorize (generic FP reassoc, not LV)
+- After UB-filtering: 0 confirmed LV miscompiles in ~12 minutes
+- Conclusion: LoopVectorize at default O2 is robust against these patterns; no bugs added
