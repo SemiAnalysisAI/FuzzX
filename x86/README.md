@@ -219,3 +219,4 @@ Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeli
 - After UB-filtering: 0 confirmed LV miscompiles in ~12 minutes
 - Conclusion: LoopVectorize at default O2 is robust against these patterns; no bugs added
 | 185 | [185-licm-promote-hoists-conditional-load-to-preheader](bugs/185-licm-promote-hoists-conditional-load-to-preheader/) | LICM promoteLoopAccessesToScalars | hoists a conditional load to unconditional preheader load; UB-injection if pointer was only deref-after-store | confirmed (opt diff) |
+| 186 | [186-licm-promote-sinks-conditional-store-via-thread-local](bugs/186-licm-promote-sinks-conditional-store-via-thread-local/) | LICM promoteLoopAccessesToScalars | sinks N conditional stores into single exit-store via "thread-local" gate; signal-handler / setjmp observability lost | confirmed (opt diff) |
