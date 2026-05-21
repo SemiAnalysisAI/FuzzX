@@ -44,25 +44,48 @@ the source: the kill flag on Copy's `Src` operand needs to be moved to the
 last surviving use of Src in `[PrevCopy, Copy)` (or set on the corresponding
 operand of PrevCopy if no intervening use exists).
 
-## Verifier impact
+## Reproduction confirmation
 
-`MachineVerifier::checkLiveness` re-derives liveness from kill flags. A
-missing kill on the last user of a physreg causes liveness to "leak" past
-the actual last use, which then conflicts with the next defining instruction's
-implicit dead/live state — generally producing
-`Live range continues after operand killed it` or similar.
+```mir
+# RUN: llc -mtriple=x86_64-linux-gnu -run-pass=machine-cp -verify-machineinstrs %s
+---
+name: trigger
+tracksRegLiveness: true
+body: |
+  bb.0:
+    liveins: $rbx, $rdx
+    renamable $rax = COPY renamable $rbx
+    renamable $rdx = ADD64rr renamable $rdx, renamable $rbx, implicit-def dead $eflags
+    renamable $rax = COPY killed renamable $rbx
+    RET 0, $rax, $rdx
+...
+```
+
+Before MCP, the second COPY carries `killed renamable $rbx`. After MCP:
+```
+renamable $rax = COPY renamable $rbx
+renamable $rdx = ADD64rr renamable $rdx, renamable $rbx, implicit-def dead $eflags
+RET 0, $rax, $rdx
+```
+
+The second COPY was erased, but the `killed` flag did not migrate. Now no
+operand in the function carries `killed $rbx`, even though $rbx is no longer
+used past the ADD64rr. The verifier does not catch this (missed kills are
+conservative for verification), but downstream passes that use kill flags as
+liveness hints (post-RA MachineSink, RegPressure tracking, second-stage
+MachineLICM) see an overestimated live range.
 
 ## Why this matters
 
-The asymmetric treatment of Src vs. Dst kills produces a verifier-illegal MIR
-even when no miscompile follows. Downstream consumers that trust kill flags
-(MachineCSE, MachineSink in some configurations, MachineLICM's
-post-RA-second-pass) can mis-extend live ranges.
+The asymmetric treatment of Src vs. Dst kills produces stale kill-flag
+metadata. Downstream consumers that trust kill flags (MachineCSE, MachineSink
+in some configurations, MachineLICM's post-RA-second-pass, register pressure
+analysis for scheduling) see a longer live range than reality.
 
-There is also a real miscompile path: if a later pass uses kill-flag-driven
-optimization (e.g. dead-COPY elimination based on "no kill flag → still live"
-heuristics), it can keep a COPY around that should have been erased — or
-conversely, fold an operation past a dead register believing it is still live.
+For x86, with EFLAGS-aware passes that use kill flags to decide whether to
+reorder around a flag-clobbering instruction, the missed kill can suppress
+a legal optimization or — worse — admit one that's only legal if the source
+register can be assumed dead at a particular point.
 
 ## Source citation
 

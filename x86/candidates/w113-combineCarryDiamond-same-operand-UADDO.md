@@ -59,3 +59,29 @@ USUBO_CARRY / UADDO_CARRY (line 3880 guard) AND `getAsCarry(..., true)`
 (line 3884) to accept the full-width sum as a carry candidate. On x86_64
 the legalization is satisfied; the open question is whether `getAsCarry`
 ever passes a non-boolean through. Worker time-boxed.
+
+## w550 follow-up: NOT REPRODUCIBLE
+
+Investigated by w550 with ~25 minutes of reproducer construction (t1-t15
+across i1/i8/i32/i64 widths, uaddo/usubo, OR/AND/XOR top nodes, masked
+variants, `__int128` multi-precision). The degenerate shape
+`Carry1 = uaddo(SumAB, SumAB)` is unreachable as a miscompile because
+`getAsCarry(CarryIn, ForceCarryReconstruction=true)` rejects it:
+
+- For literal `op1 = SumAB` (raw add result, i64, ResNo 0): the early
+  i1-type return (line 3370) and AND-with-1 return (line 3378) don't
+  apply; the `V.getResNo() != 1` check (line 3391) returns SDValue().
+- The condition matching at lines 3868-3869 requires both operands to
+  literally be the same SDValue as `Carry0.getValue(0)` (the sum). Any
+  sum SDValue has ResNo 0 and is not i1 nor AND-with-1, so `getAsCarry`
+  always bails.
+
+The closest "shape that fires" is `Carry1 = uaddo(s0, and(s0, 1))` (t10):
+the AND-with-1 makes op1 pass `getAsCarry`, the combine fires and emits
+`bt + adcq + setb`. But this is a *legitimate* optimization producing
+*correct* asm because `s0 & 1 ∈ {0,1}` is a valid carry-in and the
+mutual-exclusivity property documented at lines 3895-3905 holds.
+
+The "recommended fix" (reject `Carry1.getOperand(0) == Carry1.getOperand(1)`)
+is unnecessary; `getAsCarry(., true)` already provides the necessary
+defense. Closing as non-bug.
