@@ -52,43 +52,55 @@ make this obvious.
 ## Reproducer
 
 ```ll
-; opt -passes=instcombine -S
+; opt -O2 -S
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
 declare double @fmod(double, double)
-declare void @llvm.assume(i1)
 
-define i1 @test(double %x) {
-  %isnan = fcmp uno double %x, 0.0
-  call void @llvm.assume(i1 %isnan)
+define i32 @test(i1 %cond) {
+  %x = select i1 %cond, double 0x7FF8000000000000, double 1.5
   %r = call double @fmod(double %x, double 1.0)
-  ; isnan(r): r != r
-  %check = fcmp uno double %r, %r
-  ret i1 %check
+  %isnan = fcmp uno double %r, 0.0
+  %ret = zext i1 %isnan to i32
+  ret i32 %ret
 }
 ```
 
-**Source semantics:** `%x` is asserted NaN. `fmod(NaN, 1.0) = NaN` (C99
-F.10.7.1). `isnan(NaN) = true`. Function must return `i1 true`.
+**Source semantics (executed by the unoptimised code):**
+
+| `%cond` | `%x`  | `fmod(%x, 1.0)` | `isnan(%r)` | return |
+|---------|-------|-----------------|-------------|--------|
+| `true`  | qNaN  | qNaN (C99 F.10.7.1) | `true`  | `1` |
+| `false` | `1.5` | `0.5`               | `false` | `0` |
 
 **After `opt -O2 -S`:**
 
 ```ll
-define noundef i1 @test(double %x) local_unnamed_addr {
-  ret i1 false
+define noundef range(i32 0, 2) i32 @test(i1 %cond) local_unnamed_addr {
+  ret i32 0
 }
 ```
 
-`opt -passes='instcombine<no-verify-fixpoint>' -S` shows the bad rewrite directly:
+The optimizer folds the function to constant `0` for *all* values of `%cond`,
+which is wrong for `%cond == true`.
+
+The carrier of the miscompile is visible at the very first instcombine
+iteration: the libc `fmod` is replaced by
 
 ```ll
 %r = frem nnan double %x, 1.000000e+00
 ```
 
-(after assume‑driven simplification has already replaced the unordered fcmp with
-its propagation result). The `nnan` flag is the carrier of the miscompile —
-GVN / SimplifyCFG then poisons the `fcmp uno` and folds it to `false`.
+(observable with `opt -passes='instcombine<no-verify-fixpoint>' -S`). The
+`nnan` flag is incorrect because `%x` is provably non-infinity but can be NaN
+(the select gives qNaN on the `true` arm). `frem nnan` with a NaN input
+produces poison, and downstream `fcmp uno poison, 0.0` simplifies to `false`.
+
+`computeKnownFPClass` correctly tells `optimizeFMod` "x is not Inf" — neither
+arm of the select is Inf. The bug is in the conclusion: the comment / variable
+name in the source claims this implies "no NaN result", but a non-Inf input
+can still be NaN.
 
 ## Suggested fix
 
