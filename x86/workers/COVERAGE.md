@@ -1651,3 +1651,23 @@ Other observations (no candidate filed):
 - The `LowerAtomic` pass `expandPartwordAtomicRMW` (AtomicExpandPass.cpp:1066) calls `insertRMWLLSCLoop` (1357) which does not thread `isVolatile()` into `emitLoadLinked` / `emitStoreConditional`. This is a target-hook concern, not the IR-level volatile-drop family.
 - `CodeGenPrepare splitMergedValStore` (8568) does not gate on `isAtomic()`. A `store atomic` going through this path crashes (rather than silently miscompiles); already partially covered by #012 for volatile.
 - The comment in SROA.cpp:1722-1740 explicitly says "atomic semantics do not have any meaning for a local alloca" -- but that reasoning only holds when the alloca is not captured. Did not file as a separate bug because the captured-alloca case requires a more elaborate reproducer and SROA's `isSafeSelectToSpeculate` only opts in non-volatile loads anyway.
+
+## worker-65 2026-05-21
+- Hunt: x86 runtime miscompiles in IndVarSimplify / SimplifyIndVar / ScalarEvolution / LoopStrengthReduce.
+- Approach: write small IR loops, run `opt -passes=indvars -S` (also `-O3` for unroll fusion), compile both opt and llc -O0 with `llc -O2` (assembled via in-tree clang because system as does not know `.prefalign`), drive with a C runner that mirrors loop semantics carefully (sum-of-phi-value vs sum.next pitfall noted).
+- IR patterns exercised end-to-end (all matched runtime):
+  - Two-IV closing-rate {iv += nuw 1, rhs -= nsw 1, iv ult rhs}: SCEV closed form `umax(rhs-1,1)*…` correct for `rhs_start ∈ {1..1000}` (corners that should expose bug 088 are UB-infinite, not observable).
+  - Negative-stride `iv = n; iv -= nsw 1; iv sgt 0` — closed form `n*(n-1)/2` verified for n up to 65536.
+  - `eliminateTrunc` shape `i64 iv → trunc i32 ult trunc(n)`: SCEV uses low-32 of n; verified for n with high bits set (`0x100000000…0x200000005`).
+  - LFTR with non-unit stride 3 (`add nsw iv,3; iv slt n`): closed form correct for n up to 10^6.
+  - Two-IV multiplicative body `sum += i*j` with i++/j--: full closed form via -O3; correct for n up to 10^5.
+  - Geometric `shl nuw nsw iv,1` exit: indvars doesn't touch (no AddRec model), no regression.
+  - Post-inc `ne` exit `iv += nsw 1; iv.next ne n`: closed form `n-s`; correct for all well-defined inputs.
+  - Trunc-based exit `(i32)iv.next != 0` with i64 IV stride 3: SCEV returns `12884901888 = 3*2^32` (lcm correct).
+- File: llvm/lib/Transforms/Utils/SimplifyIndVar.cpp:489-596 (`eliminateTrunc`) — read; lines 562-564 require both operands non-negative for `CanUseZExt` on signed non-equality predicates. Soundness depends on `SE->isKnownNonNegative` which itself uses signed-range — could fail open on a constant whose SCEV is `unknown` but proven non-negative by other means; not exploitable here.
+- File: llvm/lib/Transforms/Utils/SimplifyIndVar.cpp:1609-1652 (`widenLoopCompare`) — line 1629 `Cmp->hasSameSign() ? IsSigned : Cmp->isSigned()` is a `samesign`-attribute aware selection; line 1646 special-case `DU.NeverNegative && isa<SExtInst>(Op) && !Cmp->isSigned()` flips to sext widening. The flip is safe because under non-negativity of LHS the sext and zext of LHS coincide; sext of RHS preserves the original unsigned comparison only if RHS in narrow type was also non-negative-equivalent-as-bits. Reviewed source, no obvious soundness gap.
+- File: llvm/lib/Transforms/Scalar/IndVarSimplify.cpp:1060-1196 (`linearFunctionTestReplace`) — read; flag-dropping at 1099-1117 correctly narrows nuw/nsw to AR-proven flags, but only on the increment instruction (`IncVar`), not on intermediate uses; comment at 1107-1110 acknowledges first-iteration dynamic-deadness gap as a TODO.
+- File: llvm/lib/Analysis/ScalarEvolution.cpp:2416-2490 (`willNotOverflow`) — read; context-based fallback (`isKnownPredicateAt` with `CtxI`) bails for `SINT_MIN` constant inversion (line 2470); this is the SCEV side of the (C) gap noted in candidate w44.
+- Potential bugs filed:
+  - candidates/w65-indvars-scev-fuzz-no-runtime-misc.md — *no* new candidate; documents 8 verified-correct patterns + notes unexercised areas (LSR runtime, `samesign` interactions, multi-exit loops, applyLoopGuards/assume-bundle).
+- New confirmed bugs filed: 0.
