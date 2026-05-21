@@ -31,16 +31,27 @@ it as a follow-up check.
 
 ## Eligibility of memory-touching instructions
 
-`isCandidate` (lines 176-197) gates by `MI->isSafeToMove(SawStore)`, which
-allows non-volatile, non-atomic loads (`mayLoad` is permitted as long as
-`hasOrderedMemoryRef()` is false). The operand walk accepts the
-single-def-zero-or-FrameReg-uses-only pattern, so a frame-relative load
-(e.g. `MOV32rm $rsp, 1, $noreg, -4, $noreg`) is a candidate.
+`isCandidate` (lines 176-197) gates by `MI->isSafeToMove(SawStore)` with
+`SawStore=true` as the input. `isSafeToMove` for a `mayLoad()` instruction
+returns `!SawStore` UNLESS the load is `isDereferenceableInvariantLoad()`.
+So the candidate set is restricted to:
+
+1. Invariant/dereferenceable loads (e.g. constant-pool loads marked
+   `MOInvariant` + `MODereferenceable`).
+2. Non-memory instructions like LEA, MOV*ri (load address / immediate),
+   which have no MMOs (harmless for this bug class).
+
+The bug-relevant case is (1). On x86, `MOV{8,16,32,64}rm` and vector loads
+that materialize a constant from `.rodata` typically carry MMOs with
+`MachinePointerInfo::getConstantPool()` PseudoSourceValue, `MOLoad |
+MOInvariant | MODereferenceable`. AAMD metadata (`!tbaa`, `!alias.scope`,
+`!noalias`) on the original IR load propagates through to the MMO.
 
 Concrete candidate examples on x86:
-- `MOV32rm`, `MOV64rm`, `MOV8rm`, `MOV16rm` (frame reloads of constants).
-- `MOVAPSrm`, `MOVUPSrm` (vector reloads from frame).
-- `LEA64r` with no memory operand (no MMO, harmless).
+- Constant-pool loads: `MOV32rm <constpool>, ...` with
+  `MOInvariant|MODereferenceable`.
+- Vector constant loads: `MOVAPSrm <constpool>, ...`,
+  `VMOVAPSZ128rm <constpool>, ...`.
 
 ## Where MMO divergence comes from
 
