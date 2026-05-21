@@ -120,13 +120,26 @@ llc -mtriple=x86_64-unknown-linux-gnu -mattr=+ndd \
 
 ## Investigation status
 
-- Source-only analysis. Constructing a MIR repro that lands in the
-  `NoNDDM && !IsTwoAddr` branch with a sub-reg `SrcSub` and a kill flag on
-  that use requires post-regalloc state with NDDM disabled and a spill-fold
-  attempt. Not reproduced end-to-end in the time budget; the source path is
-  identified above.
+- Source-only analysis of `X86InstrInfo::foldMemoryOperandImpl` at lines
+  7623-7642.
+- Confirmed via `llc -mattr=+ndd -O2 -print-after=virtregrewriter` on
+  `/tmp/w103/test_nddfold.ll`: with `-mattr=+ndd` alone (no `+prefer-ndd-mem`),
+  the spill folder DOES rewrite NDD instructions via their non-NDD twin, which
+  is the path containing the bug. Generated output shows `ADD32rm` (legacy
+  RMW, tied) replacing what was originally an NDD form. The bug branch
+  (kill-flag-on-sub-reg-use) requires the SrcReg to be referenced via a
+  sub-reg index in the original NDD instruction's operand 1, but where the
+  surrounding code still has live uses of other lanes of SrcReg. This
+  combination is rare in straight-line C IR (which doesn't naturally produce
+  sub-reg uses on operand 1 of NDD until coalescer/spill), but is reachable
+  via inline-asm with reg constraints, or via post-coalescer state that
+  fuses an `EXTRACT_SUBREG` into an NDD use site.
+- A MIR-level direct test fails verifier because GR32 doesn't accept
+  sub_32bit projections of GR64 outside of COPY (and post-regalloc the sub-reg
+  is on a physical register encoding). Reaching the path requires the spill
+  pipeline to invoke `foldMemoryOperandImpl` on an NDD-encoded reload, which
+  is what happens at line 7610: `NewMI = ... fuseInst(...)`.
 - The verifier-rejected handcrafted MIRs (see `/tmp/w103/`) confirm that
-  X86's GR32 class rejects sub_32bit projections of GR64 directly, which is
-  why this bug only surfaces in the post-regalloc fold path (where the
-  sub-reg is encoded on the physical register via REG_SEQUENCE / spill
-  slot reload bookkeeping).
+  X86's GR32 class rejects sub_32bit projections of GR64 directly. The bug
+  surfaces in the post-regalloc fold path where the sub-reg is encoded on the
+  physical register via REG_SEQUENCE / spill slot reload bookkeeping.

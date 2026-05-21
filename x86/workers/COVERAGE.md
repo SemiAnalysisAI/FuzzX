@@ -1766,3 +1766,123 @@ Other observations (no candidate filed):
 - Potential bugs filed:
   - candidates/w63b-lower-matrix-fuseFlatten-drops-volatile.md — `LowerMatrixIntrinsics.cpp:1723` matmul "dot-product flatten" path matches a `matrix.column.major.load` and emits `Builder.CreateLoad(Op->getType(), Arg)` without forwarding the intrinsic's `i1 immarg %isVolatile` (arg index 2). When fusion picks the flatten lowering (stride=1 via `CanBeFlattened` `m_One()`), a `volatile` matrix load is silently rewritten to a non-volatile load and freely DCE'd/coalesced by later passes.
   - candidates/w63b-vectorcombine-scalarizeLoadExtract-strips-atomic.md — `VectorCombine.cpp:2015` entry to `scalarizeLoad` only rejects `isVolatile()`; an `atomic` (unordered/monotonic) `<N x T>` load passes through to `scalarizeLoadExtract` (line 2130) or `scalarizeLoadBitcast` (line 2202), where it is broken into N plain non-atomic scalar `Builder.CreateLoad(...)` loads. The no-torn-read guarantee is silently lost. Fix: tighten the gate to `LI->isSimple()`. Reproduces with `-O3` (vector-combine is in the default pipeline).
+
+## worker-66 2026-05-21
+
+Hunt: passes that drop volatile/atomic when creating new load/store, especially
+AtomicExpandPass, GlobalOpt, LowerMatrixIntrinsics, SafeStack, FunctionAttrs,
+ArgumentPromotion, InferAddressSpaces, RewriteStatepointsForGC, SCCPSolver,
+CGP, Sink, SimplifyLibCalls, LoopIdiomRecognize, MergedLoadStoreMotion,
+LICM, LoopVectorize, JumpThreading, NewGVN, GVNHoist, InstCombine helpers,
+SLPVectorizer, Scalarizer, EarlyCSE, VectorCombine, MemorySanitizer,
+ConstantHoisting, LoopRotation, TailRecursionElimination, Reassociate, SCCP,
+WinEHPrepare, AttributorAttributes, OpenMPOpt, CallSiteSplitting,
+ExpandIRInsts, ExpandVectorPredication, JumpTableToSwitch, AggressiveInstCombine.
+
+Files actively read:
+- llvm/lib/CodeGen/AtomicExpandPass.cpp (full pass)
+- llvm/lib/Transforms/Utils/LowerAtomic.cpp (already w57)
+- llvm/lib/Transforms/Scalar/LowerMatrixIntrinsics.cpp (FlattenArg path)
+- llvm/lib/Transforms/Scalar/InferAddressSpaces.cpp (memintrinsic guard)
+- llvm/lib/Transforms/IPO/FunctionAttrs.cpp (memory effects)
+- llvm/lib/Transforms/IPO/GlobalOpt.cpp (TryToShrinkGlobalToBoolean -
+  already w57 cleared via GlobalStatus guard)
+- llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp
+- llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp
+  (SimplifyAnyMemTransfer/Set, masked.scatter)
+- llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp
+  (foldPHIArgLoadIntoPHI)
+- llvm/lib/Transforms/Scalar/Sink.cpp
+- llvm/lib/Transforms/Scalar/MergedLoadStoreMotion.cpp (already w57)
+- llvm/lib/Transforms/Scalar/MemCpyOptimizer.cpp (processStore,
+  processStoreOfLoad, tryMergingIntoMemset)
+- llvm/lib/Transforms/Scalar/JumpThreading.cpp (1406 PRE load is isUnordered-guarded)
+- llvm/lib/Transforms/Scalar/GVN.cpp (1573 NewLoad preserves vol+ordering+SSID)
+- llvm/lib/Transforms/Scalar/NewGVN.cpp (1558 isSimple guard)
+- llvm/lib/Transforms/Scalar/GVNHoist.cpp (LoadInfo/StoreInfo isSimple-guarded)
+- llvm/lib/Transforms/Scalar/LICM.cpp (promotion tracks SawUnorderedAtomic)
+- llvm/lib/Transforms/Vectorize/LoadStoreVectorizer.cpp (line 1744 isSimple)
+- llvm/lib/Transforms/Vectorize/SLPVectorizer.cpp
+- llvm/lib/Transforms/Vectorize/VectorCombine.cpp (1953/1971 isSimple)
+- llvm/lib/Transforms/IPO/ArgumentPromotion.cpp (402/558 guarded)
+- llvm/lib/Transforms/IPO/AttributorAttributes.cpp (privatize paths use Alloca)
+- llvm/lib/Transforms/Utils/PromoteMemoryToRegister.cpp
+- llvm/lib/Transforms/Utils/CodeExtractor.cpp (alloca-based, OK)
+- llvm/lib/Transforms/Utils/SCCPSolver.cpp (visitLoadInst gated by isVolatile)
+- llvm/lib/Transforms/Utils/LoopUtils.cpp (collectInstructionsToDuplicate
+  rejects volatile/atomic load)
+- llvm/lib/CodeGen/CodeGenPrepare.cpp (CGP splitMergedValStore already filed)
+- llvm/lib/CodeGen/SafeStack.cpp (only touches alloca/byval, safe)
+- llvm/lib/CodeGen/WinEHPrepare.cpp (alloca spill slots)
+- llvm/lib/CodeGen/GCRootLowering.cpp (gcread/gcwrite have no IR vol/atomic)
+- llvm/lib/CodeGen/ExpandVectorPredication.cpp (vp_load/vp_store have no vol)
+- llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp (461/513/548/882 guarded)
+
+Patterns ruled out / verified safe:
+- InferAddressSpaces handleMemIntrinsicPtrUse path: guarded by
+  `!MI->isVolatile()` at line 1441 before calling the helper that hardcodes
+  isVolatile=false.
+- GlobalOpt TryToShrinkGlobalToBoolean / OptimizeGlobalAddressOfAllocation
+  preserves SI->getOrdering() and SI->getSyncScopeID() (lines 1287, 1305,
+  1299); GlobalStatus already rejects any volatile use of the GV.
+- RewriteStatepointsForGC's `new LoadInst`/`new StoreInst` calls all target
+  freshly-created allocas (PromotableAllocas / Spill slots), so dropped
+  volatile is on private memory.
+- InstCombinePHI foldPHIArgLoadIntoPHI: line 708 `!FirstLI->isSimple()`
+  bails on volatile or atomic loads before the new LoadInst with
+  /*IsVolatile=*/false.
+- InstCombineLoadStoreAlloca unpackLoadToAggregate / unpackStoreToAggregate
+  both gated by isSimple at the entry.
+- InstCombineCalls SimplifyAnyMemTransfer: propagates volatile via
+  L->setVolatile(MT->isVolatile()) / S->setVolatile(MT->isVolatile()) at
+  207-208.
+- InstCombineCalls masked.scatter (lines 401, 418): the intrinsic doesn't
+  have an isVolatile arg so dropping is not a regression.
+- Sink: `IsAcceptableTarget` line 87 bails on `mayReadFromMemory()` so a
+  volatile load cannot be sunk across a critical edge anyway.
+- ExpandVectorPredication: vp_load/vp_store intrinsics have no isVolatile arg
+  so the hardcoded /*IsVolatile=*/false at 438, 450 is correct.
+- LoopUtils collectInstructionsToDuplicate (line 2346) bails on volatile or
+  atomic load.
+- MergedLoadStoreMotion mergeStores (line 331) bails on `!S0->isSimple()`.
+- LoopIdiomRecognize: line 461 bails on volatile store before
+  CreateMemSet with isVolatile=false (1170); processLoopMemoryCopy
+  (1425-1492) correctly switches to CreateElementUnorderedAtomicMemCpy
+  when IsAtomic, and the non-atomic branch's CreateMemCpy with false is
+  reached only after isVolatile guards in isLegalStore/isLegalLoad.
+- LoopVectorize / SLPVectorizer: LoopAccessAnalysis line 2635/2659 bails on
+  non-simple load/store (except parallel_accesses annotation).
+- VectorCombine foldSingleElementStore (1953 / 1971), canWidenLoad (220):
+  all isSimple-guarded.
+- AttributorAttributes privatize paths (7620, 7627, 7630, 7653, 7662, 7667):
+  target newly-created allocas representing privatized args.
+- WinEHPrepare loads/stores (1280, 1421, 1428): all target alloca-based
+  spill slots for EH PHI flow.
+- AtomicExpandPass expandAtomicLoadToCmpXchg: dropped volatile + syncscope -
+  FILED below.
+- AtomicExpandPass expandAtomicStoreToXChg: dropped volatile + syncscope -
+  FILED below.
+- LowerMatrixIntrinsics FlattenArg (lines 1718-1726): drops volatile when
+  the matrix dot-product fused path replaces a matrix.column.major.load
+  intrinsic that has i1 true isVolatile arg with a plain CreateLoad -
+  FILED below.
+- AtomicExpandPass expandAtomicLoadToLL (line 652-666): doesn't pass volatile
+  or syncscope to emitLoadLinked; target-specific lowering. Not exercised on
+  x86 path so not filed.
+- AtomicExpandPass insertRMWLLSCLoop: doesn't take volatile/SSID; LLSC path
+  isn't used on x86.
+
+Candidates filed:
+- candidates/w66-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope.md
+  (i128 `load atomic volatile syncscope("singlethread")` on
+  `x86_64 -mattr=+cx16` becomes plain `cmpxchg ... seq_cst seq_cst` with
+  neither volatile nor singlethread)
+- candidates/w66-atomic-expand-store-to-xchg-drops-volatile-syncscope.md
+  (i128 `store atomic volatile syncscope("singlethread")` on
+  `x86_64 -mattr=+cx16` becomes a seed `load i128` (non-atomic, non-volatile)
+  followed by a `cmpxchg ... seq_cst seq_cst` with neither volatile nor
+  singlethread)
+- candidates/w66-lower-matrix-intrinsics-flatten-drops-volatile.md
+  (matrix dot-product fused lowering replaces
+  `llvm.matrix.column.major.load(... i1 true ...)` with plain `Builder.CreateLoad`,
+  losing volatile)

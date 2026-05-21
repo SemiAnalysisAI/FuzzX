@@ -65,19 +65,45 @@ F:
 
 The `!nontemporal` tag is **gone** from the merged store. On the `T` path, the programmer's intent for a non-temporal (bypass cache, write-combining) store on this address is now violated — `llc` will emit a regular `MOV` instead of `MOVNTI`.
 
-## Confirmation
+## End-to-end llc confirmation (verified)
 
-Compiling the post-hoist IR with `llc -mtriple=x86_64`:
+Pre-hoist (`llc -mtriple=x86_64-unknown-linux-gnu` directly on the IR above):
 ```
-mov dword ptr [rdi], 1
+nt_store:
+	testb	$1, %dil
+	je	.LBB0_2
+.LBB0_1:                                # %T
+	movl	$1, %eax
+	movntil	%eax, (%rsi)              # <-- MOVNTI (non-temporal)
+	retq
+.LBB0_2:                                # %F
+	movl	$1, (%rsi)                # cached
+	retq
 ```
 
-Same IR pre-hoist (without GVNHoist) compiles to `MOVNTI` on the T branch:
+Post-hoist (`opt -passes=gvn-hoist | llc`):
 ```
-movnti dword ptr [rdi], eax
+nt_store:
+	movl	$1, (%rsi)                # <-- regular MOV; movntil GONE
+	retq
 ```
 
-The opt path with `-enable-gvn-hoist` thus causes x86 codegen to *silently switch from non-temporal to cached* store on the path that had `!nontemporal`.
+The `T` path lost its `MOVNTI`. Same bug confirmed for **loads** with a `<4 x float>` reproducer (SSE4.1):
+- Pre-hoist T branch: `movntdqa (%rsi), %xmm0`
+- Post-hoist:         `movaps   (%rsi), %xmm0` — non-temporal load lost.
+
+## Symmetric-case sanity
+
+When BOTH branches have `!nontemporal`, GVNHoist preserves the tag on the merged store — verified with:
+```
+T: store i32 1, ptr %p, !nontemporal !0
+F: store i32 1, ptr %p, !nontemporal !0
+```
+after `gvn-hoist` →
+```
+entry: store i32 1, ptr %p, !nontemporal !0
+```
+So the bug is strictly the **asymmetric-tag** case.
 
 ## Severity
 
