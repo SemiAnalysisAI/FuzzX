@@ -25,19 +25,19 @@ count of `seq_cst` operations participating in the global S total order
 
 ## Repro
 
-`/tmp/w84/sink_vol_atomicrmw_diff.ll`:
+`/tmp/w84/sink_vol_atomicrmw_same.ll`:
 
 ```llvm
 target triple = "x86_64-unknown-linux-gnu"
 
-define i32 @sink_vol_atomicrmw(i1 %c, ptr %p, i32 %v1, i32 %v2) {
+define i32 @sink_vol_atomicrmw(i1 %c, ptr %p, i32 %v) {
 entry:
   br i1 %c, label %then, label %else
 then:
-  %a = atomicrmw volatile add ptr %p, i32 %v1 seq_cst, align 4
+  %a = atomicrmw volatile add ptr %p, i32 %v seq_cst, align 4
   br label %end
 else:
-  %b = atomicrmw volatile add ptr %p, i32 %v2 seq_cst, align 4
+  %b = atomicrmw volatile add ptr %p, i32 %v seq_cst, align 4
   br label %end
 end:
   %r = phi i32 [ %a, %then ], [ %b, %else ]
@@ -48,25 +48,27 @@ end:
 ## Invocation
 
 ```
-opt -passes='simplifycfg<sink-common-insts>' -S sink_vol_atomicrmw_diff.ll
+opt -passes='simplifycfg' -S sink_vol_atomicrmw_same.ll
 ```
+
+(The default simplifycfg already sinks the common last instruction; no
+`<sink-common-insts>` option is required. With different value operands,
+`<sink-common-insts>` is required and the merge introduces a `select` on
+the value operand.)
 
 ## Output
 
 ```
-define i32 @sink_vol_atomicrmw(i1 %c, ptr %p, i32 %v1, i32 %v2) {
+define i32 @sink_vol_atomicrmw(i1 %c, ptr %p, i32 %v) {
 entry:
-  %v1.v2 = select i1 %c, i32 %v1, i32 %v2
-  %b = atomicrmw volatile add ptr %p, i32 %v1.v2 seq_cst, align 4
-  ret i32 %b
+  %a = atomicrmw volatile add ptr %p, i32 %v seq_cst, align 4
+  ret i32 %a
 }
 ```
 
 Two distinct `atomicrmw volatile add ... seq_cst` instructions in the
 source program -- corresponding, e.g., to two distinct C `__atomic_fetch_add`
 calls on a `volatile _Atomic int` -- have been collapsed to a single one.
-The select-of-value-operand reproduces the *value* effect but not the
-*observable* effect (count of volatile-and-seq_cst accesses).
 
 ## Codegen confirmation
 

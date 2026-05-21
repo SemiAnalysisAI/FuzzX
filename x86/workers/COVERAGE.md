@@ -1697,3 +1697,22 @@ Other observations (no candidate filed):
 - Potential bugs filed:
   - candidates/w64-instcombine-constfold-fmf-nnan-ninf-produces-finite-instead-of-poison.md — `ConstantFoldFPInstOperands` (binops fadd/fsub/fmul/fdiv/frem) and `ConstantFoldFP` (sqrt/log/log2/exp/sin/cos/fma/fmuladd/rint/canonicalize/etc.) ignore the `nnan` / `ninf` fast-math flags on the context instruction, so an `nnan`-flagged op whose mathematical result IS NaN folds to a NaN constant (and `ninf` whose result IS Inf folds to Inf) instead of `PoisonValue`. Per LangRef (D47963) the IR contract makes the result `poison`. Confirmed reproducer drift between the two consumers of the same value: `direct() = fdiv nnan 0.0,0.0; fcmp ord %r,0.0` folds to `i1 false` (constant fold first → NaN → ord NaN = false) while `via_sqrt() = call nnan @llvm.sqrt(-1.0); fcmp ord %r,0.0` folds to `i1 true` (nnan-aware simplifier first → r-not-NaN → ord = true) — the same poison value, two contradictory refinements observable from one IR. Concrete reproducers in the candidate cover fdiv, fmul, fadd, fsub, frem, fneg, fma, sqrt, log, fmuladd in scalar and vector forms.
 - New confirmed bugs filed: 1.
+
+## worker-91 2026-05-21
+- File: llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp (expandLdexp, expandFrexp, ExpandFPLibCall, ConvertNodeToLibcall switch arms for FLDEXP/FPOWI/FFREXP/FMODF, FP_TO_INT_SAT clamp).
+- File: llvm/lib/CodeGen/SelectionDAG/LegalizeFloatTypes.cpp (SoftenFloatRes_BF16_TO_FP, SoftenFloatRes_FCANONICALIZE, SoftenFloatRes_ExpOp, SoftenFloatRes_FFREXP, SoftPromoteHalfRes_UnaryOp).
+- File: llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp (PromoteIntRes_BITCAST, PromoteIntOp_ZERO_EXTEND nneg path, ExpandIntRes_Logical disjoint propagation, shift-amount expansion FIXMEs).
+- File: llvm/lib/CodeGen/SelectionDAG/LegalizeVectorOps.cpp (ExpandFNEG XOR-sign-mask, ExpandUINT_TO_FP strict variant, VP_SETCC mask/evl drop, ExpandSETCC).
+- File: llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp (ScalarizeVecRes_INSERT_VECTOR_ELT TRUNCATE-on-float FIXME, SplitVecRes_INSERT_VECTOR_ELT byte-rounding, WidenVecRes_OverflowOp poison padding, ScalarizeVecRes_SETCC drops flags).
+- File: llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp (SimplifyDemandedBits SHL/SRL/FSHL/FSHR/INSERT_VECTOR_ELT/INSERT_SUBVECTOR/EXTRACT_VECTOR_ELT, ShrinkDemandedConstant OR-disjoint flag, ShrinkDemandedOp, expandFP_ROUND bf16 round-inexact-to-odd, expandFP_TO_INT_SAT NaN-handling, softenSetCCOperands strict-signaling, expandMultipleResultFPLibCall).
+- File: llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp (simplifyShift, simplifyFPBinop, simplifySelect).
+- Patterns ruled out:
+  - SoftenFloatRes_BF16_TO_FP strict-chain FIXME: real source-confirmed but not user-reachable on x86 (f128 is legal, bf16 strict-fp goes via PromoteFloat / SoftPromoteHalf paths emitting __extendbfsf2 + __extendsftf2 chain).
+  - SoftenFloatRes_FCANONICALIZE chain discard: source comment confirms it is intentional and the STRICT_FMUL has NoFPExcept set, so safe.
+  - DAGCombiner simplifyDivRem X/X -> 1, X%X -> 0: X=0 case is refinement of undef/poison, legal.
+  - simplifyShift `shift i1 X, Y -> X`: refinement of poison for Y!=0, legal.
+  - TargetLowering INSERT_VECTOR_ELT/INSERT_SUBVECTOR/EXTRACT_VECTOR_ELT simplification cases reviewed without finding new bugs.
+  - ExpandFNEG vector via XOR(SignMask): IEEE-754 permits FNEG to not quiet sNaN (sign-bit op), so not a bug (distinct from #117 fdiv-by-neg1 which had FDIV semantics elided).
+- Potential bugs filed:
+  - candidates/w91-strict-ldexp-i64-libcall-silent-truncation.md — STRICT variant of #011: `llvm.experimental.constrained.ldexp.f64.i64` lowers to `ldexp@PLT` with i64 in %rdi (low 32 bits read as int, high silently dropped, no diagnostic); root cause: `expandLdexp` bails on STRICT_FLDEXP (LegalizeDAG.cpp:2572 TODO) and `ConvertNodeToLibcall` for FLDEXP/STRICT_FLDEXP (5031-5035) lacks the FPOWI-style sizeof(int) guard.
+  - candidates/w91-frexp-i64-libcall-stack-slot-overrun.md — `llvm.frexp.f64.i64` allocates an i64 stack slot for the exponent output, calls `frexp(double, int*)` which writes only 4 bytes, then loads 8 bytes back; high 32 bits leak the caller's stale `%rax` (via the slot-establishing `pushq %rax`). Root cause: `TargetLowering::expandMultipleResultFPLibCall` (TargetLowering.cpp:13245+) sizes both the temp slot and the read-back load by `Node->getValueType(ResNo)` without an `IntSize` width check.
