@@ -33,8 +33,8 @@ could (and should) inherit `nneg`. Dropping it forfeits subsequent optimisation
 opportunities (e.g. `sext`/`zext` collapsing, `lshr`-based simplifications,
 range derivations).
 
-The same pattern applies to other cast flags that might be added in future
-(e.g. `nuw`/`nsw` on `trunc`); `narrowInsElt` will silently drop those too.
+For `FPExt` (which is an `FPMathOperator`), the same code path drops the
+fast-math flags (`nnan`/`ninf`/`nsz`/...) entirely. Confirmed both empirically.
 
 This is a missed-optimisation, not a miscompile — dropping `nneg` is a
 refinement.
@@ -50,6 +50,13 @@ define <4 x i32> @test_zext_nneg(<4 x i8> %x, i8 %y) {
   %r  = insertelement <4 x i32> %vx, i32 %sy, i64 2
   ret <4 x i32> %r
 }
+
+define <4 x double> @test_fpext_fmf(<4 x float> %x, float %y) {
+  %vx = fpext nnan ninf nsz <4 x float> %x to <4 x double>
+  %sy = fpext nnan ninf nsz float %y to double
+  %r  = insertelement <4 x double> %vx, double %sy, i64 2
+  ret <4 x double> %r
+}
 ```
 
 `opt -passes=instcombine -S` output:
@@ -57,15 +64,20 @@ define <4 x i32> @test_zext_nneg(<4 x i8> %x, i8 %y) {
 ```
 define <4 x i32> @test_zext_nneg(<4 x i8> %x, i8 %y) {
   %1 = insertelement <4 x i8> %x, i8 %y, i64 2
-  %r = zext <4 x i8> %1 to <4 x i32>     ; <-- nneg dropped
+  %r = zext <4 x i8> %1 to <4 x i32>          ; <-- nneg dropped
   ret <4 x i32> %r
+}
+
+define <4 x double> @test_fpext_fmf(<4 x float> %x, float %y) {
+  %1 = insertelement <4 x float> %x, float %y, i64 2
+  %r = fpext <4 x float> %1 to <4 x double>   ; <-- nnan ninf nsz dropped
+  ret <4 x double> %r
 }
 ```
 
-The `nneg` flag is dropped on the final `zext`. The expected output is
-`%r = zext nneg <4 x i8> %1 to <4 x i32>` because all lanes of `%1` are
-non-negative (`nneg` was asserted on both operands of the original
-insertelement).
+The `nneg`/FMF flags are dropped on the final cast. The expected output is
+`zext nneg`/`fpext nnan ninf nsz` because both operands had identical flags
+asserted (so all lanes after the merged insertelement satisfy the predicate).
 
 ## Fix sketch
 

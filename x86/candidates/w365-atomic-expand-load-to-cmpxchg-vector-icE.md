@@ -54,34 +54,43 @@ constructed with the vector type as-is.
 
 ## Reproducer
 
+A kernel-style function (e.g. `no-implicit-float` with `+cx16`) is enough to
+trigger this from the default x86_64 backend without any extra `-mattr`:
+
 ```
 target triple = "x86_64-unknown-linux-gnu"
 
-define <2 x i64> @load_v2i64(ptr %p) {
+define <2 x i64> @load_v2i64(ptr %p) #0 {
   %v = load atomic <2 x i64>, ptr %p seq_cst, align 16
   ret <2 x i64> %v
 }
 
-define <4 x i32> @load_v4i32(ptr %p) {
+define <4 x i32> @load_v4i32(ptr %p) #0 {
   %v = load atomic <4 x i32>, ptr %p seq_cst, align 16
   ret <4 x i32> %v
 }
 
-define <8 x i16> @load_v8i16(ptr %p) {
+define <8 x i16> @load_v8i16(ptr %p) #0 {
   %v = load atomic <8 x i16>, ptr %p seq_cst, align 16
   ret <8 x i16> %v
 }
 
-define <16 x i8> @load_v16i8(ptr %p) {
+define <16 x i8> @load_v16i8(ptr %p) #0 {
   %v = load atomic <16 x i8>, ptr %p seq_cst, align 16
   ret <16 x i8> %v
 }
+
+attributes #0 = { "no-implicit-float" "target-features"="+cx16" }
 ```
 
-Invocation (default O0 or O2; verifier triggers either way):
+Invocation:
 ```
-llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+cx16 \
-    -stop-after=atomic-expand repro.ll -o /dev/null
+llc -O2 -mtriple=x86_64-unknown-linux-gnu repro.ll
+```
+
+Equivalent without function attributes (but with command-line flags):
+```
+llc -O2 -mtriple=x86_64-unknown-linux-gnu -mattr=+cx16,-avx repro.ll
 ```
 
 IR after atomic-expand for `<2 x i64>` (broken):

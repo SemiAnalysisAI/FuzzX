@@ -1,15 +1,17 @@
-# w326: foldPHIArgBinOpIntoPHI's CmpInst path drops IR flags entirely
+# w326: foldPHIArgBinOpIntoPHI's CmpInst path drops IR flags entirely (two sites)
 
 ## Summary
 
-`InstCombinerImpl::foldPHIArgBinOpIntoPHI` handles two final shapes for the
-fused operation:
+`InstCombinerImpl::foldPHIArgBinOpIntoPHI` (and the sibling fold
+`foldPHIArgOpIntoPHI` for the constant-RHS case) handle two final shapes for
+the fused operation:
 
-- BinaryOperator (lines 524-534): `copyIRFlags(IncomingValue(0))` then
-  `andIRFlags(V)` for the rest. This intersects nsw/nuw/exact/disjoint/nneg/fmf
-  etc across all incoming binops.
-- CmpInst (lines 517-522): plain `CmpInst::Create(opcode, predicate, ...)`.
-  **No `copyIRFlags`/`andIRFlags` call at all.**
+- BinaryOperator (lines 524-534 / 960-969): `copyIRFlags(IncomingValue(0))`
+  then `andIRFlags(V)` for the rest. This intersects nsw/nuw/exact/disjoint/
+  nneg/fmf etc across all incoming binops.
+- CmpInst (lines 517-522 / 971-975): plain
+  `CmpInst::Create(opcode, predicate, ...)`. **No `copyIRFlags`/`andIRFlags`
+  call at all.**
 
 The result: any flag that an ICmp/FCmp can carry -- `samesign` on ICmp, FMF
 (`nnan`/`ninf`/`nsz`/`arcp`/`contract`/`afn`/`reassoc`) on FCmp -- is silently
@@ -25,6 +27,7 @@ worth fixing for parity.
 
 `llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp`:
 
+Site A -- `foldPHIArgBinOpIntoPHI` (non-constant RHS path):
 ```
 517    if (CmpInst *CIOp = dyn_cast<CmpInst>(FirstInst)) {
 518      CmpInst *NewCI = CmpInst::Create(CIOp->getOpcode(), CIOp->getPredicate(),
@@ -43,10 +46,29 @@ worth fixing for parity.
 531      NewBinOp->andIRFlags(V);
 ```
 
+Site B -- `foldPHIArgOpIntoPHI` (constant RHS path):
+```
+960    if (BinaryOperator *BinOp = dyn_cast<BinaryOperator>(FirstInst)) {
+961      BinOp = BinaryOperator::Create(BinOp->getOpcode(), PhiVal, ConstantOp);
+962      BinOp->copyIRFlags(PN.getIncomingValue(0));
+963      for (Value *V : drop_begin(PN.incoming_values()))
+964        BinOp->andIRFlags(V);
+965      PHIArgMergedDebugLoc(BinOp, PN);
+966      return BinOp;
+967    }
+968
+969    ; <-- BinOp branch above does copy/and; CmpInst branch below skips.
+971    CmpInst *CIOp = cast<CmpInst>(FirstInst);
+972    CmpInst *NewCI = CmpInst::Create(CIOp->getOpcode(), CIOp->getPredicate(),
+973                                     PhiVal, ConstantOp);
+974    PHIArgMergedDebugLoc(NewCI, PN);
+975    return NewCI;                            ; <-- no copy/andIRFlags
+```
+
 `andIRFlags` (`llvm/lib/IR/Instruction.cpp:805-807`) correctly handles
 `SrcICmp->hasSameSign()` for ICmps, and `FastMathFlags` for FPMathOperators
 (line 788-794), so the helper is already capable. The PHI fold just never
-invokes it on the CmpInst path.
+invokes it on the CmpInst path in either location.
 
 ## Reproducer
 
@@ -91,8 +113,23 @@ Expected:
   %p = icmp samesign ult i32 %x.pn, %k
 ```
 
-A repro with FMF on FCmp will exhibit the same loss
-(`fcmp fast olt` -> `fcmp olt`).
+### FMF drop on FCmp (constant RHS path, site B):
+```llvm
+define i1 @test(i1 %c, float %x, float %y) {
+entry:
+  br i1 %c, label %bb1, label %bb2
+bb1:
+  %a = fcmp fast olt float %x, 1.0
+  br label %end
+bb2:
+  %b = fcmp fast olt float %y, 1.0
+  br label %end
+end:
+  %p = phi i1 [ %a, %bb1 ], [ %b, %bb2 ]
+  ret i1 %p
+}
+```
+After: `%p = fcmp olt float %p.in, 1.000000e+00`  (missing `fast`)
 
 ## Risk / scope
 
