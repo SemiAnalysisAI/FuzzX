@@ -187,9 +187,13 @@ runtime behaviour — the pass is reasoning past a documented hole.)
 
 ## Fix sketch
 
-In each `InstrBreaks*` helper, bail (return `true`) when the call has
-clobbering / reading / unknown operand bundles whose effects are not subsumed
-by the attribute under test. The minimal version mirrors `addMemoryAttrs`:
+In each `InstrBreaks*` helper, bail (return `true`) when the call has any
+non-trivial operand bundle whose effects are not subsumed by the attribute
+under test. Note `OB_deopt` is *not* safe for these predicates (it transitions
+to an arbitrary continuation that may free/sync/throw/diverge), so the safe
+whitelist is narrower than `hasClobberingOperandBundles` — match
+`hasReadingOperandBundles` (Instructions.cpp:612-621), which already keeps
+`deopt` in the "potentially observed" set:
 
 ```cpp
 if (auto *CB = dyn_cast<CallBase>(&I))
@@ -202,6 +206,4 @@ if (auto *CB = dyn_cast<CallBase>(&I))
 ```
 applied before the SCC short-circuit in `InstrBreaksNoFree`, `InstrBreaksNoSync`,
 `InstrBreaksNonThrowing`, and (analogously) in `functionWillReturn` /
-`Instruction::willReturn`. The whitelist used here matches
-`CallBase::hasReadingOperandBundles` (Instructions.cpp:612-621) — bundles whose
-LLVM-internal semantics are known to have no side-effect on these properties.
+`Instruction::willReturn`.
