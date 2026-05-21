@@ -45,15 +45,26 @@ vector sources, so the bad path is taken for the common
 `llvm/lib/Analysis/ConstantFolding.cpp`:
 
 - `foldConstVectorToAPInt`, line 79-107: per-element loop that wrongly
-  treats poison as zero (line 93-96).
+  treats poison as zero (line 93-96).  This is the path used for
+  vector -> wider-scalar bitcasts.
 - `FoldBitCast`, line 182-220: caller that selects this helper for
   `vector -> integer/FP` bitcasts.  The byte-source poison guard at
   line 197-199 shows that the case is known to need explicit poison
   handling; the integer/FP source path simply lacks it.
+- `FoldBitCast` element-packing loop, line 341-389 (vector -> vector
+  with NumSrcElt != NumDstElt): the same bug exists here.  Lines
+  357-368 track UndefMask/PoisonMask correctly per source element, but
+  line 386-389 emits `ConstantInt::get(DstEltTy, Elt)` whenever the
+  destination lane is not *fully* covered by undef bits, even if it
+  contains some poison source bits.  The right behavior is to emit
+  poison if any source bit feeding that destination lane is poison
+  (i.e., check `PoisonMask` slice for *any* set bit, not just the
+  all-undef case).
 
 `include/llvm/IR/Constants.h:1660`: `class PoisonValue final : public
 UndefValue { ... };` — the reason `isa<UndefValue>(poison)` returns
-true.
+true and why the byte path explicitly handled poison while the
+integer/FP path did not.
 
 ## Reproducer (x86-64, default `-O2` pipeline)
 
@@ -104,6 +115,30 @@ define i32 @bc_v4i8_middle_poison() {
 define i128 @bc_v4float_one_poison() {
   ret i128 1065353216                    ; wrong: should be poison (lane 1 = poison treated as 0)
 }
+```
+
+The vector -> vector packing path (line 341-389 in `FoldBitCast`) has
+the same bug for `<4 x i32> -> <2 x i64>` and similar shapes:
+
+```llvm
+define <2 x i64> @bc_pack_poison_lo() {
+  ret <2 x i64> bitcast (<4 x i32> <i32 poison, i32 7,
+                                    i32 9, i32 11> to <2 x i64>)
+}
+define <2 x i64> @bc_pack_poison_hi() {
+  ret <2 x i64> bitcast (<4 x i32> <i32 5, i32 poison,
+                                    i32 9, i32 11> to <2 x i64>)
+}
+```
+
+```
+$ opt -passes=instcombine -S -
+define <2 x i64> @bc_pack_poison_lo() {
+  ret <2 x i64> <i64 30064771072, i64 47244640265>   ; lane 0 should be poison
+}                                                    ; (got 7<<32 with poison lane treated as 0)
+define <2 x i64> @bc_pack_poison_hi() {
+  ret <2 x i64> <i64 5, i64 47244640265>             ; lane 0 should be poison
+}                                                    ; (got 5 with the high poison i32 treated as 0)
 ```
 
 (`-passes=instsimplify` does not perform this fold; the wrong value
