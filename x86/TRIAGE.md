@@ -1,6 +1,8 @@
 # Triage by Severity (upstream-impact focused)
 
-253 catalog entries. 152 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+246 catalog entries. 145 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+
+(7 S2 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — and three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."*)
 
 ---
 
@@ -29,7 +31,7 @@ End-user observable wrong-value miscompiles. Highest non-crash severity.
 | **233** | ConstantFolding `llvm.fmuladd` folded as FMA, x86 lowers as `mulsd;addsd` | same IR yields `2^-104` (compile-time fold) vs `0.0` (runtime). Real value divergence visible by toggling constness. |
 | **003 / 110** | X86 GISel UADDE / USUBE inverted carry on multi-word add/sub | wrong upper word — only fires with `-global-isel` (NOT default on x86) |
 
-## S2 — Alive2-falsifiable poison/refinement miscompiles (~22) — turns defined value into poison, or over-infers a flag that makes downstream code poison
+## S2 — Alive2-falsifiable poison/refinement miscompiles (~20) — turns defined value into poison, or over-infers a flag that makes downstream code poison
 
 These are the strongest correctness-class non-runtime bugs. Several are already-known patterns getting independent confirmation; others are net-new.
 
@@ -48,22 +50,10 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | **234** | InstSimplify strict-FP `constrained.fadd nnan` fold | drops FE_INVALID exception side-effect (strict-FP semantics violated) |
 | **236** | InstCombineSimplifyDemanded `ashr exact → lshr exact` | for `%x=-1`, source returns 255; target returns poison (anti-refinement) |
 | **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
-| **247** | ConstantFolding `bitcast <i16 0, i16 poison> to i32` | treats poison lane as 0 — downstream `icmp eq , 0` → `true` instead of `poison` |
 | **248** | InstCombine `foldSelectIntoOp` ninf mis-propagation | `select c, fmul ninf(x,y), x` → `fmul (select ninf c, y, 1.0), x`; for x=0,y=+inf,c=true source returns NaN, new select returns +inf → poison |
 | **251** | CVP undef-tainted lattice | `select i1 %cmp, i64 undef, i64 1` taints lattice → CVP adds `range(i64 1,3)` AND `add nuw nsw`; both unsound for undef=INT_MAX (matches upstream #114902) |
 | **252** | JumpThreading `unfoldSelectInstr` branches on poison | original uses `freeze`; after JT, freeze is gone and `br i1 %maybe_poison` → UB |
 | **253** | InstCombine `foldAddLikeCommutative` | `or disjoint (add nsw A,5), (B&250)` → `add nsw A, (or B,5)`; disjoint only proves no unsigned carry, not signed — for a=100,b=130 source returns -21, target → poison |
-
-**Codegen sNaN-quieting losses (Alive2-falsifiable, IEEE-754 mandate):**
-
-| # | Bug |
-|---|-----|
-| **112** | `(float)(double)x` folded to identity without `nnan`; IEEE-754 requires quieting on every convertFormat |
-| **115** | DAG `simplifyFPBinop` `fmul X,1.0`/`fdiv X,1.0` folded to bare `ret` with no `nnan` check |
-| **116** | Same for `fadd X,-0.0`/`fsub X,+0.0` |
-| **117** | `fdiv X,-1.0` → bare `xorps sign-mask` (no `divsd`); in-source FIXME |
-| **123** | InstCombine ConstantFoldFPInstOperands: `nnan`/`ninf` op with NaN/Inf result folds to NaN/Inf constant instead of `poison` per LangRef |
-| **156** | InstCombine `fcmp nnan` with NaN constant folds to `true`/`false` instead of `poison` |
 
 **SeparateConstOffsetFromGEP, mem2reg, LICM (default O2 — UB-injection):**
 
@@ -165,7 +155,7 @@ Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!inv
 - `JumpThreading` only forwards MD_prof (#214, #260–#263, #670)
 - `SDAG memcpy/memmove/memset getMemcpyLoadsAndStores` series (#208–#210, #460–#462, #510)
 
-(Full list: bugs #022, #023, #091, #103, #132, #133, #145, #146, #147, #149, #150, #153, #157, #163, #164, #165, #167, #168, #169, #170, #171, #172, #176, #177, #178, #179, #180, #183, #189, #196–#214, #228–#230, #237, #239, #241–#247, #250, #439, #460–#462, #485, #486, #489, …)
+(Full list: bugs #022, #023, #091, #103, #132, #133, #145, #146, #147, #149, #150, #153, #157, #163, #164, #165, #167, #168, #169, #170, #171, #172, #176, #177, #178, #179, #180, #183, #189, #196–#214, #228–#230, #237, #239, #241–#246, #250, #439, #460–#462, #485, #486, #489, …)
 
 ## S7 — Source-confirmed / latent (~100)
 
@@ -189,11 +179,10 @@ Annotated with upstream-issue status as of 2026-05-21:
 | **206** | `fmod(NaN)` → poison via mis-named `IsNoNan` | No duplicate. **Novel.** | File |
 | **207** | `fdim(±Inf,±Inf)` → qNaN | No duplicate. **Novel.** | File |
 | **236** | ashr exact → lshr exact anti-refinement | No duplicate. **Novel** (in-tree test `ashr_can_be_lshr` bakes in the buggy output and needs updating with the fix) | File |
-| **247** | `bitcast <i16 0, i16 poison>` poison-lane→0 | No duplicate. **Novel.** | File |
 | **251** | CVP undef-tainted lattice | **Duplicate**: open issue [#114902](https://github.com/llvm/llvm-project/issues/114902), still open and unfixed | Comment on existing issue with our `add nuw nsw` additional case |
 | **240** | X86 stack-probe skips one-page alloca | No duplicate. **Novel** (security mitigation defeated under `-fstack-clash-protection`) | File |
 | **253** | InstCombine `foldAddLikeCommutative` over-infers nsw from `or disjoint` | No duplicate. **Novel.** | File |
 
-**Net actionable**: 10 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
+**Net actionable**: 9 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
 
 Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~40 of the ~85 S6 metadata-loss bugs.

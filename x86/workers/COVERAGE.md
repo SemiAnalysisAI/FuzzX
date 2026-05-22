@@ -1308,8 +1308,7 @@ Patterns ruled out / verified safe:
 - PR44019 (strict_fp_to_si8 promote): the missing-INVALID-exception case requires fenv observability, hard to demo as a value miscompile.
 
 Potential bugs filed:
-- candidates/w53-fdiv-neg1-fmul-neg1-snan-passthrough.md — `fdiv X, -1.0` lowers to bare `xorps` sign-bit toggle via the chain visitFDIV→visitFMUL→visitFSUB→FNEG, sharing the documented FIXME at DAGCombiner.cpp:19057. Confirmed runtime: sNaN bit-pattern survives unchanged (only sign flipped). Distinct IR seed from w12-fmul-neg1.
-- candidates/w53-simplifyfp-x-times-one-snan-passthrough.md — `simplifyFPBinop` / `simplifyFMul` / `simplifyFDiv` reduce `X*1.0` and `X/1.0` to `X` unguarded. Confirmed runtime sNaN passthrough; strict-fp counterparts (correctly) do not fold. Spec-permitted but observable strict↔non-strict cliff.
+- (removed) two sNaN-quieting candidates: `fdiv X, -1.0` xorps chain and `simplifyFPBinop` `X*1.0` / `X/1.0` identity folds. Dismissed as pattern: LangRef does not require quieting on these unguarded paths, and the broader "LLVM doesn't quiet sNaN" issue is known and not worth filing in isolation.
 
 Already covered by earlier workers (not re-filed):
 - visitFSUB `(fsub -0.0, X) -> fneg X` FIXME at line 19057 — w12-fsub-negzero-fneg-snan.md
@@ -1351,7 +1350,7 @@ Already covered by earlier workers (not re-filed):
 - Spec-permitted divergences observed (NOT miscompiles):
   - `fmul X, -1.0` / `fsub -0.0, X` / `X*1.0` / `X-0.0` / `X/1.0` / `(float)(double)snan` drop SNaN-quieting at -O3.
     LangRef line 4119-4120 explicitly permits `fmul SNaN, 1.0 -> SNaN`. Already filed:
-    `w12-fsub-negzero-fneg-snan.md`, `w12-fmul-neg1-fsub-snan.md`, `w53-simplifyfp-x-times-one-snan-passthrough.md`, `w54-reassociate-fneg-to-fmul-snan.md`.
+    `w12-fsub-negzero-fneg-snan.md`, `w12-fmul-neg1-fsub-snan.md`, `w54-reassociate-fneg-to-fmul-snan.md`.
   - `inf - inf` returns differently-signed NaN at O0 vs O3 (`ffc00000` vs `7fc00000`). LangRef nondeterministic NaN sign.
   - `(unsigned)(-1.5)` differs between O0 (truncated bits) and O3 (folded to 0 via `foldFPtoI`). LangRef poison for out-of-range fptoui. Already analyzed by w29.
 - Bugs filed: none new (all observed divergences are already-filed or LangRef-permitted).
@@ -1389,10 +1388,8 @@ Already covered by earlier workers (not re-filed):
   - fp_to_si/fp_to_ui of sNaN — defined as poison per LangRef.
   - half<->float<->double round-trips (with f16c) — clean.
 - Potential bugs filed:
-  - candidates/w60-simplifyFPBinop-sNaN-quieting-bypass.md
-    (`X + -0.0 -> X` and `X - +0.0 -> X` in simplifyFPBinop, sibling of w53's FMUL/FDIV arms;
-    confirmed via llc x86_64 `retq`-only output)
-- Note: tried to file `fp_round(fp_extend)` candidate but found bug-112 already exists; removed.
+  - (removed) sNaN-quieting bypass candidate for simplifyFPBinop FADD/FSUB arms. Same dismissal as the w53 FMUL/FDIV siblings — "LLVM doesn't quiet sNaN" is a known limitation, not worth filing.
+- Note: tried to file `fp_round(fp_extend)` candidate but found bug-112 already exists; removed. (bug-112 has since also been removed for the same reason.)
 
 ## worker-58 2026-05-21
 - File: llvm/lib/Target/X86/X86InstCombineIntrinsic.cpp:1-3540 — full read; focused on simplifyX86immShift / simplifyX86varShift (out-of-range and UNDEF handling), simplifyX86pack (PACKSS/PACKUS clamp + shuffle), simplifyX86pmulh (multiply-by-one / by-undef), simplifyX86pmadd (PMADDWD / PMADDUBSW with sadd_sat), simplifyX86FPMaxMin (KnownFPClass forbidden classes), simplifyX86insertps, simplifyX86vpermilvar (PD lshr-1 bit-1 extraction), simplifyX86vpermv / vpermv3 (Size-1 / 2*Size-1 masking), simplifyX86VPERMMask (log2 demanded bits), simplifyX86movmsk, simplifyTernarylogic (full truth table), x86_avx512_mask_{add,sub,mul,div}_{ss,sd}_round CUR_DIRECTION path, x86_avx512_{add,sub,mul,div}_{ps,pd}_512 CUR_DIRECTION path, pclmulqdq demanded-elt path, BMI bextr/bzhi/pext/pdep folds, addcarry m_ZeroInt() carry-in.
@@ -1695,9 +1692,8 @@ Other observations (no candidate filed):
   - `pmulhuw <1, undef, ...>` covered by w04 already.
   - `psra big_shift` correctly clamps to bitwidth-1 per x86 semantics.
 - Potential bugs filed:
-  - candidates/w64-instcombine-constfold-fmf-nnan-ninf-produces-finite-instead-of-poison.md — `ConstantFoldFPInstOperands` (binops fadd/fsub/fmul/fdiv/frem) and `ConstantFoldFP` (sqrt/log/log2/exp/sin/cos/fma/fmuladd/rint/canonicalize/etc.) ignore the `nnan` / `ninf` fast-math flags on the context instruction, so an `nnan`-flagged op whose mathematical result IS NaN folds to a NaN constant (and `ninf` whose result IS Inf folds to Inf) instead of `PoisonValue`. Per LangRef (D47963) the IR contract makes the result `poison`. Confirmed reproducer drift between the two consumers of the same value: `direct() = fdiv nnan 0.0,0.0; fcmp ord %r,0.0` folds to `i1 false` (constant fold first → NaN → ord NaN = false) while `via_sqrt() = call nnan @llvm.sqrt(-1.0); fcmp ord %r,0.0` folds to `i1 true` (nnan-aware simplifier first → r-not-NaN → ord = true) — the same poison value, two contradictory refinements observable from one IR. Concrete reproducers in the candidate cover fdiv, fmul, fadd, fsub, frem, fneg, fma, sqrt, log, fmuladd in scalar and vector forms.
-  - candidates/w64-instcombine-fcmp-fmf-nnan-ninf-with-nan-inf-constant-folds-to-bool-instead-of-poison.md — `simplifyFCmpInst` invokes `ConstantFoldCompareInstOperands` *before* its FMF-aware ord/uno fold runs (lines 4159-4220). The constant-folder ignores `FMF`, so `fcmp nnan oeq NaN, 1.0` collapses to `i1 false`, `fcmp nnan ord NaN, 1.0` to `i1 false`, `fcmp nnan uno NaN, 1.0` to `i1 true`, and `fcmp ninf olt Inf, 1.0` to `i1 false`, even though every case is `poison` per LangRef. Same root cause class as the binop candidate but a separate code path (constant fold of `fcmp` rather than of arithmetic). Twin to the previous candidate; downstream consumers that use `KnownFPClass` + the nnan-aware fold will produce opposite booleans for the same value.
-- New confirmed bugs filed: 2.
+  - (removed) two `nnan`/`ninf` constfold candidates (binop + fcmp) that fold to a NaN/Inf/bool constant when the LangRef contract says the result is `poison`. Dismissed: LangRef explicitly permits replacing a poison value with any concrete value, so folding poison → finite constant is a sound refinement, not a miscompile.
+- New confirmed bugs filed: 0.
 
 ## worker-91 2026-05-21
 - File: llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp (expandLdexp, expandFrexp, ExpandFPLibCall, ConvertNodeToLibcall switch arms for FLDEXP/FPOWI/FFREXP/FMODF, FP_TO_INT_SAT clamp).
@@ -1713,7 +1709,7 @@ Other observations (no candidate filed):
   - DAGCombiner simplifyDivRem X/X -> 1, X%X -> 0: X=0 case is refinement of undef/poison, legal.
   - simplifyShift `shift i1 X, Y -> X`: refinement of poison for Y!=0, legal.
   - TargetLowering INSERT_VECTOR_ELT/INSERT_SUBVECTOR/EXTRACT_VECTOR_ELT simplification cases reviewed without finding new bugs.
-  - ExpandFNEG vector via XOR(SignMask): IEEE-754 permits FNEG to not quiet sNaN (sign-bit op), so not a bug (distinct from #117 fdiv-by-neg1 which had FDIV semantics elided).
+  - ExpandFNEG vector via XOR(SignMask): IEEE-754 permits FNEG to not quiet sNaN (sign-bit op), so not a bug (the related `fdiv X,-1.0 → xorps` pattern that elides FDIV semantics is a known sNaN-quieting loss that we no longer pursue).
 - Potential bugs filed:
   - candidates/w91-strict-ldexp-i64-libcall-silent-truncation.md — STRICT variant of #011: `llvm.experimental.constrained.ldexp.f64.i64` lowers to `ldexp@PLT` with i64 in %rdi (low 32 bits read as int, high silently dropped, no diagnostic); root cause: `expandLdexp` bails on STRICT_FLDEXP (LegalizeDAG.cpp:2572 TODO) and `ConvertNodeToLibcall` for FLDEXP/STRICT_FLDEXP (5031-5035) lacks the FPOWI-style sizeof(int) guard.
   - candidates/w91-frexp-i64-libcall-stack-slot-overrun.md — `llvm.frexp.f64.i64` allocates an i64 stack slot for the exponent output, calls `frexp(double, int*)` which writes only 4 bytes, then loads 8 bytes back; high 32 bits leak the caller's stale `%rax` (via the slot-establishing `pushq %rax`). Root cause: `TargetLowering::expandMultipleResultFPLibCall` (TargetLowering.cpp:13245+) sizes both the temp slot and the read-back load by `Node->getValueType(ResNo)` without an `IntSize` width check.
