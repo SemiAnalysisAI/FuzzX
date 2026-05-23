@@ -72,6 +72,19 @@ Mirror the FPOWI guard: emit an error, or insert a `TRUNCATE` /
 `SIGN_EXTEND` to bring the exponent to the libcall's `sizeof(int)` width
 before the call.
 
+## Disposition
+
+Tried, dropped. The FPOWI-style guard in LegalizeDAG produces false
+positives on RV64: type legalization promotes a user-written i32
+exponent to i64 (since i32 isn't a legal SDAG type on RV64), so by the
+time `ConvertNodeToLibcall` runs there's no way to tell a real i64 IR
+exponent apart from a legalized-from-i32 one. A correct fix has to run
+in `SelectionDAGBuilder` on the IR-level type, which is more invasive
+than the bug warrants — the silent truncation matches C `ldexp`'s
+`int` parameter, no in-tree producer of LLVM IR (clang, MLIR, …)
+emits `llvm.ldexp.<fty>.i64`, and PR
+https://github.com/llvm/llvm-project/pull/199177 was closed.
+
 ## Files
 - `repro.ll`  — i64-exponent ldexp
 - `runner.c`  — drives with `(int64_t)0x80000004`

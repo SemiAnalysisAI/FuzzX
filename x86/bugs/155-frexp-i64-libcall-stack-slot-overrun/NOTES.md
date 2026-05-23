@@ -128,3 +128,11 @@ for (auto [ResNo, ST] : llvm::enumerate(ResultStores)) {
 Alternatively, route i64 exponents through `expandFrexp` (the local
 SDAG-builder expansion) rather than the libcall whenever the int-width
 predicate fails.
+
+## Disposition
+
+Tried, dropped. Same RV64 type-legalization false-positive as #011
+(which see). A correct fix has to inspect the IR-level type in
+`SelectionDAGBuilder`, which is more invasive than the bug warrants:
+no in-tree producer of LLVM IR emits `llvm.frexp.<fty>.{i16,i64}`,
+and the silent truncation / info-leak only fires on hand-crafted IR.

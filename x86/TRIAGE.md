@@ -1,8 +1,8 @@
 # Triage by Severity (upstream-impact focused)
 
-246 catalog entries. 145 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+237 catalog entries. 136 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
 
-(7 S2 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — and three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."*)
+(15 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."* — one metadata-loss missed-opt (166: mem2reg `!noundef` lost across PHI, but the "fix" requires adding an `assume(noundef)` which is itself an optimization-blocker) — two LICM `promoteLoopAccessesToScalars` reports (185, 186) that don't survive analysis under LLVM's static-deref / capture-analysis semantics — four `freeze`-CSE reports (136, 187, 188, 194) which on closer reading of LangRef are a valid refinement: source admits both equal- and different-value executions, so a CSE that picks the equal-value execution is a strict narrowing of source nondeterminism (matches the design intent of D75334 / `cc28a754679a`, *"Let EarlyCSE fold equivalent freeze instructions"*) — and one DAGCombiner vector-splat-1 report (061) whose theoretical "SRL-by-bitwidth → UNDEF" path is unreachable in practice: `SimplifyVBinOp` scalarizes the splat ahead of the broken `isOneConstant` early-out, so the asm is already correct on upstream and the patch is a strict no-op.)
 
 ---
 
@@ -17,7 +17,7 @@ Compiler ICE / verifier abort on legal IR. These prevent compilation entirely. *
 | **222** | ExpandIRInsts ICE on `<2 x i256> @llvm.fpto{u,s}i.sat` | source-level vector convert with element > 128b | small — add IntrinsicInst case to `scalarize` |
 | **227** | AtomicExpandPass crash on `load atomic <2 x i64>` (+cx16) | `_Atomic __int128` vector load in Clang | small — bitcast non-int/non-ptr before cmpxchg, mirror `createCmpXchgInstFun` |
 
-## S1 — Runtime miscompiles (7) — produces wrong runtime value
+## S1 — Runtime miscompiles (6) — produces wrong runtime value
 
 End-user observable wrong-value miscompiles. Highest non-crash severity.
 
@@ -28,7 +28,6 @@ End-user observable wrong-value miscompiles. Highest non-crash severity.
 | **011** | LegalizeDAG ldexp.f64.i64 libcall | i64 exponent silently truncated to int → returns wrong magnitude |
 | **013** | InstCombine `vector_reduce_mul(sext <n x i1>)` | for odd n with all-true input, returns +1 instead of -1 |
 | **155** | frexp.f64.i64 libcall stack-slot overrun | reads 8 bytes from a 4-byte write → uninitialized upper bytes (also info leak) |
-| **233** | ConstantFolding `llvm.fmuladd` folded as FMA, x86 lowers as `mulsd;addsd` | same IR yields `2^-104` (compile-time fold) vs `0.0` (runtime). Real value divergence visible by toggling constness. |
 | **003 / 110** | X86 GISel UADDE / USUBE inverted carry on multi-word add/sub | wrong upper word — only fires with `-global-isel` (NOT default on x86) |
 
 ## S2 — Alive2-falsifiable poison/refinement miscompiles (~20) — turns defined value into poison, or over-infers a flag that makes downstream code poison
@@ -39,10 +38,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 
 | # | Bug | Fold |
 |---|-----|------|
-| **136** | NewGVN distinct `freeze` CSE | two `freeze X` from distinct sites — LangRef says each picks its own value |
-| **187** | Standard GVN distinct `freeze` CSE | sibling of #136 |
-| **188** | EarlyCSE distinct `freeze` CSE | sibling of #136 |
-| **194** | InstCombine distinct `freeze` CSE | sibling of #136 — fires WITHOUT GVN/EarlyCSE/NewGVN |
 | **195** | InstCombine `ldexp(ldexp(x, INT_MAX), INT_MAX)` | folds to `fmul x, 0.25` (i32 sum wraps to -2 inverting overflow → underflow); should be `+inf` |
 | **206** | SimplifyLibCalls `fmod(NaN, 1.0)` | folded to `frem nnan NaN, 1.0` → poison (mis-named `IsNoNan` actually means no-errno) |
 | **207** | SimplifyLibCalls `fdim(±Inf, ±Inf)` | folds to qNaN instead of `+0` per C99 |
@@ -50,7 +45,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | **234** | InstSimplify strict-FP `constrained.fadd nnan` fold | drops FE_INVALID exception side-effect (strict-FP semantics violated) |
 | **236** | InstCombineSimplifyDemanded `ashr exact → lshr exact` | for `%x=-1`, source returns 255; target returns poison (anti-refinement) |
 | **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
-| **248** | InstCombine `foldSelectIntoOp` ninf mis-propagation | `select c, fmul ninf(x,y), x` → `fmul (select ninf c, y, 1.0), x`; for x=0,y=+inf,c=true source returns NaN, new select returns +inf → poison |
 | **251** | CVP undef-tainted lattice | `select i1 %cmp, i64 undef, i64 1` taints lattice → CVP adds `range(i64 1,3)` AND `add nuw nsw`; both unsound for undef=INT_MAX (matches upstream #114902) |
 | **252** | JumpThreading `unfoldSelectInstr` branches on poison | original uses `freeze`; after JT, freeze is gone and `br i1 %maybe_poison` → UB |
 | **253** | InstCombine `foldAddLikeCommutative` | `or disjoint (add nsw A,5), (B&250)` → `add nsw A, (or B,5)`; disjoint only proves no unsigned carry, not signed — for a=100,b=130 source returns -21, target → poison |
@@ -60,10 +54,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | # | Bug |
 |---|-----|
 | **181** | SeparateConstOffsetFromGEP `swapGEPOperand` unconditionally `setIsInBounds(true)` — can mark temporarily-OOB GEP as inbounds → guaranteed poison (NOT in default x86 -O3 but in many other pipelines) |
-| **166** | mem2reg `!noundef` with PHI undef edge silently lost — immediate-UB contract gone |
-| **185** | LICM `promoteLoopAccessesToScalars` hoists a conditional load to unconditional preheader load — UB-injection if pointer was only deref'd after a guarding store |
-| **186** | LICM sinks N conditional stores into single exit-store via "thread-local" gate — signal-handler / setjmp observability lost |
-| **061** | DAGCombiner `visitMULHU` vector splat-1: `mulhu x, splat(1)` falls through to `srl x, BW` (UB shift-by-bitwidth) |
 
 ## S3 — Memory-model / atomic / volatile semantic breakage (~45)
 
