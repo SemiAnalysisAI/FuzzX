@@ -7,7 +7,7 @@ asked Claude to find bugs in LLVM, and gave it a little guidance along the way.
 
 I wouldn't consider all of these to be serious bugs, and some I'd say aren't
 bugs at all.  Others appear to be real miscompiles, such as
-[#253](bugs/253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred/NOTES.md).
+[#195](bugs/195-instcombine-ldexp-chain-integer-overflow/NOTES.md).
 
 Everything below here is machine-generated.  Good luck.
 
@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 136 reproducible bugs (well past the 100 goal). 237 total catalog entries (~100 are source-confirmed only). 513 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 135 reproducible bugs (well past the 100 goal). 235 total catalog entries (~100 are source-confirmed only). 510 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
@@ -23,9 +23,9 @@ Breakdown by repro kind:
 - runtime miscompile (4): #002, #003 (GISel-only), #004, #013
 - asm/asm-diff (14): #001, #005, #006, #008, #009, #010, #011, #012, #014, #044, #140, #240, #357, …
 - mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~106): all others
+- opt-diff (~105): all others
 
-Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252/#253), and PGO corruptions (#215, #216, #232).
+Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252), and PGO corruptions (#215, #216, #232).
 
 
 ## Tools
@@ -280,9 +280,8 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 246 | [246-constantfolding-ldexp-i64-exponent-narrowed-to-int](bugs/246-constantfolding-ldexp-i64-exponent-narrowed-to-int/) | ConstantFolding.cpp:3715 ldexp i64 | `ldexp(1.0, i64 4294967330)` folded to `2^34` (i64→int narrowing wraps); expected `+inf` per LangRef | confirmed (opt diff) |
 | 249 | [249-function-attrs-ignores-operand-bundles](bugs/249-function-attrs-ignores-operand-bundles/) | FunctionAttrs.cpp:1903-1948 InstrBreaksNoFree/NoSync/NonThrowing | predicates use `CallBase::hasFnAttr` which ignores operand bundles; caller with `[ "side_effects"() ]` on leaf still infers `nofree nosync nounwind willreturn` | confirmed (opt diff) |
 | 250 | [250-simplifycfg-mergeConditionalStoreToAddress-drops-pstore-metadata](bugs/250-simplifycfg-mergeConditionalStoreToAddress-drops-pstore-metadata/) | SimplifyCFG.cpp:4409 mergeConditionalStoreToAddress | asymmetric combineMetadata + `SI->copyMetadata(*QStore)` drops PStore-only `!nontemporal`/`!tbaa`/...; `!invariant.group` special-case can taint merged store | confirmed (opt diff) |
-| 251 | [251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw](bugs/251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw/) | CVP runImpl + processBinOp via ValueLattice.h:247 | `select i1 %cmp, i64 undef, i64 1` taints lattice; CVP adds `range(i64 1,3)` return attr AND `add nuw nsw`; both unsound for `undef = INT_MAX`. Matches upstream #114902 | confirmed (opt diff) |
+| 251 | [251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw](bugs/251-cvp-runImpl-RetRange-undef-tainted-add-nuw-nsw/) | CVP runImpl + processBinOp via ValueLattice.h:247 | `select i1 %cmp, i64 undef, i64 1` taints lattice; CVP adds `range(i64 1,3)` return attr AND `add nuw nsw`; both unsound for `undef = INT_MAX`. Matches upstream #114902.  *jlebar: Decided WONTFIX, that upstream bug is complicated.* | confirmed (opt diff) |
 | 252 | [252-jumpthreading-unfoldSelectInstr-branches-on-poison](bugs/252-jumpthreading-unfoldSelectInstr-branches-on-poison/) | JumpThreading.cpp:2792 unfoldSelectInstr | original safely freezes potentially-poison condition before branching; after JT, the freeze is gone and `br i1 %maybe_poison` is direct UB | confirmed (opt diff) |
-| 253 | [253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred](bugs/253-instcombine-foldAddLikeCommutative-or-disjoint-add-nsw-overinferred/) | InstCombineAddSub.cpp:1355 foldAddLikeCommutative | `or disjoint (add nsw A, 5), (B & 250)` → `add nsw A, (or B, 5)` but `disjoint` only proves no unsigned carry, not signed; for a=100,b=130 source returns -21, target → poison | confirmed (opt diff) |
 
 ## Coverage notes
 

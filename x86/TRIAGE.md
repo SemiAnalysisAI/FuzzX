@@ -47,7 +47,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
 | **251** | CVP undef-tainted lattice | `select i1 %cmp, i64 undef, i64 1` taints lattice → CVP adds `range(i64 1,3)` AND `add nuw nsw`; both unsound for undef=INT_MAX (matches upstream #114902) |
 | **252** | JumpThreading `unfoldSelectInstr` branches on poison | original uses `freeze`; after JT, freeze is gone and `br i1 %maybe_poison` → UB |
-| **253** | InstCombine `foldAddLikeCommutative` | `or disjoint (add nsw A,5), (B&250)` → `add nsw A, (or B,5)`; disjoint only proves no unsigned carry, not signed — for a=100,b=130 source returns -21, target → poison |
 
 **SeparateConstOffsetFromGEP, mem2reg, LICM (default O2 — UB-injection):**
 
@@ -171,8 +170,7 @@ Annotated with upstream-issue status as of 2026-05-21:
 | **236** | ashr exact → lshr exact anti-refinement | No duplicate. **Novel** (in-tree test `ashr_can_be_lshr` bakes in the buggy output and needs updating with the fix) | File |
 | **251** | CVP undef-tainted lattice | **Duplicate**: open issue [#114902](https://github.com/llvm/llvm-project/issues/114902), still open and unfixed | Comment on existing issue with our `add nuw nsw` additional case |
 | **240** | X86 stack-probe skips one-page alloca | No duplicate. **Novel** (security mitigation defeated under `-fstack-clash-protection`) | File |
-| **253** | InstCombine `foldAddLikeCommutative` over-infers nsw from `or disjoint` | No duplicate. **Novel.** | File |
 
-**Net actionable**: 9 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
+**Net actionable**: 8 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
 
 Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~40 of the ~85 S6 metadata-loss bugs.
