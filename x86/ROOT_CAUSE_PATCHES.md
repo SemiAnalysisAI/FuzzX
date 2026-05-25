@@ -190,7 +190,6 @@ Affected sites and the bug each closes:
 | #209 | `getMemmoveLoadsAndStores` ~9520-9521 | both |
 | #210 | `getMemsetStores` ~9747-9751 | `getStore` |
 | #224 | SDAGBuilder `visitAtomicRMW`/`visitAtomicCmpXchg` 5213/5285 | `getMachineMemOperand` — use `I.getAlign()` not `getEVTAlign(MemVT)`, and `I.getAAMetadata()` |
-| #220 | `SelectionDAG::getLoad`/`getStore` MMOFlags-only overload | callers all over the place — better long-term fix is to **delete** the lossy overloads and force every caller to pass flags+AAInfo explicitly |
 
 ### D2. Mem-intrinsic NT propagation (the SDAG side of the `!nontemporal` story)
 
@@ -280,7 +279,7 @@ Same shape applies to `duplicateCondBranchOnPHIIntoPred` (`!prof` no scaling —
 | A — combineMetadata (Local.cpp) | #219, #229, #230, #287, #288, #447 + FIXME line 3063 | ~30 lines |
 | B — MachineInstr::isIdenticalTo MMO (MachineInstr.cpp + 4 callers) | #141, #237, #239, #357, w340 | ~50 lines (incl. callers) |
 | C — MachineMemOperand::operator== (MachineMemOperand.h) | #226, #238, #355, #356 | 3 lines |
-| D — DAGCombiner 4-arg overloads (DAGCombiner.cpp, SelectionDAG.cpp) | #196–#199, #208–#210, #224, #220 (8+) | ~120 lines across 8 sites |
+| D — DAGCombiner 4-arg overloads (DAGCombiner.cpp, SelectionDAG.cpp) | #196–#199, #208–#210, #224 (8) | ~120 lines across 8 sites |
 | E — ScalarizeMaskedMemIntrin (ScalarizeMaskedMemIntrin.cpp) | #180, #202, #203, #204, #205 | 7 lines (one per site) |
 | F — dropUBImplyingAttrsAndMetadata (Instruction.cpp) | #091, #183, #420, #421, #496, #498 | ~10 lines |
 | G — JumpThreading unpredictable/annotation forwarding | #214, #260, #261, #263, #672 | ~6 lines |

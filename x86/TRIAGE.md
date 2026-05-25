@@ -1,8 +1,10 @@
 # Triage by Severity (upstream-impact focused)
 
-237 catalog entries. 136 reproducible at default x86 -O2. ~100 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+232 catalog entries. 132 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
 
 (15 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."* — one metadata-loss missed-opt (166: mem2reg `!noundef` lost across PHI, but the "fix" requires adding an `assume(noundef)` which is itself an optimization-blocker) — two LICM `promoteLoopAccessesToScalars` reports (185, 186) that don't survive analysis under LLVM's static-deref / capture-analysis semantics — four `freeze`-CSE reports (136, 187, 188, 194) which on closer reading of LangRef are a valid refinement: source admits both equal- and different-value executions, so a CSE that picks the equal-value execution is a strict narrowing of source nondeterminism (matches the design intent of D75334 / `cc28a754679a`, *"Let EarlyCSE fold equivalent freeze instructions"*) — and one DAGCombiner vector-splat-1 report (061) whose theoretical "SRL-by-bitwidth → UNDEF" path is unreachable in practice: `SimplifyVBinOp` scalarizes the splat ahead of the broken `isOneConstant` early-out, so the asm is already correct on upstream and the patch is a strict no-op.)
+
+(Five further entries dropped after Opus-4.7 audit: #002 (DAGCombiner `visitFMinMax` returns sNaN unchanged for `minimumnum(sNaN, qNaN)`) — LangRef's `floatnan` rules explicitly permit "Unchanged NaN propagation", so returning an input sNaN as-is when both inputs are NaN is allowed; the fold matches the spec. #044 (X86TileConfig `ConstPos` drift) — re-reading the loop shows the palette MI itself is never moved (only `ConstMI` is reassigned to later-inserted MOVs), so `ConstPos` stays accurate; no wrong-codegen reproduction was achievable. #215 / #216 (LowerExpectIntrinsic `handleBrSelExpect` / `handleSwitchExpect` overwriting PGO `!prof`) — intentional MisExpect design (`bac6cd5bf856`): `__builtin_expect` is supposed to override frontend PGO, with `checkFrontendInstrumentation` emitting a `-pgo-warn-misexpect` diagnostic on conflict (see `MisExpect.cpp:15-27`, test `Transforms/PGOProfile/misexpect-branch.ll`). #220 (`patchReplacementInstruction` drops nsw/nuw from kept dominator) — the global drop is required for correctness: `add nsw x,y` is poison on overflow but `extractvalue (sadd.with.overflow x,y), 0` is defined on overflow; RAUW-ing extractvalue users with a still-nsw add gives them poison where source had a defined wrapped value. PR #82935 added the drop to fix miscompile #82884; `Transforms/GVN/pr82884.ll` asserts it.)
 
 ---
 
@@ -23,7 +25,6 @@ End-user observable wrong-value miscompiles. Highest non-crash severity.
 
 | # | Bug | What goes wrong |
 |---|-----|-----------------|
-| **002** | DAGCombiner `visitFMinMax`: `llvm.minimumnum(sNaN, qNaN)` | returns raw sNaN instead of quieted qNaN |
 | **004** | X86 LowerFLDEXP AVX-512F: `<4 x float> @llvm.ldexp` | missing `vcvtdq2ps` → returns x × 1.0 instead of x × 2^exp |
 | **011** | LegalizeDAG ldexp.f64.i64 libcall | i64 exponent silently truncated to int → returns wrong magnitude |
 | **013** | InstCombine `vector_reduce_mul(sext <n x i1>)` | for odd n with all-true input, returns +1 instead of -1 |
@@ -41,7 +42,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | **195** | InstCombine `ldexp(ldexp(x, INT_MAX), INT_MAX)` | folds to `fmul x, 0.25` (i32 sum wraps to -2 inverting overflow → underflow); should be `+inf` |
 | **206** | SimplifyLibCalls `fmod(NaN, 1.0)` | folded to `frem nnan NaN, 1.0` → poison (mis-named `IsNoNan` actually means no-errno) |
 | **207** | SimplifyLibCalls `fdim(±Inf, ±Inf)` | folds to qNaN instead of `+0` per C99 |
-| **220** | GVN `patchReplacementInstruction` | global `dropPoisonGeneratingFlags()` strips `nsw`/`nuw` from kept dominator — affects pre-existing shared users, not just CSE site |
 | **234** | InstSimplify strict-FP `constrained.fadd nnan` fold | drops FE_INVALID exception side-effect (strict-FP semantics violated) |
 | **236** | InstCombineSimplifyDemanded `ashr exact → lshr exact` | for `%x=-1`, source returns 255; target returns poison (anti-refinement) |
 | **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
@@ -100,8 +100,6 @@ Silently wrong branch weights — affects code layout, inlining, MachineBlockPla
 | # | Bug |
 |---|-----|
 | **139** | CGP `splitBranchCondition` passes original weights instead of scaled-down weights |
-| **215** | LowerExpect `handleBrSelExpect` overwrites pre-existing PGO `!prof {5000,100}` with `{"expected",1,2000}` |
-| **216** | LowerExpect `handleSwitchExpect` overwrites per-case PGO weights with `{1,2000,1,...}` |
 | **232** | SimpleLoopUnswitch + `SwitchInstProfUpdateWrapper::getSuccessorWeight` zeroes default-case weight when `"expected"` tag present |
 | **099** | ImplicitNullChecks `insertFaultingInstr` drops MI flags (FrameSetup/FrameDestroy/TailCall) — affects CFI |
 | **018** | CALL_RVMARKER hard-codes SysV preserved mask on Windows — wrong ABI clobber set |
@@ -117,7 +115,6 @@ Wrong assembly emitted at the codegen level — observable when reading the asm 
 - **009** CET-IBT missing endbr on WinEH funclet entry
 - **012** CGP `splitMergedValStore` strips atomic on i64 split
 - **014** RESET_FPENV MMO mis-tagged as MOStore on load
-- **044** TileConfig `ConstPos` position drift
 - **140** CGP `splitMergedValStore` drops NT/tbaa/alias.scope/noalias
 - **151** strict-FP ldexp libcall silent truncation (sibling of #011)
 - **197** DAGCombiner `mergeTruncStores` drops MONonTemporal → no MOVNTI
@@ -135,7 +132,7 @@ Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!inv
 - `Local.cpp dropUBImplyingAttrsAndMetadata` keep-list (#420, #421) — too narrow; affects SimplifyCFG `speculativelyExecuteBB` and `foldTwoEntryPHINode`
 - `MachineInstr::isIdenticalTo` ignores MMOs (#141, #237, #239, #357, #358) — affects MachineCSE, BranchFolder, MachineLateInstrsCleanup
 - `MachineMemOperand::operator==` omits SuccessOrdering/FailureOrdering/SyncScopeID (#226, #238, #355, #356)
-- `DAGCombiner` 4-arg `getLoad`/`getStore` overloads default AAInfo to empty (#196–#199, #221, #220, #224)
+- `DAGCombiner` 4-arg `getLoad`/`getStore` overloads default AAInfo to empty (#196–#199, #221, #224)
 - `ScalarizeMaskedMemIntrin` const+dyn-mask paths miss `Load/Store->copyMetadata(*CI)` (#180, #202–#205)
 - `SROA` hand-rolled metadata copy lists (#118, #137, #138, #158, #159, #245, #290–#293)
 - `LICM promoteLoopAccessesToScalars` per-access metadata copy (#126, #144, #160, #161, #297, #298)

@@ -15,17 +15,17 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 135 reproducible bugs (well past the 100 goal). 235 total catalog entries (~100 are source-confirmed only). 510 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 131 reproducible bugs (well past the 100 goal). 230 total catalog entries (~99 are source-confirmed only). 510 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
 - hang (1): #191
-- runtime miscompile (4): #002, #003 (GISel-only), #004, #013
-- asm/asm-diff (14): #001, #005, #006, #008, #009, #010, #011, #012, #014, #044, #140, #240, #357, …
+- runtime miscompile (3): #003 (GISel-only), #004, #013
+- asm/asm-diff (13): #001, #005, #006, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~105): all others
+- opt-diff (~102): all others
 
-Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252), and PGO corruptions (#215, #216, #232).
+Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252), and PGO corruptions (#232).
 
 
 ## Tools
@@ -48,7 +48,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | #   | Folder | Component | Kind | Status |
 |-----|--------|-----------|------|--------|
 | 001 | [001-volatile-atomicrmw-or-zero-drops-volatile](bugs/001-volatile-atomicrmw-or-zero-drops-volatile/) | X86ISelLowering / AtomicExpandPass | volatile bit dropped from `atomicrmw or %p, 0` (idempotent RMW lowered as plain load) | confirmed (asm) |
-| 002 | [002-minimumnum-snan-not-quieted](bugs/002-minimumnum-snan-not-quieted/) | DAGCombiner visitFMinMax | `llvm.minimumnum(sNaN, qNaN)` returns raw sNaN instead of quieting | confirmed (runtime) |
 | 003 | [003-gisel-uadde-inverted-carry](bugs/003-gisel-uadde-inverted-carry/) | X86 GISel selectUAddSub | `CMP r,1` for carry-in inverts CF; multi-word add/sub produce wrong upper word | repro (runtime, GISel-only — `-global-isel` not default for x86) |
 | 004 | [004-ldexp-avx512f-missing-cvtdq2ps](bugs/004-ldexp-avx512f-missing-cvtdq2ps/) | X86ISelLowering LowerFLDEXP | non-VLX AVX-512 path feeds int exp bits to `vscalefps` (missing `vcvtdq2ps`); `<4 x float>` `ldexp` returns x*1 | confirmed (runtime) |
 | 005 | [005-fixupinsttuning-pslli-loses-changed](bugs/005-fixupinsttuning-pslli-loses-changed/) | X86FixupInstTuning | `ProcessShiftLeftToAdd` mutates MI (`PSLLWri`→`PADDWrr`) but returns false; pass lies about preservation | confirmed (mir diff) |
@@ -90,7 +89,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 041 | [041-sfb-blocker-no-volatile-check](bugs/041-sfb-blocker-no-volatile-check/) | X86AvoidStoreForwardingBlocks | companion to #015: blocking-store check also ignores volatile/atomic flags | source-confirmed |
 | 042 | [042-sfb-buildcopies-wrong-mmo-offset](bugs/042-sfb-buildcopies-wrong-mmo-offset/) | X86AvoidStoreForwardingBlocks buildCopies | passes `LMMOffset` twice instead of `(LMMOffset, SMMOffset)`; harmless today but fragile | source-confirmed |
 | 043 | [043-compress-evex-vpmov-srcvec-clobber-kmov](bugs/043-compress-evex-vpmov-srcvec-clobber-kmov/) | X86CompressEVEX VPMOV pattern | kill-flag staleness when KMOV operand is overwritten in place | source-confirmed |
-| 044 | [044-tileconfig-constmi-position-drift](bugs/044-tileconfig-constmi-position-drift/) | X86TileConfig | `ConstPos` numeric index goes stale as `ConstMI` is overwritten by each immediate-shape store; later defs mis-positioned | source-confirmed |
 | 045 | [045-winehstate-cleanup-skip-loses-hoist](bugs/045-winehstate-cleanup-skip-loses-hoist/) | X86WinEHState | state-store-emit loop skips entire cleanup-pad BBs; spurious -1 store emitted in non-cleanup successors | source-confirmed |
 | 046 | [046-cfopt-inline-asm-classify-side-effects](bugs/046-cfopt-inline-asm-classify-side-effects/) | X86CallFrameOptimization classifyInstruction | INLINEASM that has side-effects but no `mayStore` is mis-classified; PUSH conversion reorders around it | source-confirmed |
 | 047 | [047-x87-insertwait-too-eager-skip](bugs/047-x87-insertwait-too-eager-skip/) | X86InsertX87Wait | WAIT omission heuristic doesn't enumerate all non-waiting FN* ops; sensitive to debug-instruction adjacency | source-confirmed |
@@ -247,12 +245,9 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 212 | [212-instcombine-unpack-struct-store-drops-nontemporal](bugs/212-instcombine-unpack-struct-store-drops-nontemporal/) | InstCombine unpackStoreToAggregate | mirror of #211 for stores | confirmed (opt diff) |
 | 213 | [213-legalize-expandintres-load-drops-range](bugs/213-legalize-expandintres-load-drops-range/) | LegalizeIntegerTypes ExpandIntRes_LOAD | i128 load split into two i64 loads drops `!range` on both MMOs | confirmed (mir diff) |
 | 214 | [214-jumpthreading-unfoldselect-drops-unpredictable](bugs/214-jumpthreading-unfoldselect-drops-unpredictable/) | JumpThreading unfoldSelectInstr / tryToUnfoldSelectInCurrBB | `select !unpredictable` → `br` drops `!unpredictable` (pass never references `MD_unpredictable`) | confirmed (opt diff) |
-| 215 | [215-lower-expect-handleBrSel-clobbers-prof](bugs/215-lower-expect-handleBrSel-clobbers-prof/) | LowerExpectIntrinsic handleBrSelExpect | unconditionally overwrites pre-existing PGO `!prof` `{5000,100}` with `{"expected",1,2000}`; direction also flipped | confirmed (opt diff) |
-| 216 | [216-lower-expect-handleSwitch-clobbers-prof](bugs/216-lower-expect-handleSwitch-clobbers-prof/) | LowerExpectIntrinsic handleSwitchExpect | per-case PGO weights `{10,500,400}` overwritten with `{"expected",1,2000,1}`; SwitchLowering decisions corrupted | confirmed (opt diff) |
 | 217 | [217-lowerinvoke-drops-invoke-metadata](bugs/217-lowerinvoke-drops-invoke-metadata/) | LowerInvoke invoke→call rewrite | new `CallInst` lacks `copyMetadata`; drops `!prof`/`!annotation`/`!range`/`!callees`/`!nosanitize`/`!noalias`/`!alias.scope` | repro (opt diff, non-default pipeline) |
 | 218 | [218-verifier-vp-profile-null-deref-crash](bugs/218-verifier-vp-profile-null-deref-crash/) | IR Verifier visitProfMetadata VP path | malformed `!prof !{"VP", i32 0, i64 100, !"oops", i64 50}` triggers null-deref crash in verifier (`getZExtValue()` on null dyn_extract) | confirmed (crash) |
 | 219 | [219-combinemetadata-drops-j-only-tbaa](bugs/219-combinemetadata-drops-j-only-tbaa/) | Utils/Local.cpp combineMetadata | iterates only K's metadata via `getAllMetadataOtherThanDebugLoc`; any kind J-only (e.g., `!tbaa`) silently dropped during EarlyCSE/GVN/SimplifyCFG | confirmed (opt diff) |
-| 220 | [220-gvn-patchReplacementInstruction-clobbers-shared-nsw](bugs/220-gvn-patchReplacementInstruction-clobbers-shared-nsw/) | Utils/Local.cpp patchReplacementInstruction | global `dropPoisonGeneratingFlags()` on kept dominator clobbers `nsw`/`nuw` for pre-existing shared users (not just the CSE site) | confirmed (opt diff) |
 | 221 | [221-instcombine-mergeStoreIntoSuccessor-drops-nontemporal](bugs/221-instcombine-mergeStoreIntoSuccessor-drops-nontemporal/) | InstCombine mergeStoreIntoSuccessor | two `!nontemporal` stores in successor blocks merged into single store; new store gets no metadata (only dbg/DIAssignID/AAMetadata transferred) | confirmed (opt diff) |
 | 222 | [222-expand-ir-insts-scalarize-ice-on-fpto_sat-vector](bugs/222-expand-ir-insts-scalarize-ice-on-fpto_sat-vector/) | ExpandIRInsts.cpp scalarize | ICE on `<2 x i256> @llvm.fptoui.sat.v2i256.v2f32`; dispatcher enqueues IntrinsicInst but scalarize only handles BinaryOperator/CastInst | confirmed (crash) |
 | 223 | [223-expand-ir-insts-fpto-sat-inf-not-saturated](bugs/223-expand-ir-insts-fpto-sat-inf-not-saturated/) | ExpandIRInsts.cpp expandFPToI saturating arm | `fptoui.sat.i256.f32(+Inf)` produces ~2^128 instead of UINT256_MAX; threshold `BitWidth-IsSigned` ≥ FP exponent max never holds for wide ints | confirmed (asm diff) |
