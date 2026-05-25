@@ -362,7 +362,7 @@ which the prompt says are NOT bugs):
 - File: llvm/lib/Target/X86/X86WinEHState.cpp:1-868 — full read; focused on addStateStores RPOT loop, getPredState/getSuccState join-point logic, cleanup-pad skip at line 779, isStateStoreNeeded, rewriteSetJmpCall InCleanup path.
 - File: llvm/lib/Target/X86/X86WinEHUnwindV2.cpp:1-449 — full read; epilog/prolog state machine matched expectations, POP-reverse-order check is tight, SetFrameBack handling is correct.
 - File: llvm/lib/Target/X86/X86PreTileConfig.cpp:1-469 — full read; isDestructiveCall semantics match comments (any AMX clobber triggers), CfgLiveInBBs propagation looks OK, hoistShapesInBB has mayLoadOrStore guard.
-- File: llvm/lib/Target/X86/X86TileConfig.cpp:1-234 — full read; spotted stale ConstPos / re-assigned ConstMI issue, multi-def shape store assert weakness.
+- File: llvm/lib/Target/X86/X86TileConfig.cpp:1-234 — full read; no correctness bug retained.
 - File: llvm/lib/Target/X86/X86FastTileConfig.cpp:1-213 — full read; per-BB ShapeInfos collection misses cross-BB tile defs whose value reaches a PLDTILECFGV in a successor.
 - File: llvm/lib/Target/X86/X86LowerAMXType.cpp:1-50, 200-470, 540-740 — skimmed combine/PHI-volatile logic; nothing obviously wrong.
 - Patterns ruled out:
@@ -371,7 +371,6 @@ which the prompt says are NOT bugs):
   - X86TileConfig SS lookup uses the FIRST PLDTILECFGV but every PreTileConfig insertion uses the same stack slot, so this is safe.
 - Potential bugs filed:
   - candidates/w20-fasttileconfig-cross-bb-shape.md — FastTileConfig misses tile shapes whose defs are in a different BB than the PLDTILECFGV
-  - candidates/w20-tileconfig-constmi-position-drift.md — TileConfig uses stale ConstPos numeric index after ConstMI is overwritten
   - candidates/w20-winehstate-cleanup-skip-loses-hoist.md — cleanup-pad BB skip in addStateStores can leave successor blocks with stale PrevState (-1)
 
 ## worker-19 2026-05-21
