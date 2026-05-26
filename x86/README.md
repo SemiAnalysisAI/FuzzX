@@ -15,13 +15,13 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 131 reproducible bugs (well past the 100 goal). 230 total catalog entries (~99 are source-confirmed only). 510 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 130 reproducible bugs (well past the 100 goal). 229 total catalog entries (~99 are source-confirmed only). 509 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
 - hang (1): #191
 - runtime miscompile (3): #003 (GISel-only), #004, #013
-- asm/asm-diff (13): #001, #005, #006, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
+- asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
 - opt-diff (~102): all others
 
@@ -52,9 +52,9 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 004 | [004-ldexp-avx512f-missing-cvtdq2ps](bugs/004-ldexp-avx512f-missing-cvtdq2ps/) | X86ISelLowering LowerFLDEXP | non-VLX AVX-512 path feeds int exp bits to `vscalefps` (missing `vcvtdq2ps`); `<4 x float>` `ldexp` returns x*1 | confirmed (runtime) |
 | 005 | [005-fixupinsttuning-pslli-loses-changed](bugs/005-fixupinsttuning-pslli-loses-changed/) | X86FixupInstTuning | `ProcessShiftLeftToAdd` mutates MI (`PSLLWri`→`PADDWrr`) but returns false; pass lies about preservation | confirmed (mir diff) |
 | 007 | [007-domain-reassignment-wrong-enclosed-key](bugs/007-domain-reassignment-wrong-enclosed-key/) | X86DomainReassignment | `EnclosedEdges[Reg] = ...` uses outer seed Reg instead of `CurReg`; only seed registered, latent duplicate-closure path | source-confirmed |
-| 008 | [008-returnthunks-missing-reti-lret-iret](bugs/008-returnthunks-missing-reti-lret-iret/) | X86ReturnThunks | matches only `RET32`/`RET64`; `RETI*`/`LRET*`/`IRET*` survive `fn_ret_thunk_extern` (Retbleed mitigation gap) | confirmed (asm) |
+| 008 | [008-returnthunks-missing-reti-lret-iret](bugs/008-returnthunks-missing-reti-lret-iret/) | X86ReturnThunks | matches only `RET32`/`RET64`; `RETI*`/`LRET*`/`IRET*` survive `fn_ret_thunk_extern` (Retbleed mitigation gap) | recorded; not prioritized (non-default mitigation flag) |
 | 009 | [009-ibt-wineh-funclet-missing-endbr](bugs/009-ibt-wineh-funclet-missing-endbr/) | X86IndirectBranchTracking | catch / cleanup funclet entries get no `endbr64`; CET-IBT-enforcing host #CP-faults on every C++ exception | confirmed (asm) |
-| 010 | [010-lvi-cfi-missing-reti-lret-iret](bugs/010-lvi-cfi-missing-reti-lret-iret/) | X86LoadValueInjectionRetHardening | only matches `RET64`; `RETI64`/`LRET*`/`IRET*` retain bare ret with no preceding lfence | confirmed (asm) |
+| 010 | [010-lvi-cfi-missing-reti-lret-iret](bugs/010-lvi-cfi-missing-reti-lret-iret/) | X86LoadValueInjectionRetHardening | only matches `RET64`; `RETI64`/`LRET*`/`IRET*` retain bare ret with no preceding lfence | recorded; not prioritized (non-default LVI-CFI mitigation flag) |
 | 011 | [011-ldexp-i64-libcall-silent-truncation](bugs/011-ldexp-i64-libcall-silent-truncation/) | SelectionDAG/LegalizeDAG | `llvm.ldexp.f64.i64` silently truncates exponent to int on libcall (POWI errors here, LDEXP didn't get the guard) | confirmed (runtime) |
 | 012 | [012-cgp-splitmergedvalstore-strips-atomic](bugs/012-cgp-splitmergedvalstore-strips-atomic/) | CodeGenPrepare splitMergedValStore | bail-out checks only `isVolatile()`; an atomic seq_cst i64 store is split into two non-atomic i32 stores | confirmed (asm) |
 | 013 | [013-instcombine-vector-reduce-mul-sext-i1-odd-lanes](bugs/013-instcombine-vector-reduce-mul-sext-i1-odd-lanes/) | InstCombineCalls | `vector_reduce_mul(sext(<n x i1>))` folded to `zext(and-reduce(V))`; for odd n, all-true → +1 instead of -1 | confirmed (runtime) |

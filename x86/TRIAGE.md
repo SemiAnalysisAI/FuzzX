@@ -110,7 +110,8 @@ Silently wrong branch weights — affects code layout, inlining, MachineBlockPla
 Wrong assembly emitted at the codegen level — observable when reading the asm but no wrong runtime value (memory-model softening) or no value-diff at runtime (NT hint lost → MOVNT replaced by cached MOV).
 
 - **005** X86FixupInstTuning `ProcessShiftLeftToAdd` mutates MI but returns false — pass lies about preservation
-- **008, 010** ReturnThunks / LVI-RET miss RETI/LRET/IRET — security mitigation gap
+- **008** ReturnThunks misses RETI/LRET/IRET only under non-default thunk-extern mitigation — recorded, not prioritized
+- **010** LVI-RET misses RETI/LRET/IRET only under non-default LVI-CFI mitigation — recorded, not prioritized
 - **009** CET-IBT missing endbr on WinEH funclet entry
 - **012** CGP `splitMergedValStore` strips atomic on i64 split
 - **014** RESET_FPENV MMO mis-tagged as MOStore on load

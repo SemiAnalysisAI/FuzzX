@@ -2,6 +2,13 @@
 
 Component: X86ReturnThunks
 
+## Triage note
+
+Keep this recorded, but do not prioritize it for the current fix batch. It only
+affects the non-default `-mfunction-return=thunk-extern` /
+`fn_ret_thunk_extern` mitigation path, and the observed behavior is a missing
+hardening transform rather than a general x86 correctness miscompile.
+
 ## Source
 
 `llvm/lib/Target/X86/X86ReturnThunks.cpp:73-80`
