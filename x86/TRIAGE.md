@@ -110,7 +110,6 @@ Silently wrong branch weights — affects code layout, inlining, MachineBlockPla
 Wrong assembly emitted at the codegen level — observable when reading the asm but no wrong runtime value (memory-model softening) or no value-diff at runtime (NT hint lost → MOVNT replaced by cached MOV).
 
 - **005** X86FixupInstTuning `ProcessShiftLeftToAdd` mutates MI but returns false — pass lies about preservation
-- **006** SESES `one-lfence-per-bb` uses `break` instead of `continue` — drops mitigation
 - **008, 010** ReturnThunks / LVI-RET miss RETI/LRET/IRET — security mitigation gap
 - **009** CET-IBT missing endbr on WinEH funclet entry
 - **012** CGP `splitMergedValStore` strips atomic on i64 split

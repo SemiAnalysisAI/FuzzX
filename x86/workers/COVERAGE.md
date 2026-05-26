@@ -297,7 +297,6 @@ which the prompt says are NOT bugs):
   - LVI Load Hardening conditional-branch transmitter check (instrUsesRegToBranch) only matches `isConditionalBranch` — indirect branches go through SOURCE/SINK via the memory-addressing check, not the branch check, so no gap there.
 - Potential bugs filed:
   - candidates/w18-lvi-ret-missing-reti64-lret64.md — LVI ret-hardening only checks X86::RET64, misses RETI64/LRET64/IRET64.
-  - candidates/w18-seses-onelfenceperbb-skips-branch.md — `-x86-seses-one-lfence-per-bb` uses `break` after load-LFENCE, dropping branch-LFENCE for the whole block.
   - candidates/w18-slh-shrx-eflags-no-bmi2-vector-skip.md — BMI2 gate at line 1654 skips saveEFLAGS even when vector+GR64 operands are mixed for AVX2 gather hardening.
 
 ## worker-13  2026-05-21
