@@ -18,11 +18,9 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -36,15 +34,6 @@ using namespace llvm;
 namespace {
 
 constexpr StringRef DefaultTriple = "spirv64-unknown-unknown";
-
-bool envFlag(const char *Name, bool Default) {
-  const char *Value = std::getenv(Name);
-  if (!Value || !*Value)
-    return Default;
-  return std::strcmp(Value, "0") != 0 && std::strcmp(Value, "false") != 0 &&
-         std::strcmp(Value, "False") != 0 && std::strcmp(Value, "no") != 0 &&
-         std::strcmp(Value, "off") != 0;
-}
 
 const Target *getSPIRVTarget() {
   static const Target *T = [] {
@@ -73,22 +62,16 @@ CodeGenOptLevel codeGenOptLevel(OptimizationLevel Level) {
   return CodeGenOptLevel::Aggressive;
 }
 
-TargetMachine *getTargetMachine(StringRef CPU, OptimizationLevel Level) {
-  static std::unique_ptr<TargetMachine> O0TM;
-  static std::unique_ptr<TargetMachine> O2TM;
-  std::unique_ptr<TargetMachine> &TM =
-      Level == OptimizationLevel::O0 ? O0TM : O2TM;
-  if (TM)
-    return TM.get();
-
+std::unique_ptr<TargetMachine> createTargetMachine(StringRef CPU,
+                                                   OptimizationLevel Level) {
   Triple TT(DefaultTriple);
   TargetOptions Options;
-  TM.reset(getSPIRVTarget()->createTargetMachine(
+  std::unique_ptr<TargetMachine> TM(getSPIRVTarget()->createTargetMachine(
       TT, CPU, "", Options, std::nullopt, std::nullopt,
       codeGenOptLevel(Level)));
   if (!TM)
     std::abort();
-  return TM.get();
+  return TM;
 }
 
 bool runOptimizationPipeline(Module &M, TargetMachine &TM,
@@ -112,29 +95,7 @@ bool runOptimizationPipeline(Module &M, TargetMachine &TM,
   return !verifyModule(M, &errs());
 }
 
-std::string tempPath(StringRef Suffix) {
-  static std::atomic<unsigned> Counter{0};
-  auto Dir = std::filesystem::temp_directory_path();
-  auto Now = std::chrono::steady_clock::now().time_since_epoch().count();
-  return (Dir / ("fuzzx-spirv-crash-" + std::to_string(getpid()) + "-" +
-                 std::to_string(Now) + "-" + std::to_string(Counter++) +
-                 Suffix.str()))
-      .string();
-}
-
-bool writeBytes(StringRef Path, ArrayRef<char> Bytes) {
-  std::ofstream Out(Path.str(), std::ios::binary);
-  if (!Out)
-    return false;
-  Out.write(Bytes.data(), static_cast<std::streamsize>(Bytes.size()));
-  return static_cast<bool>(Out);
-}
-
 std::optional<SmallVector<char, 0>> emitObject(Module &M, TargetMachine &TM) {
-  M.setDataLayout(TM.createDataLayout());
-  if (verifyModule(M, &errs()))
-    return std::nullopt;
-
   SmallVector<char, 0> Obj;
   raw_svector_ostream OS(Obj);
   legacy::PassManager PM;
@@ -279,34 +240,47 @@ CompileResult compileIRModuleToObject(Module &M, StringRef CPU,
                                       OptimizationLevel Level,
                                       std::string *IRText = nullptr) {
   CompileResult R;
-  TargetMachine *TM = getTargetMachine(CPU, Level);
-  if (!TM) {
-    R.FailureStage = "target-machine";
+  std::unique_ptr<TargetMachine> TM = createTargetMachine(CPU, Level);
+
+  M.setDataLayout(TM->createDataLayout());
+  if (verifyModule(M, &errs())) {
+    R.FailureStage = "verify";
     return R;
   }
-  CrashRecoveryContext CRC;
-  CRC.DumpStackAndCleanupOnFailure = true;
-  bool Ran = CRC.RunSafely([&]() {
-    if (!runOptimizationPipeline(M, *TM, Level)) {
-      R.FailureStage = "opt";
-      return;
+
+  auto runStage = [&](const char *Stage, auto &&Fn) -> bool {
+    CrashRecoveryContext CRC;
+    CRC.DumpStackAndCleanupOnFailure = true;
+    if (!CRC.RunSafely(std::forward<decltype(Fn)>(Fn))) {
+      R.FailureStage = Stage;
+      R.Crashed = true;
+      R.CrashRetCode = CRC.RetCode;
+      return false;
     }
-    if (IRText)
-      *IRText = moduleToString(M);
-    auto Obj = emitObject(M, *TM);
-    if (!Obj) {
-      R.FailureStage = "codegen";
-      return;
-    }
-    R.Object = std::move(*Obj);
-    R.Success = true;
-  });
-  if (!Ran) {
-    R.Crashed = true;
-    R.CrashRetCode = -1;
-    if (R.FailureStage.empty())
-      R.FailureStage = "codegen";
+    return true;
+  };
+
+  bool PipelineOk = false;
+  if (!runStage("opt",
+                [&] { PipelineOk = runOptimizationPipeline(M, *TM, Level); }))
+    return R;
+  if (!PipelineOk) {
+    R.FailureStage = "opt";
+    return R;
   }
+
+  if (IRText)
+    *IRText = moduleToString(M);
+
+  std::optional<SmallVector<char, 0>> Obj;
+  if (!runStage("codegen", [&] { Obj = emitObject(M, *TM); }))
+    return R;
+  if (!Obj) {
+    R.FailureStage = "codegen";
+    return R;
+  }
+  R.Object = std::move(*Obj);
+  R.Success = true;
   return R;
 }
 
@@ -329,18 +303,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   std::string O0IR;
   auto O0Obj = compileIRModuleToObject(*M, CPU, OptimizationLevel::O0, &O0IR);
   if (!O0Obj.Success) {
-    if (O0Obj.FailureStage != "validate") {
-      std::string Stage = "o0-" + O0Obj.FailureStage;
-      saveFailureFinding(Data, Size, O0IR,
-                         O0Obj.Crashed ? "compiler-crash"
-                                       : "compiler-failure",
-                         Stage,
-                         O0Obj.Crashed
-                             ? std::optional<int>(O0Obj.CrashRetCode)
-                             : std::nullopt);
-      if (O0Obj.Crashed)
-        std::abort();
-    }
+    saveFailureFinding(Data, Size, O0IR,
+                       O0Obj.Crashed ? "compiler-crash" : "compiler-failure",
+                       "o0-" + O0Obj.FailureStage,
+                       O0Obj.Crashed ? std::optional<int>(O0Obj.CrashRetCode)
+                                     : std::nullopt);
+    if (O0Obj.Crashed)
+      std::abort();
     return 0;
   }
 
@@ -354,27 +323,19 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size) {
   std::string O2IR;
   auto O2Obj = compileIRModuleToObject(*M2, CPU, OptimizationLevel::O2, &O2IR);
   if (!O2Obj.Success) {
-    if (O2Obj.FailureStage != "validate") {
-      std::string Stage = "o2-" + O2Obj.FailureStage;
-      saveFailureFinding(Data, Size, O2IR,
-                         O2Obj.Crashed ? "compiler-crash"
-                                       : "compiler-failure",
-                         Stage,
-                         O2Obj.Crashed
-                             ? std::optional<int>(O2Obj.CrashRetCode)
-                             : std::nullopt);
-      if (O2Obj.Crashed)
-        std::abort();
-    }
+    saveFailureFinding(Data, Size, O2IR,
+                       O2Obj.Crashed ? "compiler-crash" : "compiler-failure",
+                       "o2-" + O2Obj.FailureStage,
+                       O2Obj.Crashed ? std::optional<int>(O2Obj.CrashRetCode)
+                                     : std::nullopt);
+    if (O2Obj.Crashed)
+      std::abort();
     return 0;
   }
 
   // SPIR-V has no host runtime, so we stop after codegen.  See ../README.md
   // for why a faithful differential port (the AMDGPU/PTX pattern) requires
   // setting up a Vulkan or OpenCL ICD.
-  (void)envFlag;
-  (void)writeBytes;
-  (void)tempPath;
   return 0;
 }
 
@@ -392,8 +353,8 @@ extern "C" int LLVMFuzzerInitialize(int *, char ***) {
         std::abort();
       },
       nullptr);
-  StringRef CPU = getCPU();
-  (void)getTargetMachine(CPU, OptimizationLevel::O0);
-  (void)getTargetMachine(CPU, OptimizationLevel::O2);
+  // Smoke-test target initialization once at startup so any registration
+  // failure surfaces before the fuzzer enters its hot loop.
+  (void)createTargetMachine(getCPU(), OptimizationLevel::O0);
   return 0;
 }
