@@ -1,6 +1,6 @@
 # Root-Cause Patches
 
-S6 in TRIAGE.md is ~85 metadata-loss bugs. They collapse to **7 root-cause patches** in shared helpers, each closing many catalog entries. Patches below are against LLVM 23.0.0git at the FuzzX-pinned tree (HEAD ≈ `0dd29960cd61`); line numbers may shift slightly on rebase.
+S6 in TRIAGE.md is ~84 metadata-loss bugs. They collapse to **7 root-cause patches** in shared helpers, each closing many catalog entries. Patches below are against LLVM 23.0.0git at the FuzzX-pinned tree (HEAD ≈ `0dd29960cd61`); line numbers may shift slightly on rebase.
 
 ---
 
@@ -169,7 +169,7 @@ The downstream `MachineInstr::hasIdenticalMMOs` already iterates each MMO and us
 
 ---
 
-## Patch D — Wide DAGCombiner `getLoad`/`getStore` overloads (closes 9 bugs)
+## Patch D — Wide DAGCombiner `getLoad`/`getStore` overloads (closes 8 bugs)
 
 **File:** `llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp` (multiple sites) and `llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp` (helpers `getMemcpyLoadsAndStores`, `getMemmoveLoadsAndStores`, `getMemsetStores`).
 
@@ -183,7 +183,6 @@ Affected sites and the bug each closes:
 | Bug | Site (DAGCombiner.cpp / SelectionDAG.cpp) | Function |
 |-----|-------------------------------------------|----------|
 | #196 | `tryStoreMergeOfLoads` ~23590-23625 | both `getLoad` and `getStore` |
-| #197 | `mergeTruncStores` ~9929-9931 | `getStore` |
 | #198 | `ReduceLoadOpStoreWidth` ~22441-22450 | `getStore` (asymmetric; load already correct) |
 | #199 | `CombineConsecutiveLoads` ~17581-17582 | `getLoad` |
 | #208 | `getMemcpyLoadsAndStores` ~9331-9332 | both |
@@ -197,7 +196,7 @@ Affected sites and the bug each closes:
 
 ### Bugs closed by Patch D
 
-#196–#199, #208–#210, #224, plus dovetails into #140 (CGP splitMergedValStore, same root pattern in a different pass).
+#196, #198–#199, #208–#210, #224, plus dovetails into #140 (CGP splitMergedValStore, same root pattern in a different pass).
 
 ---
 
@@ -279,11 +278,11 @@ Same shape applies to `duplicateCondBranchOnPHIIntoPred` (`!prof` no scaling —
 | A — combineMetadata (Local.cpp) | #219, #229, #230, #287, #288, #447 + FIXME line 3063 | ~30 lines |
 | B — MachineInstr::isIdenticalTo MMO (MachineInstr.cpp + 4 callers) | #141, #237, #239, #357, w340 | ~50 lines (incl. callers) |
 | C — MachineMemOperand::operator== (MachineMemOperand.h) | #226, #238, #355, #356 | 3 lines |
-| D — DAGCombiner 4-arg overloads (DAGCombiner.cpp, SelectionDAG.cpp) | #196–#199, #208–#210, #224 (8) | ~120 lines across 8 sites |
+| D — DAGCombiner 4-arg overloads (DAGCombiner.cpp, SelectionDAG.cpp) | #196, #198–#199, #208–#210, #224 (7) | ~110 lines across 7 sites |
 | E — ScalarizeMaskedMemIntrin (ScalarizeMaskedMemIntrin.cpp) | #180, #202, #203, #204, #205 | 7 lines (one per site) |
 | F — dropUBImplyingAttrsAndMetadata (Instruction.cpp) | #091, #183, #420, #421, #496, #498 | ~10 lines |
 | G — JumpThreading unpredictable/annotation forwarding | #214, #260, #261, #263, #672 | ~6 lines |
-| **TOTAL** | **~40 bugs closed by 7 PRs** | **~225 lines** |
+| **TOTAL** | **~39 bugs closed by 7 PRs** | **~215 lines** |
 
 Plus, on top of this, the SROA family (Patch H, ~9 bugs) and LICM promoteLoopAccessesToScalars syncscope tracking (Patch I, ~6 bugs) would mop up another ~15 bugs each — both are larger patches (~50 lines) because they need to track new state through helpers.
 
@@ -297,6 +296,6 @@ Plus, on top of this, the SROA family (Patch H, ~9 bugs) and LICM promoteLoopAcc
 4. **Patch A** (combineMetadata cleanup; touches a hot helper, will need careful review) — closes ~7 bugs.
 5. **Patch G** (JumpThreading metadata) — closes 5 bugs.
 6. **Patch F** (Instruction.cpp keep-list split; semantic change, will need RFC) — closes ~6 bugs.
-7. **Patch D** (DAGCombiner; largest but most impactful; possibly split into 3 sub-PRs by file) — closes 8+ bugs.
+7. **Patch D** (DAGCombiner; largest but most impactful; possibly split into 3 sub-PRs by file) — closes 7+ bugs.
 
-Once these land, the catalog's S6 tier shrinks from ~85 entries to ~45 entries (the long tail of pass-specific copy sites: SROA, LICM, MemCpyOpt, GVN PRE, etc.). Those remain pass-by-pass fixes.
+Once these land, the catalog's S6 tier shrinks from ~84 entries to ~45 entries (the long tail of pass-specific copy sites: SROA, LICM, MemCpyOpt, GVN PRE, etc.). Those remain pass-by-pass fixes.

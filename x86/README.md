@@ -15,14 +15,14 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 129 reproducible bugs (well past the 100 goal). 228 total catalog entries (~99 are source-confirmed only). 508 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 128 reproducible bugs (well past the 100 goal). 227 total catalog entries (~99 are source-confirmed only). 502 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
 - hang (1): #191
 - runtime miscompile (3): #003 (GISel-only), #004, #013
 - asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
-- mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
+- mir-diff (19): #124, #125, #196, #198, #199, #208–#210, #213, #226, #231, #237, #238, #239, …
 - opt-diff (~101): all others
 
 Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252), and PGO corruptions (#232).
@@ -225,7 +225,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 193 | [193-simplifycfg-mergeCondStores-spreads-invariant-group](bugs/193-simplifycfg-mergeCondStores-spreads-invariant-group/) | **default SimplifyCFG** mergeConditionalStores | `!invariant.group` from one store leaks onto the merged store carrying the other branch's value | confirmed (opt diff) |
 | 195 | [195-instcombine-ldexp-chain-integer-overflow](bugs/195-instcombine-ldexp-chain-integer-overflow/) | InstCombineCalls.cpp:3232-3247 ldexp chain fold | `ldexp(ldexp(x, INT_MAX), INT_MAX)` → `fmul x, 0.25` (i32 exponent sum wraps to -2 inverting overflow→underflow); should be `+inf` | confirmed (opt diff) |
 | 196 | [196-dagcombiner-trystoremergeofloads-drops-aamd](bugs/196-dagcombiner-trystoremergeofloads-drops-aamd/) | DAGCombiner tryStoreMergeOfLoads | merged wide load+store has no `!tbaa`/`!alias.scope`/`!noalias` (4-arg getLoad/getStore overloads drop AAInfo) | confirmed (mir diff) |
-| 197 | [197-dagcombiner-mergetruncstores-drops-nontemporal-aainfo](bugs/197-dagcombiner-mergetruncstores-drops-nontemporal-aainfo/) | DAGCombiner mergeTruncStores | merged i32 store drops MONonTemporal + AAInfo; 4 byte NT stores → 1 plain MOV instead of MOVNTI | confirmed (mir diff) |
 | 198 | [198-dagcombiner-reduceloadopstorewidth-store-drops-aamd](bugs/198-dagcombiner-reduceloadopstorewidth-store-drops-aamd/) | DAGCombiner ReduceLoadOpStoreWidth | asymmetric MMO loss: load-side keeps NT/tbaa, store-side drops both — visible in `OR8mi` MMOs | confirmed (mir diff) |
 | 199 | [199-dagcombiner-combineconsecutiveloads-drops-flags-aainfo](bugs/199-dagcombiner-combineconsecutiveloads-drops-flags-aainfo/) | DAGCombiner CombineConsecutiveLoads | fused wide load drops MOInvariant + MONonTemporal + AAInfo; disables hoisting/CSE of immutable loads | confirmed (mir diff) |
 | 200 | [200-memcpyopt-processStoreOfLoad-drops-load-nontemporal-aamd](bugs/200-memcpyopt-processStoreOfLoad-drops-load-nontemporal-aamd/) | MemCpyOpt processStoreOfLoad | load+store→memcpy fold drops load's `!nontemporal`/`!invariant.load` and AAMD; only `DIAssignID` copied | confirmed (opt diff) |

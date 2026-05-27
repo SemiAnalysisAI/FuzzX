@@ -1,6 +1,6 @@
 # Triage by Severity (upstream-impact focused)
 
-231 catalog entries. 131 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+227 catalog entries. 128 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
 
 (16 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."* — one metadata-loss missed-opt (166: mem2reg `!noundef` lost across PHI, but the "fix" requires adding an `assume(noundef)` which is itself an optimization-blocker) — two LICM `promoteLoopAccessesToScalars` reports (185, 186) that don't survive analysis under LLVM's static-deref / capture-analysis semantics — four `freeze`-CSE reports (136, 187, 188, 194) which on closer reading of LangRef are a valid refinement: source admits both equal- and different-value executions, so a CSE that picks the equal-value execution is a strict narrowing of source nondeterminism (matches the design intent of D75334 / `cc28a754679a`, *"Let EarlyCSE fold equivalent freeze instructions"*) — one DAGCombiner vector-splat-1 report (061) whose theoretical "SRL-by-bitwidth → UNDEF" path is unreachable in practice: `SimplifyVBinOp` scalarizes the splat ahead of the broken `isOneConstant` early-out, so the asm is already correct on upstream and the patch is a strict no-op — and one AtomicExpand InitLoaded report (131) that is illegal under LLVM IR semantics but appears intentionally harmless on x86.)
 
@@ -104,7 +104,7 @@ Silently wrong branch weights — affects code layout, inlining, MachineBlockPla
 | **018** | CALL_RVMARKER hard-codes SysV preserved mask on Windows — wrong ABI clobber set |
 | **036, 045, 076, 077, 030, 046** | Various CFI/EH frame emission gaps (mostly source-confirmed) |
 
-## S5 — Silent codegen asm/MIR wrong (15)
+## S5 — Silent codegen asm/MIR wrong (14)
 
 Wrong assembly emitted at the codegen level — observable when reading the asm but no wrong runtime value (memory-model softening) or no value-diff at runtime (NT hint lost → MOVNT replaced by cached MOV).
 
@@ -116,12 +116,11 @@ Wrong assembly emitted at the codegen level — observable when reading the asm 
 - **014** RESET_FPENV MMO mis-tagged as MOStore on load
 - **140** CGP `splitMergedValStore` drops NT/tbaa/alias.scope/noalias
 - **151** strict-FP ldexp libcall silent truncation (sibling of #011)
-- **197** DAGCombiner `mergeTruncStores` drops MONonTemporal → no MOVNTI
 - **240** X86 stack-probe completely skipped for one-page alloca (defeats `-fstack-clash-protection`)
 - **357 (in candidates)** BranchFolder drops pcsections
 - **231** BranchFolding tail-merge strengthens `nuw` flag (unsound direction)
 
-## S6 — Metadata loss (~85)
+## S6 — Metadata loss (~84)
 
 Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!invariant.load`, `!noalias`, `!alias.scope`, `!access_group`, `!align`, `!noundef`, `!dereferenceable`, `!unpredictable`, etc., dropped by passes that should have called `combineMetadataForCSE`/`copyMetadataForLoad`/etc.
 
@@ -131,7 +130,7 @@ Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!inv
 - `Local.cpp dropUBImplyingAttrsAndMetadata` keep-list (#420, #421) — too narrow; affects SimplifyCFG `speculativelyExecuteBB` and `foldTwoEntryPHINode`
 - `MachineInstr::isIdenticalTo` ignores MMOs (#141, #237, #239, #357, #358) — affects MachineCSE, BranchFolder, MachineLateInstrsCleanup
 - `MachineMemOperand::operator==` omits SuccessOrdering/FailureOrdering/SyncScopeID (#226, #238, #355, #356)
-- `DAGCombiner` 4-arg `getLoad`/`getStore` overloads default AAInfo to empty (#196–#199, #221, #224)
+- `DAGCombiner` 4-arg `getLoad`/`getStore` overloads default AAInfo to empty (#196, #198–#199, #221, #224)
 - `ScalarizeMaskedMemIntrin` const+dyn-mask paths miss `Load/Store->copyMetadata(*CI)` (#180, #202–#205)
 - `SROA` hand-rolled metadata copy lists (#118, #137, #138, #158, #159, #245, #290–#293)
 - `LICM promoteLoopAccessesToScalars` per-access metadata copy (#126, #144, #160, #161, #297, #298)
@@ -140,7 +139,7 @@ Mostly missed-optimizations downstream: `!nontemporal`, `!tbaa`, `!range`, `!inv
 - `JumpThreading` only forwards MD_prof (#214, #260–#263, #670)
 - `SDAG memcpy/memmove/memset getMemcpyLoadsAndStores` series (#208–#210, #460–#462, #510)
 
-(Full list: bugs #022, #023, #091, #103, #132, #133, #145, #146, #147, #149, #150, #153, #157, #163, #164, #165, #167, #168, #169, #170, #171, #172, #176, #177, #178, #179, #180, #183, #189, #196–#214, #228–#230, #237, #239, #241–#246, #250, #439, #460–#462, #485, #486, #489, …)
+(Full list: bugs #022, #023, #091, #103, #132, #133, #145, #146, #147, #149, #150, #153, #157, #163, #164, #165, #167, #168, #169, #170, #171, #172, #176, #177, #178, #179, #180, #183, #189, #196, #198–#214, #228–#230, #237, #239, #241–#246, #250, #439, #460–#462, #485, #486, #489, …)
 
 ## S7 — Source-confirmed / latent (~100)
 
@@ -169,4 +168,4 @@ Annotated with upstream-issue status as of 2026-05-21:
 
 **Net actionable**: 8 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
 
-Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~40 of the ~85 S6 metadata-loss bugs.
+Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~39 of the ~84 S6 metadata-loss bugs.
