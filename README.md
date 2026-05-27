@@ -7,6 +7,7 @@ FuzzX is a collection of compiler fuzzers.
 | [`ptx/`](ptx/) | NVIDIA `ptxas` fuzzer |
 | [`amdgpu/`](amdgpu/) | AMDGPU fuzzer |
 | [`x86/`](x86/) | x86 fuzzer |
+| [`spirv/`](spirv/) | LLVM SPIR-V backend crash fuzzer |
 
 See each subdirectory for build and run instructions.
 

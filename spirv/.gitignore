@@ -1,0 +1,11 @@
+/build/
+/runtime/
+fuzz-*.log
+__pycache__/
+*.swp
+
+/third_party/*
+!/third_party/llvm-project
+
+/findings/
+/corpus/
