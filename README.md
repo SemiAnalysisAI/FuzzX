@@ -23,3 +23,7 @@ be bugs at all, I haven't verified most of this myself.  On the other hand if a
 compiler has relatively few bugs, they might all have different root causes,
 and/or I might have spent relatively little effort tryin to find bugs in that
 compiler.
+
+## See Also
+
+* A SPIR-V fuzzer inspired by this repo: https://github.com/aobolensk/llvm-spirv-fuzz
