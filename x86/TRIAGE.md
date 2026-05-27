@@ -1,10 +1,12 @@
 # Triage by Severity (upstream-impact focused)
 
-227 catalog entries. 128 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+225 catalog entries. 126 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
 
 (16 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."* — one metadata-loss missed-opt (166: mem2reg `!noundef` lost across PHI, but the "fix" requires adding an `assume(noundef)` which is itself an optimization-blocker) — two LICM `promoteLoopAccessesToScalars` reports (185, 186) that don't survive analysis under LLVM's static-deref / capture-analysis semantics — four `freeze`-CSE reports (136, 187, 188, 194) which on closer reading of LangRef are a valid refinement: source admits both equal- and different-value executions, so a CSE that picks the equal-value execution is a strict narrowing of source nondeterminism (matches the design intent of D75334 / `cc28a754679a`, *"Let EarlyCSE fold equivalent freeze instructions"*) — one DAGCombiner vector-splat-1 report (061) whose theoretical "SRL-by-bitwidth → UNDEF" path is unreachable in practice: `SimplifyVBinOp` scalarizes the splat ahead of the broken `isOneConstant` early-out, so the asm is already correct on upstream and the patch is a strict no-op — and one AtomicExpand InitLoaded report (131) that is illegal under LLVM IR semantics but appears intentionally harmless on x86.)
 
 (Four further entries dropped after Opus-4.7 audit: #002 (DAGCombiner `visitFMinMax` returns sNaN unchanged for `minimumnum(sNaN, qNaN)`) — LangRef's `floatnan` rules explicitly permit "Unchanged NaN propagation", so returning an input sNaN as-is when both inputs are NaN is allowed; the fold matches the spec. #215 / #216 (LowerExpectIntrinsic `handleBrSelExpect` / `handleSwitchExpect` overwriting PGO `!prof`) — intentional MisExpect design (`bac6cd5bf856`): `__builtin_expect` is supposed to override frontend PGO, with `checkFrontendInstrumentation` emitting a `-pgo-warn-misexpect` diagnostic on conflict (see `MisExpect.cpp:15-27`, test `Transforms/PGOProfile/misexpect-branch.ll`). #220 (`patchReplacementInstruction` drops nsw/nuw from kept dominator) — the global drop is required for correctness: `add nsw x,y` is poison on overflow but `extractvalue (sadd.with.overflow x,y), 0` is defined on overflow; RAUW-ing extractvalue users with a still-nsw add gives them poison where source had a defined wrapped value. PR #82935 added the drop to fix miscompile #82884; `Transforms/GVN/pr82884.ll` asserts it.)
+
+(Two additional entries were removed after follow-up review: #236 (`ashr exact` -> `lshr exact`) because `exact` requires shifted-out bits to be zero, so the fold is not the anti-refinement originally claimed; and #251 (CVP undef-tainted lattice) because it is already tracked as upstream issue #114902 and is not being kept as an active FuzzX bug.)
 
 ---
 
@@ -31,7 +33,7 @@ End-user observable wrong-value miscompiles. Highest non-crash severity.
 | **155** | frexp.f64.i64 libcall stack-slot overrun | reads 8 bytes from a 4-byte write → uninitialized upper bytes (also info leak) |
 | **003 / 110** | X86 GISel UADDE / USUBE inverted carry on multi-word add/sub | wrong upper word — only fires with `-global-isel` (NOT default on x86) |
 
-## S2 — Alive2-falsifiable poison/refinement miscompiles (~20) — turns defined value into poison, or over-infers a flag that makes downstream code poison
+## S2 — Alive2-falsifiable poison/refinement miscompiles (~18) — turns defined value into poison, or over-infers a flag that makes downstream code poison
 
 These are the strongest correctness-class non-runtime bugs. Several are already-known patterns getting independent confirmation; others are net-new.
 
@@ -43,9 +45,7 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 | **206** | SimplifyLibCalls `fmod(NaN, 1.0)` | folded to `frem nnan NaN, 1.0` → poison (mis-named `IsNoNan` actually means no-errno) |
 | **207** | SimplifyLibCalls `fdim(±Inf, ±Inf)` | folds to qNaN instead of `+0` per C99 |
 | **234** | InstSimplify strict-FP `constrained.fadd nnan` fold | drops FE_INVALID exception side-effect (strict-FP semantics violated) |
-| **236** | InstCombineSimplifyDemanded `ashr exact → lshr exact` | for `%x=-1`, source returns 255; target returns poison (anti-refinement) |
 | **246** | ConstantFolding `ldexp.f64.i64(1.0, 4294967330)` | folds to `2^34` instead of `+inf`; sibling of #011 in const-fold rather than libcall expand |
-| **251** | CVP undef-tainted lattice | `select i1 %cmp, i64 undef, i64 1` taints lattice → CVP adds `range(i64 1,3)` AND `add nuw nsw`; both unsound for undef=INT_MAX (matches upstream #114902) |
 | **252** | JumpThreading `unfoldSelectInstr` branches on poison | original uses `freeze`; after JT, freeze is gone and `br i1 %maybe_poison` → UB |
 
 **SeparateConstOffsetFromGEP, mem2reg, LICM (default O2 — UB-injection):**
@@ -149,7 +149,7 @@ Reads-correct-as-buggy in source but no opt/llc reproducer constructed (often be
 
 ---
 
-## Recommended report-first batch (12 bugs)
+## Recommended report-first batch (8 bugs)
 
 Annotated with upstream-issue status as of 2026-05-21:
 
@@ -162,10 +162,8 @@ Annotated with upstream-issue status as of 2026-05-21:
 | **195** | InstCombine ldexp chain integer overflow | No duplicate. **Novel.** | File |
 | **206** | `fmod(NaN)` → poison via mis-named `IsNoNan` | No duplicate. **Novel.** | File |
 | **207** | `fdim(±Inf,±Inf)` → qNaN | No duplicate. **Novel.** | File |
-| **236** | ashr exact → lshr exact anti-refinement | No duplicate. **Novel** (in-tree test `ashr_can_be_lshr` bakes in the buggy output and needs updating with the fix) | File |
-| **251** | CVP undef-tainted lattice | **Duplicate**: open issue [#114902](https://github.com/llvm/llvm-project/issues/114902), still open and unfixed | Comment on existing issue with our `add nuw nsw` additional case |
 | **240** | X86 stack-probe skips one-page alloca | No duplicate. **Novel** (security mitigation defeated under `-fstack-clash-protection`) | File |
 
-**Net actionable**: 8 novel issues to file + 2 to comment on existing. The 2 duplicates (#071 #251) are both already known, so they don't need new issues — adding our reproducers as comments still has value.
+**Net actionable**: 7 issues to file + 1 to comment on / verify against existing. #071 is already known, so it does not need a new issue — adding our reproducer as a comment still has value if the pending fix does not cover it.
 
 Then in S3 batch, the most upstream-friendly cluster is the **shared-helper class** of fixes — see `ROOT_CAUSE_PATCHES.md`: 7 PRs in ~225 lines of code close ~39 of the ~84 S6 metadata-loss bugs.
