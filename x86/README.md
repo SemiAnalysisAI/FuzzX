@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 130 reproducible bugs (well past the 100 goal). 229 total catalog entries (~99 are source-confirmed only). 509 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 129 reproducible bugs (well past the 100 goal). 228 total catalog entries (~99 are source-confirmed only). 508 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
@@ -23,7 +23,7 @@ Breakdown by repro kind:
 - runtime miscompile (3): #003 (GISel-only), #004, #013
 - asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (20): #124, #125, #196–#199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~102): all others
+- opt-diff (~101): all others
 
 Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#236/#251/#252), and PGO corruptions (#232).
 
@@ -168,7 +168,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 128 | [128-lower-matrix-fuseFlatten-drops-volatile](bugs/128-lower-matrix-fuseFlatten-drops-volatile/) | LowerMatrixIntrinsics fuseFlatten | `matrix.column.major.load(..., i1 true /*volatile*/)` rewritten as plain `load <N x float>` — volatile bit dropped | confirmed (opt diff) |
 | 129 | [129-earlycse-load-cse-ignores-syncscope](bugs/129-earlycse-load-cse-ignores-syncscope/) | EarlyCSE getMatchingValue / LoadValue | atomic unordered loads CSE'd ignoring `SyncScope::ID`; second load takes the cached load's narrower syncscope | confirmed (opt diff) |
 | 130 | [130-earlycse-dse-stores-ignores-syncscope](bugs/130-earlycse-dse-stores-ignores-syncscope/) | EarlyCSE overridingStores | DSE drops earlier atomic store with different syncscope from later one | confirmed (opt diff) |
-| 131 | [131-atomic-expand-rmwcmpxchgloop-initload-not-atomic](bugs/131-atomic-expand-rmwcmpxchgloop-initload-not-atomic/) | AtomicExpandPass insertRMWCmpXchgLoop | InitLoaded before cmpxchg loop is plain (non-atomic) load on x86 (shouldIssueAtomicLoadForAtomicEmulationLoop=false); racy for nand/min/max/fadd etc. | confirmed (opt diff) |
 | 132 | [132-atomic-expand-convertcmpxchgtoint-drops-metadata](bugs/132-atomic-expand-convertcmpxchgtoint-drops-metadata/) | AtomicExpandPass convertCmpXchgToIntegerType | cmpxchg ptr → i64 conversion drops `!noalias`/`!tbaa`/`!alias.scope`/`!access_group` metadata | confirmed (opt diff) |
 | 133 | [133-atomic-expand-rmwcmpxchgloop-initload-drops-metadata](bugs/133-atomic-expand-rmwcmpxchgloop-initload-drops-metadata/) | AtomicExpandPass insertRMWCmpXchgLoop / expandPartwordCmpXchg / lowerIdempotentRMWIntoFencedLoad | InitLoaded load doesn't carry the source RMW's metadata; AA-inconsistent view | confirmed (opt diff) |
 | 134 | [134-atomic-expand-rmw-libcall-drops-volatile-ssid](bugs/134-atomic-expand-rmw-libcall-drops-volatile-ssid/) | AtomicExpandPass expandAtomicRMW/CAS/Load/StoreToLibcall | libcall (e.g. `__atomic_fetch_nand_16`) silently drops volatile and syncscope | confirmed (opt diff) |
