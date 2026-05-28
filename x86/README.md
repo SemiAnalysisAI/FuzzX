@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 121 reproducible bugs (well past the 100 goal). 220 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 122 reproducible bugs (well past the 100 goal). 221 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
@@ -23,7 +23,7 @@ Breakdown by repro kind:
 - runtime miscompile (3): #003 (GISel-only), #004, #013
 - asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (19): #124, #125, #196, #198, #199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~94): all others
+- opt-diff (~95): all others
 
 Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#252), and PGO corruptions (#232).
 
@@ -161,6 +161,7 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 124 | [124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope](bugs/124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope/) - i128 atomic-volatile load with `singlethread` syncscope → cmpxchg without volatile + system-scope |  |
 | 125 | [125-atomic-expand-store-to-xchg-drops-volatile-syncscope](bugs/125-atomic-expand-store-to-xchg-drops-volatile-syncscope/) - i128 atomic-volatile store with `singlethread` → cmpxchg loop without volatile + system-scope; also inserts a bare non-volatile load of the dst |  |
 | 126 | [126-licm-promote-drops-syncscope](bugs/126-licm-promote-drops-syncscope/) - preheader load and exit-block store dropped from `syncscope("singlethread")` to default System scope |  |
+| 127 | [127-newgvn-call-cse-ignores-operand-bundles](bugs/127-newgvn-call-cse-ignores-operand-bundles/) - call CSE ignores operand bundles (deopt/funclet/ptrauth/kcfi/clang.arc/gc-*); second call with bundle deleted | deprioritized |
 | 128 | [128-lower-matrix-fuseFlatten-drops-volatile](bugs/128-lower-matrix-fuseFlatten-drops-volatile/) - `matrix.column.major.load(..., i1 true /*volatile*/)` rewritten as plain `load <N x float>` — volatile bit dropped |  |
 | 129 | [129-earlycse-load-cse-ignores-syncscope](bugs/129-earlycse-load-cse-ignores-syncscope/) - atomic unordered loads CSE'd ignoring `SyncScope::ID`; second load takes the cached load's narrower syncscope |  |
 | 130 | [130-earlycse-dse-stores-ignores-syncscope](bugs/130-earlycse-dse-stores-ignores-syncscope/) - DSE drops earlier atomic store with different syncscope from later one |  |
