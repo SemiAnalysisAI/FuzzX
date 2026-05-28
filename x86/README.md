@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 122 reproducible bugs (well past the 100 goal). 221 total catalog entries (~99 are source-confirmed only). 496 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 121 reproducible bugs (well past the 100 goal). 220 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
@@ -23,7 +23,7 @@ Breakdown by repro kind:
 - runtime miscompile (3): #003 (GISel-only), #004, #013
 - asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (19): #124, #125, #196, #198, #199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~95): all others
+- opt-diff (~94): all others
 
 Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#252), and PGO corruptions (#232).
 
@@ -211,7 +211,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 179 | [179-instcombine-load-of-select-drops-invariant-group-tbaa](bugs/179-instcombine-load-of-select-drops-invariant-group-tbaa/) - broader than #165 — also strips `!invariant.group`, `!invariant.load`, `!tbaa`, `!nontemporal`, `!dereferenceable` |  |
 | 180 | [180-scalarize-masked-mem-drops-metadata-const-mask](bugs/180-scalarize-masked-mem-drops-metadata-const-mask/) - drops `!range`/`!tbaa`/`!noalias`/`!nontemporal`/`!nonnull`/`!dereferenceable`; all-true path correctly copies metadata |  |
 | 181 | [181-separate-const-offset-from-gep-false-inbounds](bugs/181-separate-const-offset-from-gep-false-inbounds/) - unconditionally `setIsInBounds(true)`; can mark a temporarily-OOB GEP as inbounds → guaranteed poison | PR [#199304](https://github.com/llvm/llvm-project/pull/199304) merged |
-| 182 | [182-simplifycfg-sink-merges-two-fences](bugs/182-simplifycfg-sink-merges-two-fences/) - two `fence` instructions in mutually-exclusive predecessors collapsed to one — one of two release-acquire pairs destroyed |  |
 | 183 | [183-simplifycfg-hoist-memintrinsic-drops-nontemporal](bugs/183-simplifycfg-hoist-memintrinsic-drops-nontemporal/) - hoisted `llvm.memcpy` drops `!nontemporal` when only one of two carries it (combineMetadataForCSE writes JMD) |  |
 | 184 | [184-instcombine-atomic-memcpy-memset-loses-element-atomicity](bugs/184-instcombine-atomic-memcpy-memset-loses-element-atomicity/) - element-atomic memcpy/memset with elt=1, len=4 collapsed to single i32 atomic load+store; per-byte atomicity granularity lost |  |
 | 189 | [189-gvn-processMaskedLoad-drops-return-attrs](bugs/189-gvn-processMaskedLoad-drops-return-attrs/) - replaces masked.load with select but copies no return-value attributes (`nofpclass`, `!range`, `noundef`, `align`, `dereferenceable`) |  |

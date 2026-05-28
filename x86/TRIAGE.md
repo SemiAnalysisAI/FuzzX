@@ -77,7 +77,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 - **143** MemCpyOpt processMemMove drops volatile memset (source-confirmed)
 - **148, 190, 191** VectorCombine scalarize{LoadExtract,LoadBitcast,Load} strips atomic / infinite-loops (#191 hang)
 - **152, 154** SimplifyCFG sink merges 2× volatile seq_cst {cmpxchg, atomicrmw}
-- **182** SimplifyCFG sink merges 2× `fence`
 
 **Atomic ordering / syncscope narrowed or widened:**
 - **072** GVN-MSSA computeLoadStoreVN ignores atomic/volatile/ordering/syncscope
