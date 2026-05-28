@@ -77,10 +77,9 @@ the number of locked read-modify-write transactions visible to other CPUs.
 
 ## Family
 
-Same defect family as #119 (mergeConditionalStores drops atomic), #120/#121
-(sink/hoist common volatile load/store), #122 (hoist seq_cst load), but
-applied to `atomicrmw` -- a distinct LLVM instruction kind not covered
-by the existing reports. Together with the cmpxchg companion candidate,
+Same defect family as #119 (mergeConditionalStores drops atomic), but applied
+to `atomicrmw` -- a distinct LLVM instruction kind not covered by that report.
+Together with the cmpxchg companion candidate,
 this completes the coverage gap: `hasSameSpecialState` allows hoist/sink
 of every flavour of LLVM atomic memory instruction (`load`, `store`,
 `cmpxchg`, `atomicrmw`) without considering the observability of

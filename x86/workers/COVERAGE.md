@@ -1531,12 +1531,6 @@ Confirmed-reproducible candidates filed:
 - `w57-gvnsink-merges-two-volatile-stores.md` — `gvn-sink` value-numbers
   volatile stores; two identical volatile stores in sibling blocks become
   one. (`GVNSink.cpp::ValueTable::createMemoryExpr`)
-- `w57-simplifycfg-hoist-merges-two-volatile-loads.md` — `simplifycfg<hoist-common-insts>`
-  hoists two identical volatile loads. (`SimplifyCFG.cpp::shouldHoistCommonInstructions`)
-- `w57-simplifycfg-sink-merges-two-volatile-stores.md` — `simplifycfg<sink-common-insts>`
-  sinks two identical volatile stores.
-- `w57-simplifycfg-hoist-merges-two-seqcst-atomic-loads.md` — same hoist path,
-  but for `seq_cst` atomic loads, which changes the global seq_cst total order.
 
 Cleared (verified to be properly guarded — do not re-check):
 - `SROA.cpp` — all rewrite paths guarded by `isSimple()` or have

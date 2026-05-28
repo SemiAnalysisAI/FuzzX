@@ -30,11 +30,11 @@ is null. `SI->copyMetadata(*QStore)` then copies the cleared state to the
 merged store. The nontemporal hint is silently dropped for the path that
 originally carried it.
 
-This is the same family as w105 (hoistCommonCodeFromSuccessors), w120/121
-(sink/hoist common volatile loads/stores), w76 (memcpyopt), w75 (DSE) --
-but those are gated behind options that are **off** in the default O2
-pipeline, whereas `mergeConditionalStores` is on by default (see also
-w61, which covers the analogous `atomic` drop in the same call site).
+This is the same family as w105 (hoistCommonCodeFromSuccessors), w76
+(memcpyopt), and w75 (DSE), but those are gated behind options that are
+**off** in the default O2 pipeline, whereas `mergeConditionalStores` is on
+by default (see also w61, which covers the analogous `atomic` drop in the
+same call site).
 
 ## Repro
 

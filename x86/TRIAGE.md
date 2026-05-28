@@ -1,12 +1,14 @@
 # Triage by Severity (upstream-impact focused)
 
-225 catalog entries. 126 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
+222 catalog entries. 123 reproducible at default x86 -O2. ~99 source-confirmed only. Tiers below assigned by user-visible impact when the bug fires. Within each tier the bugs are ordered by "report-first" priority.
 
 (16 entries previously listed have been removed: four pure sNaN-quieting losses (112, 115, 116, 117) — known LLVM limitation, not worth filing — three "poison → concrete value" folds (123, 156, 247), which the LangRef explicitly permits: *"It is correct to replace a poison value with an undef value or any value of the type."* — one metadata-loss missed-opt (166: mem2reg `!noundef` lost across PHI, but the "fix" requires adding an `assume(noundef)` which is itself an optimization-blocker) — two LICM `promoteLoopAccessesToScalars` reports (185, 186) that don't survive analysis under LLVM's static-deref / capture-analysis semantics — four `freeze`-CSE reports (136, 187, 188, 194) which on closer reading of LangRef are a valid refinement: source admits both equal- and different-value executions, so a CSE that picks the equal-value execution is a strict narrowing of source nondeterminism (matches the design intent of D75334 / `cc28a754679a`, *"Let EarlyCSE fold equivalent freeze instructions"*) — one DAGCombiner vector-splat-1 report (061) whose theoretical "SRL-by-bitwidth → UNDEF" path is unreachable in practice: `SimplifyVBinOp` scalarizes the splat ahead of the broken `isOneConstant` early-out, so the asm is already correct on upstream and the patch is a strict no-op — and one AtomicExpand InitLoaded report (131) that is illegal under LLVM IR semantics but appears intentionally harmless on x86.)
 
 (Four further entries dropped after Opus-4.7 audit: #002 (DAGCombiner `visitFMinMax` returns sNaN unchanged for `minimumnum(sNaN, qNaN)`) — LangRef's `floatnan` rules explicitly permit "Unchanged NaN propagation", so returning an input sNaN as-is when both inputs are NaN is allowed; the fold matches the spec. #215 / #216 (LowerExpectIntrinsic `handleBrSelExpect` / `handleSwitchExpect` overwriting PGO `!prof`) — intentional MisExpect design (`bac6cd5bf856`): `__builtin_expect` is supposed to override frontend PGO, with `checkFrontendInstrumentation` emitting a `-pgo-warn-misexpect` diagnostic on conflict (see `MisExpect.cpp:15-27`, test `Transforms/PGOProfile/misexpect-branch.ll`). #220 (`patchReplacementInstruction` drops nsw/nuw from kept dominator) — the global drop is required for correctness: `add nsw x,y` is poison on overflow but `extractvalue (sadd.with.overflow x,y), 0` is defined on overflow; RAUW-ing extractvalue users with a still-nsw add gives them poison where source had a defined wrapped value. PR #82935 added the drop to fix miscompile #82884; `Transforms/GVN/pr82884.ll` asserts it.)
 
 (Two additional entries were removed after follow-up review: #236 (`ashr exact` -> `lshr exact`) because `exact` requires shifted-out bits to be zero, so the fold is not the anti-refinement originally claimed; and #251 (CVP undef-tainted lattice) because it is already tracked as upstream issue #114902 and is not being kept as an active FuzzX bug.)
+
+(Three SimplifyCFG volatile/atomic CFG-motion entries were removed after reclassification: #120, #121, and #122. Hoisting or sinking the equivalent volatile/atomic access along the CFG is not being treated as a FuzzX bug.)
 
 ---
 
@@ -54,7 +56,7 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 |---|-----|
 | **181** | SeparateConstOffsetFromGEP `swapGEPOperand` unconditionally `setIsInBounds(true)` — can mark temporarily-OOB GEP as inbounds → guaranteed poison (NOT in default x86 -O3 but in many other pipelines) |
 
-## S3 — Memory-model / atomic / volatile semantic breakage (~45)
+## S3 — Memory-model / atomic / volatile semantic breakage (~42)
 
 `isVolatile()`/`isAtomic()` not checked, syncscope narrowed/widened, atomic ordering dropped. Semantic contract broken even when no observable wrong-value today.
 
@@ -69,7 +71,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 - **109** MemCpyOpt processMemSetMemCpyDependence drops volatile memset
 - **111** lower-atomic strips volatile/ordering/syncscope (non-default pipeline)
 - **114** GVNSink volatile included in hash → merged
-- **120, 121, 122** SimplifyCFG sink/hoist merges 2× volatile / seq_cst atomic / atomic loads
 - **128** LowerMatrix fuseFlatten drops volatile
 - **141** BranchFolder merges volatile + plain store
 - **142** MachineLICM hoists volatile/atomic stack-cookie stores

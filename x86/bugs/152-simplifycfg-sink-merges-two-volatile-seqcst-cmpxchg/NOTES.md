@@ -22,7 +22,7 @@ This is wrong for **both** reasons:
    stores / loads).
 2. `seq_cst` -- each cmpxchg-success participates in the global S total
    order. Reducing the number of `seq_cst` ops can change the coherence-
-   observable outcomes of concurrent programs (same defect family as #122).
+   observable outcomes of concurrent programs.
 
 ## Repro
 
@@ -78,7 +78,5 @@ locked compare-exchange transactions visible to other CPUs.
 
 ## Family
 
-Same defect family as #119 (mergeConditionalStores drops atomic),
-#120/#121 (sink/hoist common volatile load/store), #122 (hoist seq_cst
-load), but applied to `cmpxchg` -- a distinct LLVM instruction kind not
-covered by the existing reports.
+Same defect family as #119 (mergeConditionalStores drops atomic), but applied
+to `cmpxchg` -- a distinct LLVM instruction kind not covered by that report.

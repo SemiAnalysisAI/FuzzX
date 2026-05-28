@@ -22,9 +22,8 @@ When `J` (the sibling-block instruction) is missing the metadata, `JMD` is
 null, so the metadata is unconditionally cleared on the hoisted call. The
 nontemporal-bearing program point is silently lost.
 
-This mirrors w76 (memcpyopt-trymerge-drops-nontemporal) and w75 (DSE), and
-parallels the SimplifyCFG family already filed (w120/w121/w57). The same
-issue applies to `memcpy`, `memmove` and `memset`.
+This mirrors w76 (memcpyopt-trymerge-drops-nontemporal) and w75 (DSE). The
+same issue applies to `memcpy`, `memmove` and `memset`.
 
 ## Repro
 

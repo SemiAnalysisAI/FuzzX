@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 126 reproducible bugs (well past the 100 goal). 225 total catalog entries (~99 are source-confirmed only). 500 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 123 reproducible bugs (well past the 100 goal). 222 total catalog entries (~99 are source-confirmed only). 497 pending candidate notes in `candidates/` not yet promoted.**
 
 Breakdown by repro kind:
 - crash (4): #071, #218, #222, #227
@@ -23,7 +23,7 @@ Breakdown by repro kind:
 - runtime miscompile (3): #003 (GISel-only), #004, #013
 - asm/asm-diff (12): #001, #005, #008, #009, #010, #011, #012, #014, #140, #240, #357, …
 - mir-diff (19): #124, #125, #196, #198, #199, #208–#210, #213, #226, #231, #237, #238, #239, …
-- opt-diff (~99): all others
+- opt-diff (~96): all others
 
 Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`, `!alias.scope`, `!range`, FMF, `samesign`, syncscope, `!unpredictable`, `!prof`), poison/refinement violations (#195/#206/#207/#252), and PGO corruptions (#232).
 
@@ -158,9 +158,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 114 | [114-gvnsink-merges-volatile-stores](bugs/114-gvnsink-merges-volatile-stores/) - volatile is included in expression hash; two equivalent volatile stores merged across branches into one sunk store |  |
 | 118 | [118-sroa-drops-atomic-ordering](bugs/118-sroa-drops-atomic-ordering/) - predicate `if (LI.isVolatile()) NewLI->setAtomic(...)` should be `isAtomic()`; atomic seq_cst load/store reduced to plain access |  |
 | 119 | [119-simplifycfg-merge-cond-stores-drops-atomic](bugs/119-simplifycfg-merge-cond-stores-drops-atomic/) - filters via `isUnordered()` (which accepts Unordered atomic) then emits plain `CreateStore`; atomic Unordered → plain store, racy access becomes UB |  |
-| 120 | [120-simplifycfg-sink-merges-volatile-stores](bugs/120-simplifycfg-sink-merges-volatile-stores/) - two volatile stores in mutually-exclusive branches sunk into one select+volatile-store; static count 2→1 violates LangRef volatile invariant |  |
-| 121 | [121-simplifycfg-hoist-merges-volatile-loads](bugs/121-simplifycfg-hoist-merges-volatile-loads/) - two volatile loads in mutually-exclusive branches hoisted to one unconditional volatile load |  |
-| 122 | [122-simplifycfg-hoist-merges-seqcst-atomic-loads](bugs/122-simplifycfg-hoist-merges-seqcst-atomic-loads/) - two `seq_cst` atomic loads in branches hoisted to one unconditional load; conditional→unconditional changes C++ S total order |  |
 | 124 | [124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope](bugs/124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope/) - i128 atomic-volatile load with `singlethread` syncscope → cmpxchg without volatile + system-scope |  |
 | 125 | [125-atomic-expand-store-to-xchg-drops-volatile-syncscope](bugs/125-atomic-expand-store-to-xchg-drops-volatile-syncscope/) - i128 atomic-volatile store with `singlethread` → cmpxchg loop without volatile + system-scope; also inserts a bare non-volatile load of the dst |  |
 | 126 | [126-licm-promote-drops-syncscope](bugs/126-licm-promote-drops-syncscope/) - preheader load and exit-block store dropped from `syncscope("singlethread")` to default System scope |  |
