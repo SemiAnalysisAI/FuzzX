@@ -78,3 +78,20 @@ ENDBR at the entry of any MBB that is the **first MBB of a funclet** (i.e.,
 CET-IBT mitigation gap. Affects any WinEH C++ code compiled with
 `-fcf-protection=branch` on a CET-enforcing kernel — the program will
 fault as soon as it throws, despite asking the compiler for IBT.
+
+## Verdict: WONTFIX (no enforcing platform)
+
+The "CET-enforcing kernel" in the severity note does not exist for this
+code. Funclets are produced only by WinEH, and Windows does not implement
+IBT: it uses Control Flow Guard / XFG for the forward edge and adopts only
+CET's shadow stack (backward edge). So on every shipping Windows the
+emitted `endbr64` are inert NOPs and the `#CP` fault cannot occur — there
+is no OS that both runs funclet-based EH and enforces IBT.
+
+clang still accepts `-fcf-protection=branch` for a Windows triple with no
+diagnostic, and LLVM does emit `endbr64` on the parent entry / EH-pad
+blocks under that flag, so the missing funclet `endbr64` is a genuine
+codegen *inconsistency* — but purely theoretical hardening, not an
+observable bug. The more defensible fix is to reject/warn on
+`-fcf-protection=branch` for Windows targets in the driver rather than to
+keep extending dead IBT codegen. PR #200333 dropped.
