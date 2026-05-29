@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 122 reproducible bugs (well past the 100 goal). 221 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 129 reproducible bugs (well past the 100 goal; +7 new x86 finds #254-#260). 228 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
 
 See the [WONTFIX / not-a-bug catalog](#wontfix--not-a-bug-catalog) below for ~40 investigated-and-rejected entries (restored with their folders so the reasoning is preserved),. Two entries originally restored as re-promotions (#248, #253) were re-refuted on closer analysis and listed there as non-bugs.
 
@@ -268,6 +268,13 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 249 | [249-function-attrs-ignores-operand-bundles](bugs/249-function-attrs-ignores-operand-bundles/) - predicates use `CallBase::hasFnAttr` which ignores operand bundles; caller with `[ "side_effects"() ]` on leaf still infers `nofree nosync nounwind willreturn` | **WONTFIX** — see WONTFIX catalog below |
 | 250 | [250-simplifycfg-mergeConditionalStoreToAddress-drops-pstore-metadata](bugs/250-simplifycfg-mergeConditionalStoreToAddress-drops-pstore-metadata/) - asymmetric combineMetadata + `SI->copyMetadata(*QStore)` drops PStore-only `!nontemporal`/`!tbaa`/...; `!invariant.group` special-case can taint merged store |  |
 | 252 | [252-jumpthreading-unfoldSelectInstr-branches-on-poison](bugs/252-jumpthreading-unfoldSelectInstr-branches-on-poison/) - original safely freezes potentially-poison condition before branching; after JT, the freeze is gone and `br i1 %maybe_poison` is direct UB | PR [#199408](https://github.com/llvm/llvm-project/pull/199408) merged |
+| 254 | [254-x86-fmaximum-fminimum-fp128-ice](bugs/254-x86-fmaximum-fminimum-fp128-ice/) - `llvm.maximum.f128`/`llvm.minimum.f128` (+ `vector.reduce.f{max,min}imum.vNf128`) ICE in LegalizeDAG (`setcc` on i128 bitcast left illegal); default mattr | new (ICE) |
+| 255 | [255-x86-strict-bf16-arith-ice](bugs/255-x86-strict-bf16-arith-ice/) - strict-fp `constrained.fadd/.../.bf16` ICE: `SoftPromoteHalfResult` has no strict-arith bf16 case — "soft promote ... result!"; default mattr | new (ICE) |
+| 256 | [256-x86-strict-bf16-fcmp-ice](bugs/256-x86-strict-bf16-fcmp-ice/) - strict-fp `constrained.fcmp[s].bf16` ICE: `SoftPromoteHalfOperand` has no strict-fcmp case — "soft promote ... operand!"; default mattr | new (ICE) |
+| 257 | [257-x86-strict-vec-fp128-fcmp-ice](bugs/257-x86-strict-vec-fp128-fcmp-ice/) - strict-fp `constrained.fcmp[s].v2f128` ICE: vector-result expander can't expand STRICT_FSETCC of vector fp128 — "expand the result!"; default mattr | new (ICE) |
+| 258 | [258-x86-copyphysreg-vk16-kmovq-without-bwi](bugs/258-x86-copyphysreg-vk16-kmovq-without-bwi/) - `copyPhysReg` emits BWI-only `KMOVQkk_EVEX` for VK16 `$k->$k` copy on `+avx512f,+egpr` (no BWI); should be `KMOVWkk_EVEX` (siblings do). Target-illegal insn silently emitted | new (miscompile) |
+| 259 | [259-x86-kcfi-arity-from-liveins-undercount](bugs/259-x86-kcfi-arity-from-liveins-undercount/) - `-fsanitize-kcfi-arity`: `__cfi_` prefix derives arg arity from MIR live-ins (used regs) not ABI arity; unused/sparse params under-encode + assume RDI-first → wrong FineIBT register poisoning | new (security) |
+| 260 | [260-rs4gc-addrspacecast-base-assert](bugs/260-rs4gc-addrspacecast-base-assert/) - `rewrite-statepoints-for-gc` asserts "unsupported addrspacecast" (crash on verifier-valid IR) for one-way `addrspacecast` ptr→addrspace(1) | known issue [#61917](https://github.com/llvm/llvm-project/issues/61917) |
 
 ## WONTFIX / not-a-bug catalog
 
