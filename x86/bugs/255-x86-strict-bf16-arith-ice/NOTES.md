@@ -35,3 +35,10 @@ non-strict `FP_TO_BF16` round gives the correct value (3.75). So a complete fix
 also needs to repair `STRICT_FP_TO_BF16`'s libcall-result handling (a separate,
 deeper bug); a non-strict round is value-correct but drops the round's strict
 exception semantics. Not landed pending that deeper fix.
+
+## WONTFIX
+
+The strict-fp constrained-intrinsic API is changing / being phased out and is
+not widely used, so this strict-fp legalization gap is not worth fixing. (The
+crash is real, but deprioritized.) See also #255's fix-investigation note re: a
+deeper STRICT_FP_TO_BF16 result-ABI bug that any fix would also have to address.

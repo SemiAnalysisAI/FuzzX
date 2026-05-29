@@ -16,3 +16,10 @@ LLVM ERROR: Do not know how to soft promote this operator's operand!
 `llc -O2 -mtriple=x86_64-linux-gnu repro.ll` — crashes. Default mattr, no flags.
 Distinct root cause from #255 (result-side soft-promote of strict arith).
 Verified at HEAD.
+
+## WONTFIX
+
+The strict-fp constrained-intrinsic API is changing / being phased out and is
+not widely used, so this strict-fp legalization gap is not worth fixing. (The
+crash is real, but deprioritized.) See also #255's fix-investigation note re: a
+deeper STRICT_FP_TO_BF16 result-ABI bug that any fix would also have to address.
