@@ -29,3 +29,23 @@ Default x86 -O2. Unsound inference: downstream passes can move, eliminate, or du
 ## Fix
 
 Add `if (CB->hasOperandBundles()) return true;` (or specifically check `!CB->doesNotFreeMemory()`/`!CB->hasReadingOperandBundles()` analogues) at the head of each of `InstrBreaksNoFree`, `InstrBreaksNoSync`, `InstrBreaksNonThrowing`. Also fix `Instruction::willReturn()` to bail on unknown bundles.
+
+---
+
+## CORRECTION (re-audit at HEAD) — NOT A BUG
+
+The premise that an unknown operand bundle "can have arbitrary effects
+(allocate, free, synchronize, throw, fail to return)" is **wrong**. LangRef
+§"Operand Bundle Semantics" bounds an *unknown* operand bundle to exactly:
+(1) its operands escape in unknown ways, and (2) the call has unknown heap
+read/write effects — and explicitly: "An operand bundle at a call site cannot
+change the implementation of the called function."
+
+So a bundle cannot make a callee unwind, free, synchronize, or fail to return
+beyond what the callee itself does. Inferring `nounwind`/`nofree`/`nosync`/
+`willreturn` through a bundled call is therefore sound — only the `memory`
+attribute must be conservative (and `checkFunctionMemoryAccess` already bails on
+`hasOperandBundles()`). The existing test `Transforms/FunctionAttrs/
+operand-bundles-scc.ll` asserts exactly this behavior. Adding a blanket
+`hasOperandBundles()` guard to the nofree/nosync/nounwind/willreturn predicates
+regresses 4 in-tree tests. **WONTFIX.**
