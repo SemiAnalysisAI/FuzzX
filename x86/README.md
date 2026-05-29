@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 129 reproducible bugs (well past the 100 goal; +7 new x86 finds #254-#260). 228 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 131 reproducible bugs (well past the 100 goal; +7 new x86 finds #254-#260). 230 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
 
 See the [WONTFIX / not-a-bug catalog](#wontfix--not-a-bug-catalog) below for ~40 investigated-and-rejected entries (restored with their folders so the reasoning is preserved),. Two entries originally restored as re-promotions (#248, #253) were re-refuted on closer analysis and listed there as non-bugs.
 
@@ -275,6 +275,8 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 258 | [258-x86-copyphysreg-vk16-kmovq-without-bwi](bugs/258-x86-copyphysreg-vk16-kmovq-without-bwi/) - `copyPhysReg` emits BWI-only `KMOVQkk_EVEX` for VK16 `$k->$k` copy on `+avx512f,+egpr` (no BWI); should be `KMOVWkk_EVEX` (siblings do). Target-illegal insn silently emitted | PR [#200337](https://github.com/llvm/llvm-project/pull/200337) (open) |
 | 259 | [259-x86-kcfi-arity-from-liveins-undercount](bugs/259-x86-kcfi-arity-from-liveins-undercount/) - `-fsanitize-kcfi-arity`: `__cfi_` prefix derives arg arity from MIR live-ins (used regs) not ABI arity; unused/sparse params under-encode + assume RDI-first → wrong FineIBT register poisoning | new (security) |
 | 260 | [260-rs4gc-addrspacecast-base-assert](bugs/260-rs4gc-addrspacecast-base-assert/) - `rewrite-statepoints-for-gc` asserts "unsupported addrspacecast" (crash on verifier-valid IR) for one-way `addrspacecast` ptr→addrspace(1) | known issue [#61917](https://github.com/llvm/llvm-project/issues/61917) |
+| 261 | [261-licm-reassoc-icmp-keeps-samesign](bugs/261-licm-reassoc-icmp-keeps-samesign/) - LICM hoistAdd/hoistSub reassociate `LV+C1 cmp C2`→`LV cmp C2-C1` but keep `samesign` on the new LHS → poison/wrong value (x86-exec verified) | PR [#200344](https://github.com/llvm/llvm-project/pull/200344) (open) |
+| 262 | [262-mergeicmps-non-byte-multiple-memcmp](bugs/262-mergeicmps-non-byte-multiple-memcmp/) - MergeICmps merges non-byte-multiple int compares (e.g. i17) into a `memcmp` whose byte length (`SizeBits/8`) covers the wrong bytes → wrong result (x86-exec verified) | PR [#200346](https://github.com/llvm/llvm-project/pull/200346) (open) |
 
 ## WONTFIX / not-a-bug catalog
 
