@@ -75,7 +75,7 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 - **141** BranchFolder merges volatile + plain store
 - **142** MachineLICM hoists volatile/atomic stack-cookie stores
 - **143** MemCpyOpt processMemMove drops volatile memset (source-confirmed)
-- **148, 190, 191** VectorCombine scalarize{LoadExtract,LoadBitcast,Load} strips atomic / infinite-loops (#191 hang)
+- **148, 190, 191** VectorCombine scalarize{LoadExtract,LoadBitcast,Load} strips atomic / infinite-loops (#191 hang) — **all three are the same root cause** (the `scalarizeLoad` entry gate at VectorCombine.cpp checks `isVolatile()` instead of `!isSimple()`). Fixed by the single one-line gate change in PR [#200263](https://github.com/llvm/llvm-project/pull/200263) (open), tracked on branch `fix3-191`.
 - **152, 154** SimplifyCFG sink merges 2× volatile seq_cst {cmpxchg, atomicrmw}
 
 **Atomic ordering / syncscope narrowed or widened:**
@@ -86,8 +86,6 @@ These are the strongest correctness-class non-runtime bugs. Several are already-
 - **126, 144, 160, 161** LICM promote drops/narrows syncscope (4 variants)
 - **132, 133, 174, 175, 176** AtomicExpand drops AAMD on various paths
 - **134** AtomicExpand RMW/CAS/Load/StoreToLibcall drops volatile+SSID
-- **135** LICM hoists `fence acquire`/`seq_cst` out of loop — collapses N fences to 1
-- **184** InstCombine element-atomic memcpy/memset collapses per-byte granularity
 - **224** SDAGBuilder visitAtomicRMW/CmpXchg drops `I.getAlign()` + AAMD
 - **226, 238** BranchFolding tail-merge: drops atomic ordering / narrows syncscope
 - **239** MachineLateInstrsCleanup hasIdentical ignores MMOs (NT lost on merged invariant-load)

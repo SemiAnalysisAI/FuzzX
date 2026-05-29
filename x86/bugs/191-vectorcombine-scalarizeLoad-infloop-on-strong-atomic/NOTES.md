@@ -1,5 +1,11 @@
 # w100 - VectorCombine `scalarizeLoad` infinite loop on stronger-than-unordered atomic
 
+> **Status:** Fixed by PR [#200263](https://github.com/llvm/llvm-project/pull/200263)
+> (open), tracked on branch `fix3-191`. Bugs **148, 190, and 191** are all the
+> same root cause and are all resolved by the single `isVolatile()` →
+> `!isSimple()` gate change. The `!isSimple()` gate rejects the atomic load up
+> front, preventing both the IR miscompile (148/190) and this infinite loop.
+
 ## Location
 
 `llvm/lib/Transforms/Vectorize/VectorCombine.cpp`

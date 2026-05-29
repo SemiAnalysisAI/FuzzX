@@ -1,5 +1,10 @@
 # w100 - VectorCombine `scalarizeLoadBitcast` drops `atomic` on vector load
 
+> **Status:** Fixed by PR [#200263](https://github.com/llvm/llvm-project/pull/200263)
+> (open), tracked on branch `fix3-191`. Bugs **148, 190, and 191** are all the
+> same root cause and are all resolved by the single `isVolatile()` →
+> `!isSimple()` gate change. No separate fix needed for this entry.
+
 ## Location
 
 `llvm/lib/Transforms/Vectorize/VectorCombine.cpp`
