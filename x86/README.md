@@ -15,7 +15,7 @@ Everything below here is machine-generated.  Good luck.
 
 Goal: find ≥100 real bugs in the x86 path through the default LLVM pass pipeline.
 
-**Status: 132 reproducible bugs (well past the 100 goal; +7 new x86 finds #254-#260, +#263 wide-int itofp). 231 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
+**Status: 131 reproducible bugs (well past the 100 goal; +7 new x86 finds #254-#260). 230 total catalog entries (~99 are source-confirmed only). 495 pending candidate notes in `candidates/` not yet promoted.**
 
 See the [WONTFIX / not-a-bug catalog](#wontfix--not-a-bug-catalog) below for ~40 investigated-and-rejected entries (restored with their folders so the reasoning is preserved),. Two entries originally restored as re-promotions (#248, #253) were re-refuted on closer analysis and listed there as non-bugs.
 
@@ -161,7 +161,7 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 118 | [118-sroa-drops-atomic-ordering](bugs/118-sroa-drops-atomic-ordering/) - predicate `if (LI.isVolatile()) NewLI->setAtomic(...)` should be `isAtomic()`; atomic seq_cst load/store reduced to plain access | **WONTFIX** — see WONTFIX catalog below |
 | 119 | [119-simplifycfg-merge-cond-stores-drops-atomic](bugs/119-simplifycfg-merge-cond-stores-drops-atomic/) - filters via `isUnordered()` (which accepts Unordered atomic) then emits plain `CreateStore`; atomic Unordered → plain store, racy access becomes UB | PR [#200327](https://github.com/llvm/llvm-project/pull/200327) merged |
 | 124 | [124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope](bugs/124-atomic-expand-load-to-cmpxchg-drops-volatile-syncscope/) - i128 atomic-volatile load with `singlethread` syncscope → cmpxchg without volatile + system-scope | PR [#200324](https://github.com/llvm/llvm-project/pull/200324) merged |
-| 125 | [125-atomic-expand-store-to-xchg-drops-volatile-syncscope](bugs/125-atomic-expand-store-to-xchg-drops-volatile-syncscope/) - i128 atomic-volatile store with `singlethread` → cmpxchg loop without volatile + system-scope; also inserts a bare non-volatile load of the dst |  |
+| 125 | [125-atomic-expand-store-to-xchg-drops-volatile-syncscope](bugs/125-atomic-expand-store-to-xchg-drops-volatile-syncscope/) - i128 atomic-volatile store with `singlethread` → cmpxchg loop without volatile + system-scope; also inserts a bare non-volatile load of the dst | PR [#200324](https://github.com/llvm/llvm-project/pull/200324) merged (same PR as #124; fixes `expandAtomicStoreToXChg`) |
 | 126 | [126-licm-promote-drops-syncscope](bugs/126-licm-promote-drops-syncscope/) - preheader load and exit-block store dropped from `syncscope("singlethread")` to default System scope |  |
 | 127 | [127-newgvn-call-cse-ignores-operand-bundles](bugs/127-newgvn-call-cse-ignores-operand-bundles/) - call CSE ignores operand bundles (deopt/funclet/ptrauth/kcfi/clang.arc/gc-*); second call with bundle deleted | deprioritized |
 | 128 | [128-lower-matrix-fuseFlatten-drops-volatile](bugs/128-lower-matrix-fuseFlatten-drops-volatile/) - `matrix.column.major.load(..., i1 true /*volatile*/)` rewritten as plain `load <N x float>` — volatile bit dropped |  |
@@ -277,7 +277,6 @@ Most reproducible bugs fall in: metadata loss (`!nontemporal`, `!invariant.load`
 | 260 | [260-rs4gc-addrspacecast-base-assert](bugs/260-rs4gc-addrspacecast-base-assert/) - `rewrite-statepoints-for-gc` asserts "unsupported addrspacecast" (crash on verifier-valid IR) for one-way `addrspacecast` ptr→addrspace(1) | known issue [#61917](https://github.com/llvm/llvm-project/issues/61917) |
 | 261 | [261-licm-reassoc-icmp-keeps-samesign](bugs/261-licm-reassoc-icmp-keeps-samesign/) - LICM hoistAdd/hoistSub reassociate `LV+C1 cmp C2`→`LV cmp C2-C1` but keep `samesign` on the new LHS → poison/wrong value (x86-exec verified) | PR [#200344](https://github.com/llvm/llvm-project/pull/200344) merged |
 | 262 | [262-mergeicmps-non-byte-multiple-memcmp](bugs/262-mergeicmps-non-byte-multiple-memcmp/) - MergeICmps merges non-byte-multiple int compares (e.g. i17) into a `memcmp` whose byte length (`SizeBits/8`) covers the wrong bytes → wrong result (x86-exec verified) | PR [#200346](https://github.com/llvm/llvm-project/pull/200346) merged |
-| 263 | [263-expand-ir-insts-itofp-wide-int-not-saturated-to-inf](bugs/263-expand-ir-insts-itofp-wide-int-not-saturated-to-inf/) - `ExpandIRInsts::expandIToFP` builds the result exponent as `(exp << MantissaWidth) + bias` with no overflow check; wide-int `sitofp`/`uitofp` past the FP max wraps to garbage/NaN instead of `Inf` (int→FP mirror of #223) | PR [#200291](https://github.com/llvm/llvm-project/pull/200291) merged |
 
 ## WONTFIX / not-a-bug catalog
 
