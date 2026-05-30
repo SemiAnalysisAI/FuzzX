@@ -14,14 +14,4 @@ When `invoke` is rewritten to `call`, the new `CallInst` is built without `copyM
 
 ## Fix
 
-`NewCall->copyMetadata(*II);` after building the call.
-
-## WONTFIX
-
-Two reasons:
-
-1. **Non-default pass.** `lower-invoke` is not in the default x86 -O2/-O3 pipeline; most toolchains carry invokes through codegen. It's reachable only on EH-stripping paths (some GPU/WASM/embedded flows), so the opt-diff is not observable in the mainline pipeline.
-
-2. **The naive one-liner is itself buggy.** `copyMetadata(*II)` copies *all* metadata, including `!prof`. An `invoke`'s `branch_weights` may have two operands (normal + unwind), but a `call`'s must have exactly one — the verifier enforces `ExpectedNumOperands = 1` for `CallInst` (`Verifier.cpp`). Blindly copying the two-weight `!0 = !{!"branch_weights", i32 100, i32 1}` in this very repro produces IR the verifier rejects ("Wrong number of operands"). The correct conversion already exists as `llvm::createCallMatchingInvoke` (`Local.cpp:2594`), which copies metadata and *then* collapses `!prof` to the single total weight via `extractProfTotalWeight`. LowerInvoke's whole rewrite loop is essentially `llvm::changeToCall(II)`.
-
-A partial reimplementation isn't worth carrying for a non-default pass. Branch `fix6-lowerinvoke-copymetadata` dropped.
+PR [#200536](https://github.com/llvm/llvm-project/pull/200536). The rewrite now uses the existing `llvm::createCallMatchingInvoke` helper instead of building the call by hand. That copies the args, attributes, calling convention, debug loc, and metadata, and — importantly — converts the invoke's `!prof` to the call form: an invoke's `branch_weights` may carry two operands (normal + unwind), but a call's must have exactly one, so the helper collapses them to the single total weight via `extractProfTotalWeight`. A naive `NewCall->copyMetadata(*II)` would instead copy the two-weight `!prof` verbatim and produce IR the verifier rejects ("Wrong number of operands").
