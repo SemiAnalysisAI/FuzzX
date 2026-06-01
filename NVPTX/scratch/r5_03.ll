@@ -1,0 +1,2 @@
+target triple = "nvptx64-nvidia-cuda"
+@arr = addrspace(1) global [2 x fp128] [fp128 0xL00000000000000003FFF000000000000, fp128 0xL00000000000000004000000000000000]

@@ -1,0 +1,3 @@
+target triple = "nvptx64-nvidia-cuda"
+@arr = global [2 x x86_fp80] [x86_fp80 0xK4000C90FDAA22168C235, x86_fp80 0xK3FFF8000000000000000]
+; also: @parr = global [2 x ppc_fp128] [ppc_fp128 0xM40090000000000000000000000000000, ppc_fp128 0xM3FF00000000000000000000000000000]

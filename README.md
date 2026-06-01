@@ -5,13 +5,14 @@ FuzzX is a collection of compiler fuzzers.
 | Directory | Purpose |
 | --- | --- |
 | [`ptx/`](ptx/) | NVIDIA `ptxas` fuzzer |
-| [`amdgpu/`](amdgpu/) | AMDGPU fuzzer |
-| [`x86/`](x86/) | x86 fuzzer |
+| [`amdgpu/`](amdgpu/) | LLVM AMDGPU fuzzer |
+| [`x86/`](x86/) | LLVM x86 fuzzer |
+| [`NVPTX`](NVPTX/) | LLVM `ptx` backend (i.e. the output of this backend is the input to `ptxas`) |
 
 See each subdirectory for build and run instructions.
 
 Some of these bugs were found by fuzzing, but I also tried simply asking Claude
-to find bugs in the AMDGPU and x86 LLVM backends.
+to find bugs in the AMDGPU, x86, and NVPTX LLVM backends.
 
 This repository is mostly for demonstration purposes, it's the result of an
 experiment in vibe coding.  Don't rely on anything here.
