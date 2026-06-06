@@ -23,6 +23,10 @@ fan-out rounds of code reading. Every entry was reproduced with a freshly built
 NVPTX-enabled `llc`/`opt`; the miscompiles and early crashes were additionally put
 through an independent adversarial "try to refute it" pass before being listed here.
 
+**Upstream:** 11 fix PRs filed against `llvm/llvm-project` so far — **6 merged**
+(#001, #002, #003/#020, #007, #014, #022) and **5 open** (#023, #028, #029,
+#033, #058). See [Upstream PRs](#upstream-prs) for links.
+
 The adversarial pass earned its keep: it correctly **rejected** several
 plausible-looking candidates (PTX `min`/`max` *do* order signed zeros per ISA
 8.7; `cvt.ftz.f32.f16` only flushes f32 operands, not the f16 source;
@@ -30,13 +34,32 @@ inline-asm width mismatches are user error; `prmt …, -0x1U` is valid PTX). Tho
 are listed at the bottom.
 
 ### Headline miscompiles (default `llc`, ordinary IR)
-- **#001** — `fptoui`/`fptosi` of a float to `i1` compiles to `(a == 0.0)` (cross-checked: x86 uses `cvttss2si` low bit; `opt` folds `fptoui 1.5→i1`=1, NVPTX gives 0).
-- **#002** — `sext(shl nsw x, bitwidth-1)` becomes `mul.wide.s` by a *negative* constant → product negated.
-- **#003 / #020** — a guarded shift folded to a PTX clamp-shift that only sees the low 32 bits of the amount.
-- **#022** — scoped `atomicMax_block`/`Min` on **unsigned** lowers to a **signed** `atom.max.s32`.
+- **#001** — `fptoui`/`fptosi` of a float to `i1` compiles to `(a == 0.0)` (cross-checked: x86 uses `cvttss2si` low bit; `opt` folds `fptoui 1.5→i1`=1, NVPTX gives 0). *(fixed: [#200718](https://github.com/llvm/llvm-project/pull/200718), merged)*
+- **#002** — `sext(shl nsw x, bitwidth-1)` becomes `mul.wide.s` by a *negative* constant → product negated. *(fixed: [#200924](https://github.com/llvm/llvm-project/pull/200924), merged)*
+- **#003 / #020** — a guarded shift folded to a PTX clamp-shift that only sees the low 32 bits of the amount. *(fixed: [#201165](https://github.com/llvm/llvm-project/pull/201165), merged)*
+- **#022** — scoped `atomicMax_block`/`Min` on **unsigned** lowers to a **signed** `atom.max.s32`. *(fixed: [#200735](https://github.com/llvm/llvm-project/pull/200735), merged)*
 - **#031** — a `volatile` load gets tagged `!invariant.load` and lowered to `ld.global.nc`, dropping volatile.
 - **#056** — a `blockaddress` nested in an aggregate global is emitted as all-zero bytes (relocation dropped).
-- **#058** — a non-power-of-2 vector struct field (`<3 x i32>`) drops its tail padding, shifting later fields (trailing `i32` lands at byte 12 not 16).
+- **#058** — a non-power-of-2 vector struct field (`<3 x i32>`) drops its tail padding, shifting later fields (trailing `i32` lands at byte 12 not 16). *(fix: [#201246](https://github.com/llvm/llvm-project/pull/201246), open)*
+
+### Upstream PRs
+
+Fixes filed against `llvm/llvm-project` for bugs above. *Merged* has landed on
+`main`; *open* is in review.
+
+| # | PR | Status |
+|---|-----|--------|
+| 001 | [#200718](https://github.com/llvm/llvm-project/pull/200718) — Fix fptosi/fptoui to i1 | merged |
+| 002 | [#200924](https://github.com/llvm/llvm-project/pull/200924) — Fix sext(shl nsw x, topbit) miscompile | merged |
+| 003 / 020 | [#201165](https://github.com/llvm/llvm-project/pull/201165) — PerformSELECTShiftCombine drops high bits of a wide guarded shift amount | merged |
+| 007 | [#201177](https://github.com/llvm/llvm-project/pull/201177) — Fix aggregate load/store lowering for (potentially) overlapping copies | merged |
+| 014 | [#201184](https://github.com/llvm/llvm-project/pull/201184) — Print the full value of e.g. an i65 global | merged |
+| 022 | [#200735](https://github.com/llvm/llvm-project/pull/200735) — Remove nvvm scoped atomic intrinsics; use atomicrmw/cmpxchg | merged |
+| 023 | [#201217](https://github.com/llvm/llvm-project/pull/201217) — Properly emit narrow ptrtoint in aggregate initializers | open |
+| 028 | [#201245](https://github.com/llvm/llvm-project/pull/201245) — NVVMIntrRange: handle maxntid > UINT32_MAX | open |
+| 029 | [#201220](https://github.com/llvm/llvm-project/pull/201220) — Handle symbol-relative integer initializers in aggregates | open |
+| 033 | [#200732](https://github.com/llvm/llvm-project/pull/200732) — Respect FTZ flag when lowering atomicrmw fadd | open |
+| 058 | [#201246](https://github.com/llvm/llvm-project/pull/201246) — Pad non-power-of-2 vectors in structs properly | open |
 
 ## Tools
 - LLVM source: `/Users/justinlebar/code/vm-shared/llvm` (= `~/code/llvm`), HEAD `6d2a90bd8bf3` at session start.
