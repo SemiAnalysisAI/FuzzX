@@ -23,9 +23,9 @@ fan-out rounds of code reading. Every entry was reproduced with a freshly built
 NVPTX-enabled `llc`/`opt`; the miscompiles and early crashes were additionally put
 through an independent adversarial "try to refute it" pass before being listed here.
 
-**Upstream:** 11 fix PRs filed against `llvm/llvm-project` so far — **6 merged**
-(#001, #002, #003/#020, #007, #014, #022) and **5 open** (#023, #028, #029,
-#033, #058). See [Upstream PRs](#upstream-prs) for links.
+**Upstream:** 11 fix PRs filed against `llvm/llvm-project` so far — **10 merged**
+(#001, #002, #003/#020, #007, #014, #022, #028, #029, #033, #058) and **1 open**
+(#023). See [Upstream PRs](#upstream-prs) for links.
 
 The adversarial pass earned its keep: it correctly **rejected** several
 plausible-looking candidates (PTX `min`/`max` *do* order signed zeros per ISA
@@ -40,7 +40,7 @@ are listed at the bottom.
 - **#022** — scoped `atomicMax_block`/`Min` on **unsigned** lowers to a **signed** `atom.max.s32`. *(fixed: [#200735](https://github.com/llvm/llvm-project/pull/200735), merged)*
 - **#031** — a `volatile` load gets tagged `!invariant.load` and lowered to `ld.global.nc`, dropping volatile.
 - **#056** — a `blockaddress` nested in an aggregate global is emitted as all-zero bytes (relocation dropped).
-- **#058** — a non-power-of-2 vector struct field (`<3 x i32>`) drops its tail padding, shifting later fields (trailing `i32` lands at byte 12 not 16). *(fix: [#201246](https://github.com/llvm/llvm-project/pull/201246), open)*
+- **#058** — a non-power-of-2 vector struct field (`<3 x i32>`) drops its tail padding, shifting later fields (trailing `i32` lands at byte 12 not 16). *(fixed: [#201246](https://github.com/llvm/llvm-project/pull/201246), merged)*
 
 ### Upstream PRs
 
@@ -56,10 +56,10 @@ Fixes filed against `llvm/llvm-project` for bugs above. *Merged* has landed on
 | 014 | [#201184](https://github.com/llvm/llvm-project/pull/201184) — Print the full value of e.g. an i65 global | merged |
 | 022 | [#200735](https://github.com/llvm/llvm-project/pull/200735) — Remove nvvm scoped atomic intrinsics; use atomicrmw/cmpxchg | merged |
 | 023 | [#201217](https://github.com/llvm/llvm-project/pull/201217) — Properly emit narrow ptrtoint in aggregate initializers | open |
-| 028 | [#201245](https://github.com/llvm/llvm-project/pull/201245) — NVVMIntrRange: handle maxntid > UINT32_MAX | open |
-| 029 | [#201220](https://github.com/llvm/llvm-project/pull/201220) — Handle symbol-relative integer initializers in aggregates | open |
-| 033 | [#200732](https://github.com/llvm/llvm-project/pull/200732) — Respect FTZ flag when lowering atomicrmw fadd | open |
-| 058 | [#201246](https://github.com/llvm/llvm-project/pull/201246) — Pad non-power-of-2 vectors in structs properly | open |
+| 028 | [#201245](https://github.com/llvm/llvm-project/pull/201245) — NVVMIntrRange: handle maxntid > UINT32_MAX | merged |
+| 029 | [#201220](https://github.com/llvm/llvm-project/pull/201220) — Handle symbol-relative integer initializers in aggregates (+ follow-up [#201473](https://github.com/llvm/llvm-project/pull/201473) removing `sub`) | merged |
+| 033 | [#200732](https://github.com/llvm/llvm-project/pull/200732) — Respect FTZ flag when lowering atomicrmw fadd | merged |
+| 058 | [#201246](https://github.com/llvm/llvm-project/pull/201246) — Pad non-power-of-2 vectors in structs properly | merged |
 
 ## Tools
 - LLVM source: `/Users/justinlebar/code/vm-shared/llvm` (= `~/code/llvm`), HEAD `6d2a90bd8bf3` at session start.
